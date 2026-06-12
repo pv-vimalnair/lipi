@@ -72,3 +72,10 @@ bun.lockb
 build-*.txt
 build_log.txt
 out.txt
+verify/
+status.txt
+
+# TypeScript incremental build cache
+# (`tsc -b` regenerates this on every run; it's
+# noise in `git status` and slows down the index.)
+tsconfig.tsbuildinfo

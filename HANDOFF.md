@@ -260,6 +260,11 @@ on mobile — cannot be retrofitted in Week 8.
 | 58 | Phase J's `apply` **refuses to write into a non-empty destination**. The `useApplyTemplate` flow is responsible for picking a fresh subdir under the user's chosen parent, but the Rust side enforces the empty-dir invariant as a second line of defence. | The error message tells the user which destination was rejected (and why). If a future feature wants to merge into an existing workspace, it can add a separate `apply_into_existing(id, dest)` entry point with its own UI; the v1 surface is "create a fresh project, period." | 2026-06-12 |
 | 59 | Phase J's JS side **ships metadata only** (name, description, file count). The file bodies never round-trip through JS. | The Rust registry is the single source of truth; the JS registry is a presentational mirror. If a template is added to the Rust side without a matching JS entry, the `apply_template` IPC succeeds but the gallery card doesn't render (we'd notice in QA). Adding a future runtime check (a `lipi://template-list` IPC that returns the canonical list) is one Rust function away; deferred because the v1 surface is stable. | 2026-06-12 |
 | 60 | The recents-management polish **hides "Clear all" on a 1-item list** (footgun guard) rather than a confirm dialog. | A single-item list is *itself* the confirm — the user has exactly one recents entry, they probably want to keep it (the typical case is "I opened one project yesterday, that's my workspace"), and exposing a "Clear all" button right next to it invites a misclick. A dialog would be a worse UX (extra click for the common "I want to clear all" case, doesn't prevent the misclick that motivated the guard). The pure-function helper (`shouldShowClearAll(n)`) is testable; a confirm-dialog state machine isn't worth the complexity for a sub-1%-of-usage interaction. | 2026-06-12 |
+| 61 | M5's `useHaptics` exposes **semantic** intensities (`light` / `medium` / `heavy`), not a raw `(intensity) => void`. | The UI picks a *semantic* intensity — a future "ultra" intensity can land without changing any callsite that picked the right semantic. The three helpers are also more readable at the call site (`haptics.medium()` vs `haptic('medium')`) and the call-site self-documents. | 2026-06-12 |
+| 62 | M5's `haptic` Rust command is a **silent no-op on desktop**, not a log-and-return. | The hook fires on every tab switch / voice start / undo. A log per call would be unbearable in the dev console. The `#[cfg(mobile)]` arm is a placeholder for the future Swift / Kotlin plugin; until then, mobile is also a no-op (no worse than the current state — the v1 build doesn't ship the mobile targets). | 2026-06-12 |
+| 63 | S2's `applyLipiStateV2` is **partial-on-error**, not transactional. | The three stores are written in sequence; a failure on the third sub-payload leaves the first two already applied. Acceptable for v1: a cross-store snapshot / rollback requires a snapshot mechanism that doesn't exist today, and the partial state is recoverable by re-importing a known-good file (or, for `toolSettings`, hitting the 5a soft-delete undo). The alternative is the right long-term shape but is a v3 concern. | 2026-06-12 |
+| 64 | S2's magic string is **`"lipi-state"`**, distinct from 5b v1's `"lipi-settings"`. | The two files are different products with different surface areas (v1 = `toolSettings` only; v2 = `workspace` + `voicePreferences` + `toolSettings`). The distinct magic string is the guard against a user accidentally importing a v1 file into a v2 reader (or vice versa) — the parser rejects with a `wrong-format` error and the UI shows the specific reason. | 2026-06-12 |
+| 65 | S2's `snapshotStoresForExport` **shallow-clones** the `recents` / `disabledToolNames` arrays and the `confirmationMode` record. | A future caller that mutates the returned payload (e.g. redacts a path before re-serialising) must NOT accidentally mutate the live store. The PrivacyDataCard test pins the contract: a `.push()` on the snapshot's `recents` does not change the store. | 2026-06-12 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -1941,6 +1946,266 @@ above.
   — the "history vs. open workspace" distinction is
   load-bearing for the "Close folder, keep history"
   flow (`close()`).
+
+### 9.13 M5 - SHIPPED (mobile polish: keyboard occlusion + haptics, see CHANGELOG "Added (M5)")
+
+The M1 mobile shell shipped the tab bar + safe-area insets but two polish items remained deferred: the on-screen keyboard would cover the bottom tab bar on a 360px viewport, and there was no native haptic feedback on tab switches / voice start / destructive actions. M5 closes both gaps.
+
+**Status.** SHIPPED. Commit `7d01df0`. All gates green at the time of check-in: tsc clean, vitest **552/552** (+13 from this sub-phase), vite build clean, `cargo check` clean.
+
+**What was built.**
+
+- `haptic` Tauri command (Rust, no-op on desktop, deferred-bridge placeholder on iOS / Android via `#[cfg(mobile)]`).
+- `HapticIntensity` enum (`light` / `medium` / `heavy`) — mirrors the iOS `UIImpactFeedbackGenerator` and Android `HapticFeedbackConstants` scales.
+- `useHaptics()` hook returning `{light, medium, heavy}`. Pure helper `fireHaptic` exported for tests. Swallows IPC failures, one-shot console warn.
+- `useVirtualKeyboard()` hook that subscribes to `window.visualViewport.resize` / `.scroll` and writes `--keyboard-height` to `documentElement`. The CSS layer reads the variable (with a `0px` default) to push the tab bar above the keyboard.
+- Both hooks mounted in `MobileShell.tsx`. `MobileShell.module.css` updated: `padding-bottom: calc(var(--safe-bottom, 0px) + var(--keyboard-height, 0px))`.
+- 13 vitest tests (5 `useHaptics`, 8 `useVirtualKeyboard`).
+
+**Key decisions** (numbered #61, #62, #63 — see Decisions table).
+
+- **#61** (semantic intensity): the hook exposes `{light, medium, heavy}` rather than a raw `(intensity) => void`. The UI picks a *semantic* intensity; if a future "ultra" intensity lands, every callsite that picked the right semantic will keep working.
+- **#62** (haptic on desktop = silent no-op): the Rust `haptic` command is a no-op on desktop, not a log-and-return. The hook fires the IPC on every tab switch / voice start / undo; a log per call would be unbearable.
+
+**Verification.** tsc · vitest · vite build · `cargo check`. All clean. **No new Rust unit tests** were added for the `haptic` command itself — the body is a single `let _ = intensity; Ok(())` in each `#[cfg]` arm and the real test surface is the iOS Swift / Android Kotlin plugin (a future session; HANDOFF §9.6).
+
+**Known limitations.**
+
+- **No real iOS / Android haptics.** The `#[cfg(mobile)]` arm is a placeholder. Until the Swift / Kotlin plugin lands, mobile is also a no-op (and a no-op on mobile is no worse than the current state — the v1 build doesn't ship the mobile targets).
+- **`window.visualViewport` not supported on iOS < 13 / Android < 5.** The hook no-ops when `visualViewport` is `undefined`; older WebViews will see the keyboard cover the tab bar. Acceptable for v1 (every supported iOS / Android WebView is well past 13 / 5).
+
+### 9.14 NPS - SHIPPED (native-dictation plugin contract, see CHANGELOG "Added (NPS)")
+
+The M2c mobile shim registered a `'nativeDictation'` factory stub in the `voiceSessionFactories` registry (it throws `'not-configured'` on start — see CHANGELOG "Added (M3)"). The actual Swift `SFSpeechRecognizer` and Kotlin `SpeechRecognizer` plugins are deferred until a future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+. NPS ships the **contract** the plugins must satisfy — a Rust-side facade and a typed JS mirror — so the Settings UI can render the contract today and the plugins plug in tomorrow without JS-side changes.
+
+**Status.** SHIPPED. Commit `4a53172`. All gates green: cargo check clean, cargo test (NPS) 8/8, tsc clean, vitest **565/565** (+13), vite build clean.
+
+**What was built.**
+
+- `src-tauri/src/native_dictation.rs` — the contract:
+  - `PLUGIN_NAME = "native-dictation"`,
+    `METHOD_START` / `METHOD_STOP` / `METHOD_CANCEL`,
+    `TRANSCRIPT_EVENT = "stt://transcript"`,
+    `ERROR_EVENT = "stt://error"`.
+  - `NativeDictationErrorKind` enum (5 kinds:
+    `permission-denied` / `no-input-device` /
+    `backend` / `timeout` / `unknown`) — mirrors
+    the desktop `SttErrorKind` so the JS-side
+    `useVoiceCapture` hook can map them with the
+    same `voiceSessionErrorMessage` helper.
+  - `ContractStatus` enum (`active` / `inert` /
+    `not-applicable`) — `#[cfg(target_os = "ios" |
+    "android")]` returns `inert`; every other
+    target returns `not-applicable`. The `#[cfg]`
+    split is the platform-dispatch point; the
+    future Swift / Kotlin plugin replaces
+    `inert` with `active` without touching the
+    JS side.
+  - `get_native_dictation_contract` command
+    returns the contract as typed JSON.
+- `src/ipc/nativeDictation.ts` — typed
+  `NativeDictationContract` mirroring the Rust
+  wire shape; `getNativeDictationContract()`
+  IPC wrapper; `contractStatusLabel(status)`
+  and `errorKindLabel(kind)` pure helpers.
+- `src/screens/SettingsProvider/components/NativeDictationCard.tsx`
+  + `.module.css` — a new Voice-section card
+  with a status badge (colour-coded by
+  `data-status`), a collapsible contract list
+  (3 methods + 5 error kinds + 2 events), and
+  pointers to
+  `docs/plugins/lipi-stt-ios/README.md` and
+  `docs/plugins/lipi-stt-android/README.md`.
+- **8 Rust unit tests** + **10 JS tests** for
+  the contract wire shape and the pure
+  helpers.
+
+**Key decisions** (numbered — see Decisions
+table).
+
+- **Contract returns `status: 'inert'`** (not
+  `'active'`) on iOS / Android. The contract
+  is in tree, the Swift / Kotlin plugin
+  binding is not. Surfacing `inert` is more
+  honest than `active`; a future session that
+  fills in the binding is a one-character
+  change in the `#[cfg]` arm.
+- **Wire stability is the contract's job.**
+  The Rust unit test
+  `serialise_to_json_kebab_cases_the_enums`
+  pins the kebab-case JSON shape so a future
+  contributor who renames a field or drops
+  an `#[serde(rename_all)]` fails the build,
+  not the runtime. The JS test
+  `getNativeDictationContract IPC shape`
+  pins the same shape from the other side.
+
+**Verification.** cargo check · cargo test
+(NPS) 8/8 · tsc · vitest · vite build. All
+clean.
+
+**Known limitations.**
+
+- **No real iOS / Android plugin.** The
+  `status: 'inert'` is honest about this.
+  Real implementation is a future session on
+  a Mac with Xcode 16+ / Linux with Android
+  Studio Iguana+. The contract docs in
+  `docs/plugins/lipi-stt-ios/README.md` and
+  `docs/plugins/lipi-stt-android/README.md`
+  are the full implementation spec (~250
+  LoC Swift + ~50 LoC SwiftPM config + ~50
+  LoC Swift unit tests + a one-day on-device
+  smoke test on a Mac with Xcode 16+).
+- **No Settings card entry in the Command
+  Palette for `nativeDictation`** (deferred
+  until the plugin lands; would re-introduce
+  Apple / Google's Web Speech as a
+  dependency on iOS / Android which is
+  explicitly NOT wanted — Safari's
+  `SpeechRecognition` is feature-incomplete
+  per Apple's docs).
+
+### 9.15 S2 - SHIPPED (settings v2 export / import, see CHANGELOG "Added (S2)")
+
+The 5b v1 export (`src/shared/settingsIO.ts`)
+is per-decision: it captures just the
+`toolSettings` payload. S2 ships the
+**full-Lipi-state** counterpart: a single
+schema-versioned JSON file that contains the
+workspace (current + recents), the
+voice-provider preference, and the tool
+settings. Privacy scope: **no AI keys, no
+audit log, no live transcript state, no
+custom tools, no first-run flag** — pinned by
+the `serialisedFileLooksPrivate` smoke test
+and the `LIPI_STATE_V2_PRIVACY_STATEMENT`
+string rendered in the Settings card.
+
+**Status.** SHIPPED. Commit `f3ed9b6`. All
+gates green: tsc clean, vitest **597/597**
+(+32), vite build clean.
+
+**What was built.**
+
+- `src/shared/settingsIOv2.ts` — pure IO:
+  - `LIPI_STATE_V2_FORMAT = "lipi-state"`
+    (distinct from 5b v1's `"lipi-settings"`
+    so a v1 file is rejected by a v2 reader
+    and vice versa).
+  - `LIPI_STATE_V2_VERSION = 2`.
+  - `LipiStateV2Data` interface: `workspace` +
+    `voicePreferences` + `toolSettings`.
+  - `buildLipiStateV2` / `parseLipiStateV2` /
+    `serialiseLipiStateV2` /
+    `suggestLipiStateV2Filename` /
+    `serialisedFileLooksPrivate` — all pure,
+    all dependency-free.
+- `src/shared/settingsIOv2.apply.ts` —
+  `applyLipiStateV2(data)` writes to the
+  three stores. Reuses the 5b v1
+  `applyImportedSettings` action for the
+  tool-settings half (so the 5a soft-delete
+  + 5s-undo hook fires). Tagged-union
+  `ApplyLipiStateV2Result` for per-sub-
+  payload error visibility.
+- `src/screens/SettingsProvider/components/PrivacyDataCard.tsx`
+  + `.module.css` — Settings "Privacy &
+  data" card with the full privacy statement
+  rendered as `<pre>`, an Export button
+  (downloads a `lipi-state-YYYY-MM-DD.json`),
+  and an Import button (file picker → parse
+  → `window.confirm` → apply). Auto-clears
+  success notice after 3s, surfaces errors
+  persistently.
+- **32 vitest tests** (19 `settingsIOv2`, 5
+  `settingsIOv2.apply`, 8 `PrivacyDataCard`).
+  The PrivacyDataCard test caught a real bug
+  in the original implementation:
+  `snapshotStoresForExport()` was passing a
+  reference to the live `recents` array; the
+  fix shallow-clones the array (and the
+  `disabledToolNames` array and the
+  `confirmationMode` record) so the live
+  state cannot be mutated through the
+  snapshot.
+
+**Privacy scope** (the non-obvious part; the
+test pin is the value).
+
+| Store | In v2? | Why |
+|---|---|---|
+| `workspace` (current + recents) | YES | user-facing "what folders have I opened" |
+| `voicePreferences` (provider) | YES | user-facing choice |
+| `toolSettings` (5b v1 payload) | YES | user-facing policies |
+| OS keychain (AI + Wispr keys) | NO | not in JS, never serialised |
+| `toolDecisionLog` (audit) | NO | per-machine audit trail (5b v1 precedent) |
+| `voiceCapabilities` | NO | not persisted, build-time capability |
+| `voiceStore` (live transcript) | NO | ephemeral runtime state |
+| `deviceEmulator` | NO | dev-only sessionStorage |
+| `customTools` | NO | per-workspace on disk (the workspace folder is the transfer medium for custom tools, not the v2 file) |
+| `appStore` / `commandPaletteStore` / `chatNavStore` / `aboutStore` | NO | UI state |
+| `firstRun` | NO | per-machine onboarding |
+
+`serialisedFileLooksPrivate` is a
+defence-in-depth smoke test that asserts the
+serialised output contains none of
+`sk-` / `sk-ant-` / `sk-or-` (the known AI key
+prefixes) / `lipi:toolDecisionLog:v1` /
+`lipi:dev:deviceEmulator` / `"isUtteranceEnd"`
+/ `"sessionId":` substrings. A real leak would
+still need a code review to catch; this check
+is a backstop, not a substitute.
+
+**Key decisions** (numbered — see Decisions
+table).
+
+- **#63** (partial-on-error apply): the
+  apply writes to the three stores in
+  sequence and returns a tagged-union result
+  on the first sub-payload that throws. The
+  alternative (cross-store snapshot +
+  rollback) is the right long-term shape but
+  is a v3 concern: it requires a cross-store
+  snapshot mechanism, which is non-trivial
+  and not in scope for S2. The partial state
+  is recoverable by re-exporting the current
+  state and importing a known-good file (or,
+  for `toolSettings`, hitting the 5a
+  soft-delete undo).
+- **#64** (distinct magic string):
+  `LIPI_STATE_V2_FORMAT = "lipi-state"` (vs
+  5b v1's `lipi-settings`). The two files are
+  different products with different surface
+  areas; the magic string is the guard
+  against a user accidentally importing a
+  v1 file into a v2 reader (or vice versa).
+- **#65** (cloned snapshot):
+  `snapshotStoresForExport()` shallow-clones
+  the `recents` / `disabledToolNames` arrays
+  and the `confirmationMode` record. A
+  future caller that mutates the returned
+  payload (e.g. redacts a path) must NOT
+  accidentally mutate the live store.
+
+**Verification.** tsc · vitest · vite build.
+All clean.
+
+**Known limitations.**
+
+- **No cross-store rollback on apply
+  failure.** The `toolSettings` apply reuses
+  the 5a soft-delete + 5s-undo, so a failed
+  tool-settings import is recoverable in one
+  click. A failed `workspace` or
+  `voicePreferences` apply is recoverable
+  only by re-importing a known-good file
+  (the v1 trade-off; a v3 cross-store
+  snapshot is the right long-term shape).
+- **No merge mode.** Import is replace, not
+  merge (matches the 5b v1 decision). Merge
+  would silently combine state from two
+  sources, which is surprising.
 
 ---
 

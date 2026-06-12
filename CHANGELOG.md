@@ -64,6 +64,237 @@ unchanged. The store's `clearRecents` action was
 already implemented (it just wasn't surfaced in the
 UI until now).
 
+### Added (M5 — mobile polish: keyboard occlusion + haptics)
+
+The M1 mobile shell shipped with a tab bar and
+safe-area insets, but two iOS/Android polish items
+remained deferred: the on-screen keyboard would
+cover the bottom tab bar (a frequent footgun on
+a 360px viewport), and there was no native
+haptic feedback on tab switches / voice start /
+destructive actions. M5 closes both gaps.
+
+**`haptic` Tauri command** (Rust, no-op on
+desktop, deferred-bridge placeholder on iOS /
+Android via `#[cfg(mobile)]`).
+
+- `src-tauri/src/lib.rs` — new
+  `haptic(intensity)` command, registered in
+  the `invoke_handler!` list. The `#[cfg]`
+  split is the platform-dispatch point; the
+  future iOS Swift / Android Kotlin plugins
+  will replace the placeholder bodies with
+  `SFImpactFeedbackGenerator` /
+  `Vibrator.vibrate` calls.
+- `HapticIntensity` enum: `light` / `medium` /
+  `heavy` — mirrors the iOS
+  `UIImpactFeedbackGenerator` and Android
+  `HapticFeedbackConstants` scales. The JS
+  side picks a semantic intensity, not a raw
+  one (Decision #61).
+
+**`useHaptics` + `useVirtualKeyboard` hooks**
+(TS).
+
+- `src/ipc/haptics.ts` — typed wrapper:
+  `haptic('light' | 'medium' | 'heavy')`.
+- `src/shared/hooks/useHaptics.ts` —
+  `useHaptics()` returns `{light, medium,
+  heavy}`. Pure helper `fireHaptic` exported
+  for tests. Swallows IPC failures, one-shot
+  console warn (the v1 contract: a haptic
+  pulse is fire-and-forget; the UI never
+  blocks on it).
+- `src/shared/hooks/useVirtualKeyboard.ts`
+  — `useVirtualKeyboard()` subscribes to
+  `window.visualViewport.resize` /
+  `.scroll`, writes `--keyboard-height` to
+  `documentElement`. The CSS layer reads the
+  variable (with a `0px` default) to push the
+  tab bar above the keyboard. Pure helpers
+  `computeKeyboardHeight` /
+  `applyKeyboardHeight` exported for tests.
+- `src/screens/EditorWorkspace/components/MobileShell/MobileShell.tsx`
+  — mounts both hooks, fires `light` haptic
+  on tab-switch (skipped when re-clicking the
+  active tab).
+- `src/screens/EditorWorkspace/components/MobileShell/MobileShell.module.css`
+  — tab bar `padding-bottom: calc(var(--safe-bottom, 0px) + var(--keyboard-height, 0px))`.
+
+**Tests**: +13 vitest (5 `useHaptics`, 8
+`useVirtualKeyboard`).
+
+**Verify**: tsc clean · vitest **552/552** (+13) ·
+vite build clean · `cargo check` clean.
+
+### Added (NPS — native-dictation plugin contract)
+
+The M2c mobile shim registered a
+`'nativeDictation'` factory stub in the
+`voiceSessionFactories` registry (it throws
+`'not-configured'` on start — see CHANGELOG
+"Added (M3)"). The actual Swift `SFSpeechRecognizer`
+and Kotlin `SpeechRecognizer` plugins are
+deferred until a future session on a Mac with
+Xcode 16+ / Linux with Android Studio Iguana+.
+NPS ships the **contract** the plugins must
+satisfy — a Rust-side facade and a typed JS
+mirror — so the Settings UI can render the
+contract today and the plugins plug in tomorrow
+without JS-side changes.
+
+**Rust side** (`src-tauri/src/native_dictation.rs`).
+
+- `PLUGIN_NAME = "native-dictation"`,
+  `METHOD_START` / `METHOD_STOP` / `METHOD_CANCEL`,
+  `TRANSCRIPT_EVENT = "stt://transcript"`,
+  `ERROR_EVENT = "stt://error"`.
+- `NativeDictationErrorKind` enum (5 kinds:
+  `permission-denied` / `no-input-device` /
+  `backend` / `timeout` / `unknown`) — mirrors
+  the desktop `SttErrorKind` so the JS-side
+  `useVoiceCapture` hook can map them with the
+  same `voiceSessionErrorMessage` helper.
+- `ContractStatus` enum (`active` / `inert` /
+  `not-applicable`) — `#[cfg(target_os =
+  "ios" | "android")]` returns `inert` (contract
+  is in tree, plugin binding is not yet
+  implemented); every other target returns
+  `not-applicable`. The `#[cfg]` split is the
+  platform-dispatch point; the future
+  Swift / Kotlin plugin replaces `inert` with
+  `active` without touching the JS side.
+- `get_native_dictation_contract` command
+  returns the contract as typed JSON. The wire
+  shape is asserted by the Rust test suite
+  (kebab-case enum serialisation, plugin-name
+  string, event names, three methods, five
+  error kinds).
+- **8 Rust unit tests** (contract strings,
+  method / error-kind count, JSON serialisation
+  kebab-case, error-kind deserialise round-trip).
+
+**JS side** (`src/ipc/nativeDictation.ts`).
+
+- Typed `NativeDictationContract` mirroring the
+  Rust wire shape.
+- `getNativeDictationContract()` IPC wrapper.
+- `contractStatusLabel(status)` and
+  `errorKindLabel(kind)` pure helpers (10
+  tests).
+- `src/screens/SettingsProvider/components/NativeDictationCard.tsx`
+  + `.module.css` — a new Voice-section card
+  that renders a status badge (colour-coded by
+  `data-status`), a collapsible contract list
+  (3 methods + 5 error kinds + 2 events), and
+  pointers to
+  `docs/plugins/lipi-stt-ios/README.md` and
+  `docs/plugins/lipi-stt-android/README.md`.
+  On desktop the card reads
+  `status: 'not-applicable'` and shows
+  "iOS / Android only"; the contract list
+  still renders (same 3 methods + 5 error
+  kinds on every platform; the difference is
+  *which* platform's plugin implements it).
+- 3 tests on the
+  `nativeDictationStatusBlurb` helper.
+
+**Mounted** in `SettingsProvider.tsx` right
+after `WebSpeechCard`.
+
+**Verify**: cargo check clean · cargo test
+(NPS) 8/8 · tsc clean · vitest **565/565**
+(+13) · vite build clean.
+
+### Added (S2 — settings v2 export / import)
+
+The 5b v1 export (`src/shared/settingsIO.ts`)
+is per-decision: it captures just the
+`toolSettings` payload. S2 ships the
+**full-Lipi-state** counterpart: a single
+schema-versioned JSON file that contains the
+workspace (current + recents), the
+voice-provider preference, and the tool
+settings. Privacy scope: **no AI keys, no
+audit log, no live transcript state, no
+custom tools, no first-run flag** — pinned by
+the `serialisedFileLooksPrivate` smoke test
+and the `LIPI_STATE_V2_PRIVACY_STATEMENT`
+string rendered in the Settings card (see
+HANDOFF §9.15 for the full exclude list and
+the rationale per item).
+
+**Pure IO module** (`src/shared/settingsIOv2.ts`).
+
+- `LIPI_STATE_V2_FORMAT = "lipi-state"`
+  (distinct from 5b v1's `"lipi-settings"`
+  so a v1 file is rejected by a v2 reader
+  and vice versa).
+- `LIPI_STATE_V2_VERSION = 2` (monotonically
+  increasing; a v3 file would be rejected
+  with a clear error).
+- `LipiStateV2Data` interface: `workspace` +
+  `voicePreferences` + `toolSettings`.
+- `buildLipiStateV2` / `parseLipiStateV2` /
+  `serialiseLipiStateV2` /
+  `suggestLipiStateV2Filename` /
+  `serialisedFileLooksPrivate` —
+  all pure, all dependency-free (no store
+  imports; the test for `build → serialise
+  → parse → data` round-trips a fixture
+  unchanged).
+
+**Apply module** (`src/shared/settingsIOv2.apply.ts`).
+
+- `applyLipiStateV2(data)` writes to the
+  three stores: `useWorkspaceStore.setState`,
+  `useVoicePreferencesStore.setState`, and
+  `useToolSettingsStore.applyImportedSettings`
+  (the 5b v1 action — reuses the 5a soft-delete
+  + 5s-undo hook for the tool-settings half).
+- Tagged-union `ApplyLipiStateV2Result` so the
+  UI can show a specific error to the user if
+  a sub-payload's apply throws.
+- **Partial-on-error** semantics: if the
+  tool-settings apply fails, the
+  workspace / voice-preferences writes have
+  already happened. Acceptable for v1: a
+  cross-store snapshot / rollback is a v3
+  concern (Decision #63).
+
+**UI** (`src/screens/SettingsProvider/components/PrivacyDataCard.tsx` +
+`.module.css`).
+
+- New Settings "Privacy & data" card with the
+  full privacy statement rendered as `<pre>`
+  (so the multi-line text retains its
+  breaks), an Export button (downloads a
+  `lipi-state-YYYY-MM-DD.json`), and an Import
+  button (file picker → parse → `window.confirm`
+  → apply). Auto-clears success notice after
+  3s, surfaces errors persistently.
+- `snapshotStoresForExport()` — pure helper
+  that reads the three stores via
+  `useXxxStore.getState()` and clones the
+  `recents` / `disabledToolNames` arrays and
+  the `confirmationMode` record so the live
+  state is never mutated through the
+  snapshot. (Pinned by the test; the test
+  caught a real bug where the original
+  implementation passed a reference to the
+  live `recents` array.)
+- `parseErrorMessage(err)` — tagged-union
+  to friendly-string helper.
+- **Mounted** in `SettingsProvider.tsx`
+  between `ToolSettingsBackupCard` and the
+  5a danger zone.
+
+**Tests**: +32 vitest (19 `settingsIOv2`, 5
+`settingsIOv2.apply`, 8 `PrivacyDataCard`).
+
+**Verify**: tsc clean · vitest **597/597**
+(+32) · vite build clean.
+
 ### Added (Phase I — `app://lipi.open?path=...` deep-link scheme)
 
 The OS can now hand Lipi a URL on launch or at runtime, and

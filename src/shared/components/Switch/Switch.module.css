@@ -1,0 +1,78 @@
+/* Switch — a binary on/off toggle.
+   5b-7. Rule 4: all colours / spacing / radii
+   from tokens. */
+
+.switch {
+  /* Reset button defaults. */
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  /* Focus ring. */
+  outline: none;
+  /* Layout. */
+  position: relative;
+  display: inline-block;
+  /* Sizing — small enough to sit inline in a
+     settings card row, large enough for a
+     44x44 touch target (Rule: touch targets
+     minimum 44x44). The visible track is
+     36x20; the clickable area extends to
+     44x24. */
+  width: 44px;
+  height: 24px;
+  /* 5b-7: rounded "pill" track. */
+  border-radius: var(--radius-pill, 999px);
+  /* Default (unchecked) track colour. */
+  background-color: var(--color-bg-active, #2a313c);
+  /* Animate the track colour change. */
+  transition: background-color var(--motion-base, 200ms)
+    var(--easing-standard, ease);
+}
+
+.switch[data-checked] {
+  /* On: accent colour. */
+  background-color: var(--color-accent, #4f8cff);
+}
+
+.switch:focus-visible {
+  /* Outer ring for keyboard focus (per
+     accessibility: don't remove the outline
+     without a replacement). */
+  outline: 2px solid var(--color-accent, #4f8cff);
+  outline-offset: 2px;
+}
+
+.switch[data-disabled] {
+  /* Disabled: muted, no pointer, no animation. */
+  background-color: var(--color-bg-base, #0b0d10);
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.thumb {
+  /* The white-ish circle that slides between
+     left and right. 20x20 to fit the 24px
+     track with 2px of vertical padding. */
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background-color: var(--color-text-primary, #e6e8eb);
+  border-radius: var(--radius-pill, 999px);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.4));
+  transition: transform var(--motion-base, 200ms)
+    var(--easing-standard, ease);
+}
+
+.switch[data-checked] .thumb {
+  /* On: shift the thumb 20px to the right
+     (44 - 20 - 2 = 20). */
+  transform: translateX(20px);
+}

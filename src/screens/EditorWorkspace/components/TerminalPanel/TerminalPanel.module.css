@@ -1,0 +1,60 @@
+/* TerminalPanel — xterm.js mount + first-class state placeholders.
+   The TerminalTabs component is rendered as a sibling of the
+   body in TerminalPanel.tsx (both inside PaneShell's body div). */
+
+.terminalWrapper {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  background-color: #1e1e1e; /* matches xterm.js theme */
+  overflow: hidden;
+  /* Wait for FitAddon to size the terminal before showing it,
+     so we don't get a 0×0 flash on mount. */
+  opacity: 0;
+  transition: opacity 80ms linear;
+}
+
+.terminalWrapper[data-ready] {
+  opacity: 1;
+}
+
+.terminalWrapper :global(.xterm) {
+  height: 100%;
+}
+
+.terminalWrapper :global(.xterm-viewport) {
+  background-color: transparent !important;
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.placeholderHint {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  max-width: 240px;
+  line-height: 1.5;
+}
+
+.errorTitle {
+  color: var(--color-error, #cd3131);
+  font-weight: var(--font-weight-semibold);
+}
+
+.code {
+  font-family: var(--font-mono, monospace);
+  background-color: var(--color-bg-elevated);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm, 2px);
+}

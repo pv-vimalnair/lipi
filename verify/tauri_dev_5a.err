@@ -1,0 +1,6 @@
+     Running BeforeDevCommand (`npm run dev`)
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching C:\Users\Pv Vimal Nair\lipi\src-tauri for changes...
+[1m[92m   Compiling[0m lipi v0.0.2 (C:\Users\Pv Vimal Nair\lipi\src-tauri)
+[1m[96m    Building[0m [=======================> ] 533/535: lipi    [1m[96m    Building[0m [=======================> ] 534/535: lipi(bi…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 14.86s
+[1m[92m     Running[0m `target\debug\lipi.exe`

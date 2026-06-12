@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Lipi master icon (1024x1024). Source of truth for the brand mark.
+  To regenerate the 32-icon set after editing this file:
+    powershell -ExecutionPolicy Bypass -File src-tauri/icons/render-source.ps1
+
+  Design notes (ASCII only, for usvg parser compatibility):
+    - Rounded-square background (radius 224 / 1024 ~= 22%, matches
+      modern app-icon conventions: macOS Big Sur+ uses ~22.5%,
+      iOS 26 uses ~24%).
+    - Subtle diagonal gradient: top-left in color-accent (#4f8cff),
+      bottom-right in color-bg-elevated (#14171c). The gradient
+      axis is top-left to bottom-right so the highlight reads as
+      "light source from above-left", the convention from app
+      iconography.
+    - The "L" is a custom geometry (not a font glyph) so it renders
+      the same at 16px and 1024px, and is licensed with the project
+      (no font dependency).
+    - A small accent dot at the inner corner of the L's foot, a
+      signature mark that says "Lipi" without the wordmark, working
+      as a visual hook at small sizes (favicon / taskbar / dock).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f8cff"/>
+      <stop offset="55%" stop-color="#2a3550"/>
+      <stop offset="100%" stop-color="#14171c"/>
+    </linearGradient>
+    <linearGradient id="lShape" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f5f7fb"/>
+      <stop offset="100%" stop-color="#d6dce7"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square background -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="url(#bg)"/>
+
+  <!-- Subtle inner highlight ring (very low opacity, just for depth) -->
+  <rect x="32" y="32" width="960" height="960" rx="196" ry="196"
+        fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
+
+  <!-- The "L": a custom geometry, optically centered around 512,512.
+       Vertical stem: 760 tall, 130 wide, starting at y=132 (top margin 132).
+       Foot: 532 wide, 130 tall, ending at x=794 (right margin 230).
+       The right margin is intentionally larger than the left (230 vs 132)
+       to optically center the L's mass (a square L feels too far left). -->
+  <g fill="url(#lShape)">
+    <rect x="262" y="132" width="130" height="630" rx="20" ry="20"/>
+    <rect x="262" y="762" width="532" height="130" rx="20" ry="20"/>
+  </g>
+
+  <!-- Accent dot at the inner corner of the L, the "lipi" mark.
+       Placed at the intersection of the stem's right edge and the foot's
+       top edge. Reads as a punctuation that gives the icon personality
+       at small sizes (favicon / taskbar). -->
+  <circle cx="794" cy="762" r="56" fill="#4f8cff"/>
+  <circle cx="794" cy="762" r="56" fill="none"
+          stroke="#ffffff" stroke-opacity="0.18" stroke-width="2"/>
+</svg>

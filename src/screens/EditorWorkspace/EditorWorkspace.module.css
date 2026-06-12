@@ -1,0 +1,20 @@
+.root {
+  display: contents;
+}
+
+.desktop {
+  display: grid;
+  height: 100vh;
+  width: 100vw;
+  grid-template-columns: 260px 1fr 320px;
+  grid-template-rows: 36px 1fr 24px;
+  grid-template-areas:
+    'titlebar titlebar titlebar'
+    'tree      editor   side'
+    'statusbar statusbar statusbar';
+  background-color: var(--color-bg-base);
+}
+
+.desktop[data-visible='false'] {
+  display: none;
+}

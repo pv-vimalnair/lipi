@@ -1,0 +1,205 @@
+/* CommandPaletteModal — the
+ * Cmd-Shift-P launcher.
+ *
+ * The panel is narrower than the
+ * generic Modal default
+ * (480px instead of 520px) — a
+ * command palette is a focused
+ * list, not a form. The visual
+ * weight is dominated by the
+ * search input and the list
+ * rows; the footer hint is a
+ * tiny caption.
+ */
+
+.panel {
+  /* Override the Modal
+   * primitive's default max-width
+   * (520px). The palette is
+   * narrower and longer. */
+  max-width: 480px;
+  width: 100%;
+  /* Tighter padding than the
+   * generic modal — the input
+   * is edge-to-edge inside. */
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* No max-height override —
+   * the Modal primitive's
+   * `max-height: 80vh` works
+   * for us. The list scrolls
+   * inside. */
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border, #2a2b32);
+}
+
+.headerLabel {
+  /* Visually hidden — the
+   * input is the labelled
+   * control. The label is
+   * still in the DOM for
+   * screen readers via the
+   * `aria-labelledby` wired
+   * by the Modal primitive. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.input {
+  flex: 1;
+  appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--fg, #e7e9ee);
+  padding: 4px 0;
+  /* Subtle placeholder. */
+}
+
+.input::placeholder {
+  color: var(--fg-muted, #6b6e7a);
+  font-style: italic;
+}
+
+.input:focus-visible {
+  outline: none; /* the modal border is the focus indicator */
+}
+
+.empty {
+  padding: 32px 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--fg-muted, #a8acb8);
+  font-style: italic;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+  overflow-y: auto;
+  /* Cap the visible list so a
+   * long filter result doesn't
+   * blow the modal out — the
+   * user can keep typing to
+   * narrow, or scroll. */
+  max-height: 60vh;
+}
+
+.groupHeader {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-muted, #6b6e7a);
+  padding: 10px 16px 4px 16px;
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  /* Padding on the inner
+   * content (not the <li> itself)
+   * so the highlight can extend
+   * edge-to-edge. */
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+.rowSelected {
+  background: rgba(120, 140, 220, 0.16);
+}
+
+.rowDisabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.rowDisabled.rowSelected {
+  /* The dimmed selected
+   * state is still slightly
+   * more visible than the
+   * dimmed unselected. */
+  background: rgba(120, 140, 220, 0.08);
+}
+
+.rowMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowTitle {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--fg, #e7e9ee);
+  /* Truncate at one line. A
+   * long command title is
+   * a sign the command is
+   * too long — better to
+   * shorten the command
+   * than to wrap. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowSubtitle {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted, #a8acb8);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowShortcut {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border, #2a2b32);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.footerHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-muted, #a8acb8);
+}

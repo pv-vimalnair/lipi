@@ -1,0 +1,72 @@
+/* Modal — Phase 5b-5 shared primitive.
+ *
+ * Layout:
+ *   - `.backdrop` is a fixed-positioned full-viewport
+ *     layer with a dark semi-transparent fill. It
+ *     centres the panel via flexbox.
+ *   - `.panel` is the actual dialog surface — a
+ *     card with a max-width, padding, and the
+ *     elevated background. Callers can override
+ *     the panel width via a custom className.
+ *
+ * All colours / spacing / radii read from the
+ * design tokens (Rule 7).
+ */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  /* A little air above the panel so it doesn't
+   * sit glued to the top edge on tall content. */
+  padding: var(--space-12) var(--space-4);
+  background: rgba(0, 0, 0, 0.55);
+  overflow-y: auto;
+  /* The backdrop captures the mousedown so
+   * click-outside is unambiguous; see Modal.tsx
+   * for the click-target check. */
+}
+
+.panel {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  /* Sensible defaults; callers can widen via
+   * className. */
+  width: 100%;
+  max-width: 480px;
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  /* The panel itself is the keyboard listener
+   * root — gives it `outline: none` because we
+   * manage focus programmatically. A focus
+   * ring on the panel would be a visual
+   * artifact (the user's first focus is the
+   * first focusable child). */
+  outline: none;
+}
+
+.srOnly {
+  /* Screen-reader-only title. Used when the
+   * caller doesn't supply a `titleId`; the
+   * label is exposed via aria-label on the
+   * dialog instead. We still render the id
+   * so aria-labelledby resolves to something
+   * even in that case. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

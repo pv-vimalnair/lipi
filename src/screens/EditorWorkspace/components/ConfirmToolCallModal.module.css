@@ -1,0 +1,290 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: fadeIn 120ms ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.modal {
+  background: var(--bg-elev, #1c1d22);
+  color: var(--fg, #e7e9ee);
+  border: 1px solid var(--border, #2a2b32);
+  border-radius: 12px;
+  padding: 0;
+  max-width: 520px;
+  width: 100%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  animation: pop 120ms ease-out;
+}
+
+@keyframes pop {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 18px 8px 18px;
+  border-bottom: 1px solid var(--border, #2a2b32);
+}
+
+.kindBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(120, 130, 200, 0.2);
+  color: #b0baf0;
+}
+
+.kindBadge[data-kind="shell"] {
+  background: rgba(220, 160, 80, 0.18);
+  color: #f0c98c;
+}
+
+.kindBadge[data-kind="http"] {
+  background: rgba(80, 180, 220, 0.18);
+  color: #8fcaf0;
+}
+
+.kindBadge[data-kind="builtin"] {
+  background: rgba(120, 130, 200, 0.2);
+  color: #b0baf0;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  flex: 1;
+  word-break: break-word;
+}
+
+.body {
+  padding: 14px 18px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.description {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-muted, #a8acb8);
+  margin: 0 0 12px 0;
+}
+
+.argsLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted, #a8acb8);
+  margin: 12px 0 6px 0;
+  /* 5c: the label row is now
+   * flex (label on the left,
+   * "Reset to model's version"
+   * link on the right) — the
+   * link only appears when the
+   * user has edited. */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.argsReset {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent, #6f8cff);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 80ms ease;
+}
+
+.argsReset:hover,
+.argsReset:focus-visible {
+  text-decoration-color: currentColor;
+  outline: none;
+}
+
+.argsReset:focus-visible {
+  /* Keyboard-only focus
+   * ring so the user can
+   * see which element has
+   * focus. */
+  outline: 2px solid var(--accent, #6f8cff);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.args {
+  /* 5c: this is now a <textarea>,
+   * not a <pre>. The base
+   * appearance is the same
+   * dark code block, but
+   * `resize: vertical` lets
+   * the user grab the bottom
+   * edge to grow the
+   * editor for long JSON.
+   * `width: 100%` makes it
+   * fill the modal width.
+   * `box-sizing: border-box`
+   * so the border doesn't
+   * push it outside. */
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border, #2a2b32);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg, #e7e9ee);
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 80px;
+  /* The user is editing code —
+   * disable spellcheck, the
+   * iOS auto-capitalise, and
+   * the iOS auto-correct
+   * pop-up (which can mutate
+   * JSON keys). */
+  spellcheck: false;
+  -webkit-spellcheck: false;
+  /* Tab key in a textarea
+   * should insert a tab
+   * (a 2-space indent), not
+   * change focus. This is a
+   * small ergonomic nicety
+   * for users who want to
+   * hand-format JSON. */
+  tab-size: 2;
+  transition: border-color 80ms ease, box-shadow 80ms ease;
+}
+
+/* 5c: invalid-state visual.
+ * Red border + faint red
+ * glow. The data attribute
+ * is set by the React
+ * component when
+ * `JSON.parse` throws. */
+.args[data-invalid="true"] {
+  border-color: rgba(220, 80, 80, 0.7);
+  box-shadow: 0 0 0 1px rgba(220, 80, 80, 0.3);
+}
+
+.args:focus-visible {
+  outline: 2px solid var(--accent, #6f8cff);
+  outline-offset: 1px;
+}
+
+.argsError {
+  /* 5c: inline error message
+   * under the textarea.
+   * `role="alert"` so screen
+   * readers announce it
+   * immediately. */
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #f0a0a0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  word-break: break-word;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border, #2a2b32);
+  background: rgba(0, 0, 0, 0.18);
+  flex-wrap: wrap;
+}
+
+.footerHint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--fg-muted, #a8acb8);
+  min-width: 200px;
+}
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--border, #2a2b32);
+  background: var(--bg-2, #232429);
+  color: var(--fg, #e7e9ee);
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 80ms ease, border-color 80ms ease;
+  min-height: 32px;
+  min-width: 80px;
+}
+
+.btn:hover {
+  background: var(--bg-3, #2c2d33);
+  border-color: var(--border-2, #3a3b44);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent, #6f8cff);
+  outline-offset: 1px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn[data-confirm="primary"] {
+  background: var(--accent, #6f8cff);
+  border-color: var(--accent, #6f8cff);
+  color: #0a0a0c;
+}
+
+.btn[data-confirm="primary"]:hover {
+  background: var(--accent-2, #829dff);
+  border-color: var(--accent-2, #829dff);
+}
+
+.btn[data-confirm="danger"] {
+  border-color: rgba(220, 80, 80, 0.5);
+  color: #f0a0a0;
+}
+
+.btn[data-confirm="danger"]:hover {
+  background: rgba(220, 80, 80, 0.12);
+  border-color: rgba(220, 80, 80, 0.7);
+}

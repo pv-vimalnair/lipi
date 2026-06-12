@@ -1,0 +1,1094 @@
+/* SettingsProvider — AI provider key management.
+   Per Rule 4, all spacing/colors/typography come from the
+   design tokens in src/shared/styles/tokens.css. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans, system-ui);
+}
+
+.desktop {
+  display: grid;
+  grid-template-rows: 36px 1fr;
+  height: 100%;
+}
+
+.main {
+  padding: var(--space-6) var(--space-8);
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  overflow-y: auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.title {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.lede {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin: 0 0 var(--space-6) 0;
+  max-width: 60ch;
+}
+
+.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.errorCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-danger, #cd3131);
+  border-radius: var(--radius-md, 6px);
+  background-color: var(--color-danger-soft, rgba(205, 49, 49, 0.1));
+  color: var(--color-text-primary);
+}
+
+.errorTitle {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-danger, #cd3131);
+}
+
+.errorDetail {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono, monospace);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 6px);
+  transition: border-color 80ms linear;
+}
+
+.card[data-configured] {
+  border-color: var(--color-success, #0dbc79);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cardTitle {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm, 2px);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  background-color: var(--color-bg-hover, rgba(255, 255, 255, 0.04));
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.badge[data-configured] {
+  background-color: var(--color-success-soft, rgba(13, 188, 121, 0.15));
+  color: var(--color-success, #0dbc79);
+  border-color: var(--color-success, #0dbc79);
+}
+
+.keyLink {
+  font-size: var(--font-size-xs);
+  color: var(--color-accent, #0dbc79);
+  text-decoration: none;
+  font-weight: var(--font-weight-semibold);
+}
+
+.keyLink:hover {
+  text-decoration: underline;
+}
+
+.keyLink:focus-visible {
+  outline: 2px solid var(--color-accent, #0dbc79);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm, 2px);
+}
+
+.cardDescription {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.keyRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.keyInput {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-size-sm);
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm, 2px);
+  outline: none;
+  transition: border-color 80ms linear;
+}
+
+.keyInput::placeholder {
+  color: var(--color-text-muted);
+  font-family: var(--font-sans, system-ui);
+}
+
+.keyInput:focus {
+  border-color: var(--color-accent, #0dbc79);
+}
+
+.keyInput:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.statusOk {
+  font-size: var(--font-size-xs);
+  color: var(--color-success, #0dbc79);
+}
+
+.statusError {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger, #cd3131);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.statusLink {
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  font-family: inherit;
+}
+
+/* M2b: Voice section — a "Test connection" row
+   inside the Wispr card. Aligns the button on
+   the left and the status message on the right
+   (wraps on narrow viewports). The gap matches
+   the design token scale (var(--space-3) = 12px). */
+.testRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+/* --- 5b-7: AI Tools section ----------------------------------------
+   Per-tool enable/disable. Reuses the
+   `.card` / `.cardHeader` / `.cardTitle` /
+   `.cardDescription` styles from the
+   AI Providers section above — no new
+   layout language. */
+
+.sectionHeading {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  margin: var(--space-8) 0 var(--space-3) 0;
+}
+
+.sectionLede {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin: 0 0 var(--space-4) 0;
+  max-width: 60ch;
+}
+
+.toolRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.toolText {
+  /* The name + description stack, taking
+     the remaining space next to the switch. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.toolName {
+  /* The tool name is in monospace — it
+     mirrors the function name in the code
+     (e.g. `get_file_contents`). */
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.toolDescription {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* --- 5d: per-tool confirmation policy -----------------------
+   The 3-option policy picker rendered on
+   each `ToolCard`. It's a small
+   segmented control (always_allow /
+   per_call / always_confirm) sitting
+   below the description, full-width
+   on the card. Disabled tools grey
+   it out — the policy doesn't apply
+   to a disabled tool. */
+.toolPolicy {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.toolPolicyLabel {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.toolPolicyGroup {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--color-bg-tertiary);
+}
+
+.toolPolicyOption {
+  appearance: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  border: none;
+  padding: 4px 10px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  border-right: 1px solid var(--color-border);
+  transition: background 80ms ease, color 80ms ease;
+  min-height: 28px;
+}
+
+.toolPolicyOption:last-child {
+  border-right: none;
+}
+
+.toolPolicyOption:hover:not(:disabled) {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+.toolPolicyOption[aria-pressed="true"] {
+  background: var(--color-accent, var(--color-bg-elev));
+  color: var(--color-text-on-accent, var(--color-text-primary));
+  font-weight: var(--font-weight-semibold);
+}
+
+.toolPolicyOption:focus-visible {
+  outline: 2px solid var(--color-accent, var(--color-text-primary));
+  outline-offset: -2px;
+  position: relative;
+  z-index: 1;
+}
+
+.toolPolicyOption:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolPolicyHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+/* --- 5c: Custom Tools section ----------------------------------
+   Reuses `.card` / `.toolRow` / `.toolText`
+   / `.toolName` / `.toolDescription` from
+   the AI Tools section above. New layout
+   primitives are kept to a minimum. */
+
+.customToolsToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.customToolsPath {
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.customToolActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.customToolKind {
+  display: inline-block;
+  margin-top: var(--space-1);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm, 2px);
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background-color: var(--color-bg-hover, rgba(255, 255, 255, 0.04));
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.customToolKind[data-kind='shell'] {
+  background-color: rgba(255, 184, 108, 0.12);
+  color: rgb(255, 184, 108);
+  border-color: rgba(255, 184, 108, 0.4);
+}
+
+.customToolKind[data-kind='http'] {
+  background-color: rgba(120, 175, 255, 0.12);
+  color: rgb(120, 175, 255);
+  border-color: rgba(120, 175, 255, 0.4);
+}
+
+/* --- CustomToolEditor (5c) -------------------------------------
+   The editor is a sub-card that appears
+   stacked under the tool list. */
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-accent, #0dbc79);
+  border-radius: var(--radius-md, 6px);
+}
+
+.editorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.editorTitle {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.editorHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.editorHint code {
+  font-family: var(--font-family-mono, monospace);
+  font-size: 0.9em;
+  padding: 0 4px;
+  border-radius: var(--radius-sm, 2px);
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+}
+
+.editorToolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.editorKind {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-left: auto;
+}
+
+.editorKind code {
+  font-family: var(--font-family-mono, monospace);
+  background-color: var(--color-bg-base);
+  padding: 0 4px;
+  border-radius: var(--radius-sm, 2px);
+  color: var(--color-text-primary);
+}
+
+.editorTextarea {
+  width: 100%;
+  min-height: 280px;
+  padding: var(--space-3);
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm, 2px);
+  resize: vertical;
+  outline: none;
+  transition: border-color 80ms linear;
+}
+
+.editorTextarea:focus {
+  border-color: var(--color-accent, #0dbc79);
+}
+
+.editorError {
+  font-size: var(--font-size-sm);
+  color: var(--color-danger, #cd3131);
+  line-height: 1.5;
+}
+
+.editorActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.editorActions button[data-confirm='danger'] {
+  background-color: var(--color-danger, #cd3131);
+  border-color: var(--color-danger, #cd3131);
+  color: white;
+}
+
+.editorActions button[data-confirm='danger']:hover {
+  filter: brightness(1.1);
+}
+
+/* --- 5e: Decision Log section ----------------------------------
+   The Activity Log under the
+   Settings screen. Each row is a
+   single `DecisionRecord` —
+   newest first, with a colored
+   decision badge, the tool name
+   in monospace, a relative
+   timestamp, and an expandable
+   args preview. */
+
+.decisionLogToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 0 var(--space-1);
+}
+
+.decisionLogCount {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* 5h: undo-clear toast. A
+ * small bar that appears
+ * above the log list for 5
+ * seconds after a clear.
+ * Visual: subtle elevated
+ * background, accent text
+ * for the [Undo] button.
+ * The bar uses
+ * `aria-live="polite"` (set
+ * in the component) so
+ * screen readers announce
+ * it. */
+.decisionLogUndo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-elev, var(--color-bg-secondary));
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  /* The toast itself doesn't
+   * animate in/out — it just
+   * appears and disappears
+   * based on `lastCleared`
+   * being null or not. A
+   * fade would be nice but
+   * the 5s window is short
+   * enough that the abrupt
+   * appearance is fine. */
+}
+
+.decisionLogUndoText {
+  flex: 1;
+  color: var(--color-text-secondary);
+}
+
+.decisionLogUndoButton {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-accent);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color var(--motion-fast) var(--easing-standard);
+}
+
+.decisionLogUndoButton:hover,
+.decisionLogUndoButton:focus-visible {
+  color: var(--color-accent-hover, var(--color-accent));
+  text-decoration: underline;
+  outline: none;
+}
+
+.decisionLogUndoButton:focus-visible {
+  /* Keyboard-only focus
+   * outline — a thin ring
+   * so the user can see
+   * which element has
+   * focus. */
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
+  border-radius: 2px;
+}
+
+.decisionRow {
+  background: var(--color-bg-elev, var(--color-bg-secondary));
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* 5f: subtle border accent when
+ * the row is jumpable (a click
+ * on the row will jump to chat).
+ * The accent is a thin left
+ * border + a slightly stronger
+ * card border. The intent: the
+ * user can see at a glance
+ * which rows are interactive. */
+.decisionRow[data-jumpable] {
+  border-left: 2px solid var(--color-accent);
+  padding-left: calc(var(--space-4) - 1px);
+}
+
+/* 5f: inline "Jump to chat"
+ * button at the end of the
+ * main row. We use a small
+ * ghost button so the row's
+ * primary reading flow (badge
+ * → tool name → timestamp) is
+ * preserved. On hover, the
+ * text colour shifts to the
+ * accent. */
+.decisionRowJump {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--easing-standard),
+    border-color var(--motion-fast) var(--easing-standard),
+    background var(--motion-fast) var(--easing-standard);
+}
+
+.decisionRowJump:hover,
+.decisionRowJump:focus-visible {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-bg-hover);
+  outline: none;
+}
+
+.decisionRowJump:focus-visible {
+  /* The hover rule covers
+   * the focus state too, but
+   * we add a thin outline
+   * for keyboard users. */
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
+}
+
+/* 5g: row-level actions
+ * container. Holds the
+ * Jump-to-chat and Undo
+ * buttons in a flex row at
+ * the end of the card. We
+ * use `justify-content: flex-end`
+ * so both buttons sit at the
+ * trailing edge. The
+ * `gap` is small so they
+ * read as a related group. */
+.decisionRowActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* 5g: Undo button. Visually
+ * similar to the Jump button
+ * (same ghost treatment) but
+ * uses the danger colour on
+ * hover/focus to signal
+ * "this will CHANGE / REMOVE
+ * a previously-granted
+ * permission". The "remove"
+ * semantic matters: clicking
+ * Undo downgrades the tool's
+ * policy from auto-allow to
+ * always-confirm, which is a
+ * security tightening — the
+ * colour signals that. */
+.decisionRowRevert {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--easing-standard),
+    border-color var(--motion-fast) var(--easing-standard),
+    background var(--motion-fast) var(--easing-standard);
+}
+
+.decisionRowRevert:hover,
+.decisionRowRevert:focus-visible {
+  color: var(--color-danger);
+  border-color: var(--color-danger);
+  background: var(--color-danger-soft);
+  outline: none;
+}
+
+.decisionRowRevert:focus-visible {
+  box-shadow: 0 0 0 2px var(--color-danger-soft);
+}
+
+.decisionRowMain {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.decisionBadge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.decisionBadge[data-decision='deny'] {
+  background: rgba(220, 80, 80, 0.18);
+  color: #f0a0a0;
+}
+
+.decisionBadge[data-decision='allow_once'] {
+  background: rgba(80, 180, 120, 0.18);
+  color: #8fd5a8;
+}
+
+.decisionBadge[data-decision='allow_always'] {
+  background: rgba(80, 130, 220, 0.18);
+  color: #a0c0f0;
+}
+
+/* 5g: "revert" badge uses a
+ * neutral (grey-muted) colour
+ * — a revert is meta
+ * (reverses a previous
+ * decision), not a primary
+ * action. We deliberately
+ * avoid using danger colour
+ * here: the revert is a
+ * positive safety action
+ * (downgrading a previously
+ * granted permission), not
+ * an error. */
+.decisionBadge[data-decision='revert'] {
+  background: rgba(160, 160, 160, 0.18);
+  color: #c0c0c0;
+}
+
+.decisionToolName {
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.decisionTimestamp {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.decisionArgs {
+  font-size: var(--font-size-sm);
+}
+
+.decisionArgsSummary {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  user-select: none;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.decisionArgsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.decisionArgsSummary::before {
+  content: '▸';
+  display: inline-block;
+  transition: transform 80ms ease;
+  font-size: 10px;
+}
+
+.decisionArgs[open] .decisionArgsSummary::before {
+  transform: rotate(90deg);
+}
+
+.decisionArgsPre {
+  background: var(--color-bg-tertiary, rgba(0, 0, 0, 0.3));
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: var(--space-2) 0 0 0;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.decisionMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  flex-wrap: wrap;
+}
+
+.decisionMetaLabel {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: var(--font-weight-semibold);
+}
+
+.decisionMetaValue {
+  font-family: var(--font-family-mono, monospace);
+  color: var(--color-text-muted, var(--color-text-secondary));
+  word-break: break-all;
+}
+
+/* 5a: danger zone — "Reset all
+ * tool settings" card. Visually
+ * distinct from the other cards
+ * (no header badge, no rich
+ * content) but follows the same
+ * .card layout. The action
+ * button is `variant="danger"`
+ * (see Button component). */
+.toolSettingsResetCard {
+  background: var(--color-bg-elev, var(--color-bg-secondary));
+  border: 1px solid var(--color-border);
+  /* A subtle red-tinted left border
+   * signals "this is destructive"
+   * without screaming. The user
+   * must still read the body text
+   * to understand what they're
+   * doing. */
+  border-left: 2px solid var(--color-danger, #cd3131);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 60ch;
+}
+
+.toolSettingsResetCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.toolSettingsResetCardTitle {
+  /* Slightly smaller than
+   * `.cardTitle` (we don't have
+   * a "Configured" badge to
+   * balance). */
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.toolSettingsResetCardDescription {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.toolSettingsResetCardActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-1);
+}
+
+/* 5a: undo toast for the reset.
+ * Same shape as the 5h
+ * decision-log undo toast but
+ * with a slight red-tinted
+ * accent (matching the card's
+ * left border) so the user
+ * remembers this was a
+ * destructive action. */
+.toolSettingsResetUndo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-elev, var(--color-bg-secondary));
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-danger, #cd3131);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  /* Limited to a reasonable
+   * max width so the toast
+   * doesn't span the whole
+   * page. */
+  max-width: 60ch;
+}
+
+.toolSettingsResetUndoText {
+  flex: 1;
+  color: var(--color-text-secondary);
+}
+
+.toolSettingsResetUndoButton {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-danger, #cd3131);
+  cursor: pointer;
+  text-decoration: none;
+  transition: color var(--motion-fast) var(--easing-standard);
+}
+
+.toolSettingsResetUndoButton:hover,
+.toolSettingsResetUndoButton:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+.toolSettingsResetUndoButton:focus-visible {
+  /* Keyboard-only focus
+   * outline — a thin ring
+   * so the user can see
+   * which element has
+   * focus. */
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* 5b: "Backup & Restore" card.
+ * Visually distinct from the
+ * danger-zone card below (no red
+ * left border; this is a normal
+ * primary action). Same `.card`-
+ * like layout: title, body, action
+ * row at the bottom. */
+.toolSettingsBackupCard {
+  background: var(--color-bg-elev, var(--color-bg-secondary));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 60ch;
+}
+
+.toolSettingsBackupCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.toolSettingsBackupCardTitle {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.toolSettingsBackupCardDescription {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.toolSettingsBackupCardActions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* The file input is visually
+ * hidden but still keyboard-
+ * accessible. We position it
+ * off-screen and zero its size
+ * rather than `display: none`
+ * (which would make some screen
+ * readers skip it). The visible
+ * "Import…" button is a
+ * `<Button>` that calls
+ * `fileInputRef.current?.click()`
+ * to open the native picker. */
+.toolSettingsBackupFileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 5b: import error / success
+ * notices. Errors use the danger
+ * color (sticky until the user
+ * picks a new file); notices use
+ * a softer accent (auto-dismiss
+ * after 3s). */
+.toolSettingsBackupError {
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-elev, var(--color-bg-secondary));
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-danger, #cd3131);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  max-width: 60ch;
+}
+
+.toolSettingsBackupNotice {
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-elev, var(--color-bg-secondary));
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  max-width: 60ch;
+}

@@ -1,0 +1,94 @@
+.strip {
+  display: flex;
+  align-items: stretch;
+  height: 30px;
+  background-color: var(--color-bg-pane);
+  border-bottom: 1px solid var(--color-border-subtle);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.strip[data-position='bottom'] {
+  border-bottom: 0;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 120px;
+  max-width: 220px;
+  padding: 0 var(--space-2);
+  height: 100%;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  background-color: var(--color-bg-pane);
+  border-right: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tab:hover {
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.tab:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--color-accent) inset;
+}
+
+.tab[data-active] {
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-bg-base);
+  margin-bottom: -1px;
+}
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: transparent;
+  flex-shrink: 0;
+}
+
+.dot[data-dirty] {
+  background-color: var(--color-accent);
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--font-weight-regular);
+}
+
+.tab[data-active] .name {
+  font-weight: var(--font-weight-semibold);
+}
+
+.close {
+  /* IconButton already has its own styles; we just need to
+     shrink the hit area a little so it sits nicely in the tab. */
+  width: 18px;
+  height: 18px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.tab:hover .close,
+.tab:focus-within .close {
+  opacity: 1;
+}

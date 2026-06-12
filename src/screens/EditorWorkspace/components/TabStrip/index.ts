@@ -1,0 +1,1 @@
+export { TabStrip } from './TabStrip';

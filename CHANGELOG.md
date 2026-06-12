@@ -1,0 +1,3679 @@
+# Changelog
+
+All notable changes to Lipi are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Planned (M2c desktop — kickoff committed, not yet implemented)
+
+The M2c desktop plan is now in `HANDOFF.md` §9.7 —
+the next session should start there. Decisions
+baked into the plan:
+
+- **Primary path:** `whisper-rs` (whisper.cpp
+  bindings) via a thin in-repo Tauri plugin at
+  `src-tauri/plugins/lipi-stt/`. Truly on-device,
+  cross-platform (Windows + macOS + Linux), with
+  opt-in hardware-accel features (`metal` /
+  `cuda` / `vulkan`). Default model: `ggml-tiny.en`
+  (~75 MB), English-only, downloaded to the app
+  data dir on first use with a progress bar.
+- **Opt-in alt:** Web Speech API
+  (`webkitSpeechRecognition`) for users on
+  Windows / macOS who don't want to download a
+  model. Explicit privacy disclosure ("sends
+  audio to Google/Apple") in Settings. Disabled
+  by default. **Not available on Linux** —
+  WebKitGTK doesn't ship the API.
+- **Why whisper-rs, not the Web Speech API by
+  default:** Web Speech API sends audio off-device
+  by default (violates "no backend"), and isn't
+  available on Linux at all. whisper-rs keeps
+  audio local and works on all three desktop
+  OSes.
+- **Why roll our own plugin, not depend on
+  `tauri-plugin-stt` / `brenogonzaga/tauri-plugin-stt`:**
+  both are <20 GitHub stars and 0 forks as of
+  2026-06; the maintenance risk is too high. The
+  in-repo plugin is ~600 LoC of Rust + 600 LoC
+  of TS — within one session's budget.
+- **M2c mobile (iOS / Android) and M3 (the
+  session-based streaming API) are separate
+  phases** scheduled for after M2c desktop
+  ships.
+
+### Added (M4 — voice-driven git commit)
+
+The first mutating git command driven by voice. Speak
+"commit with message fix: handle null body" and Lipi
+stages everything in the worktree and creates a real
+commit. The grammar is hand-rolled (no LLM in the
+loop) so it's deterministic, offline, and testable.
+
+**Rust — new mutating git commands** (`src-tauri/src/git.rs`):
+`validate_commit_message` (length, NUL bytes, malformed
+whitespace), `stage_all` (mirrors `git add -A` via
+`current_dir(workdir) + git add -A .`; skips the call
+when the worktree is clean and returns a
+"no changes to commit" error so the JS side can show a
+clean message), and `commit` (validates -> stages ->
+runs `git commit -m <msg> --no-verify`; `--no-verify`
+because the voice command is the user's explicit
+intent — a `pre-commit` hook shouldn't silently
+block). Returns a `CommitResult` with the full SHA
+(`git rev-parse HEAD` after the commit) and a 7-char
+short SHA. 12 new unit tests in the `git::tests` module
+cover validation, staging on modified/untracked/clean
+repos, commit success with simple and multi-line
+messages, and the failure paths (empty message, clean
+repo).
+
+**IPC layer** (`src/ipc/git.ts`): typed wrappers
+`gitStageAll` and `gitCommit` that match the Rust
+`CommitResult` shape, plus the `CommitResult`
+interface.
+
+**Voice grammar** (`src/voice/commitGrammar.ts`): a
+deterministic parser for commit utterances. Recognised
+triggers are `commit with message`, `commit saying`,
+`commit that says`, and a bare `commit`. Filler
+prefixes (`um`, `uh`, `okay`, etc.) are stripped from
+the start of the message. Multi-word triggers match
+variable whitespace; the message body preserves
+original casing and newlines (the STT may emit real
+newlines for multi-line commits). 26 tests cover
+recognised triggers, case-insensitivity, whitespace
+tolerance, fillers, casing preservation, bare commits,
+non-commit utterances, and multi-line messages.
+
+**AIPanel integration** (`AIPanel.tsx`): the
+composer's transcript effect first runs
+`parseCommitCommand`. If the utterance is a commit
+intent, the transcript is *not* merged into the
+textarea — instead, `ipcGitCommit` is called. The
+`gitStore` tracks the commit lifecycle (`idle` /
+`running` / `success` / `error`), and a
+`CommitStatusBanner` above the textarea surfaces the
+result (with a 5-second auto-dismiss on success). The
+Git panel is refreshed after the commit so the user
+sees the new state.
+
+### Added (M5 — voice accessibility)
+
+Voice input is now usable without a mouse and is
+screen-reader-aware.
+
+**Global keyboard shortcut** (`useVoiceShortcut`):
+`Cmd+Shift+V` (macOS) / `Ctrl+Shift+V` (Windows /
+Linux) toggles the mic on the AI composer. The
+shortcut is suppressed while the user is typing in
+an editable field (`textarea`, text-like `input`,
+`contenteditable`) so it doesn't intercept V presses
+mid-sentence. Key-repeat is ignored and IME
+composition is respected. 12 tests cover the pure
+helpers `shortcutMatches` and `isEditableElement`.
+
+**Live-region announcer** (`VoiceAnnouncer`): a
+visually-hidden `aria-live="polite"` region mounted
+at the app root. Subscribes to `useVoiceStore` and
+emits a single, deduplicated human-readable
+announcement for each state transition: "Microphone
+permission requested" (requesting), "Recording, 0:05"
+(recording, with the rounded duration), "Transcribing
+audio" (transcribing), and the friendly error
+message. Idle is silent so we don't spam screen
+readers.
+
+**Focus management**: after a voice session ends
+(either naturally or via the commit path), focus is
+returned to the composer textarea with the cursor
+parked at the end of the new content. The textarea
+placeholder and `aria-label` mention the
+`Cmd+Shift+V` shortcut. A `KeyHint` chip sits next
+to the voice button to make the shortcut visible to
+sighted users.
+
+**Architectural change**: the `VoiceButton` is now
+"controlled" — it accepts a `controlledState` prop
+so a single `useVoiceCapture` instance is owned by
+the composer and shared between the button, the
+keyboard shortcut, and the focus return logic. This
+avoids two `getUserMedia` calls competing for the
+mic.
+
+### Added (M2a — voice capture pipeline: foundation)
+
+The first slice of the voice-to-code pipeline. The full
+Wispr Flow + on-device STT stack is split across M2b/M2c;
+M2a is the foundation: the capture lifecycle, the UI, the
+state machine, and the wiring into the AI chat composer.
+The actual speech-to-text provider is a pluggable stub
+that returns a recognisable placeholder so the user (and
+tests) can verify the pipeline end-to-end without a real
+STT backend.
+
+**Voice store** (`src/shared/state/voiceStore.ts`): a
+small Zustand store with a five-state machine
+(`idle` / `requesting` / `recording` / `transcribing` /
+`error`), the elapsed `durationMs`, the most recent
+transcript, and the last user-facing error. Two pure
+helpers exported alongside the store: `mergeTranscript`
+(composes a new voice transcript with the existing
+composer text, paragraph-broken when the previous text
+doesn't end in a newline) and `formatDuration`
+("M:SS" timer label).
+
+**Capture hook** (`src/shared/hooks/useVoiceCapture.ts`):
+the bridge between the store and the browser's audio
+APIs. Calls `navigator.mediaDevices.getUserMedia({ audio: true })`
+on `start()`, then constructs a `MediaRecorder` with the
+platform's best-supported MIME type (audio/webm with
+opus on desktop, audio/mp4 on iOS Safari), starts a
+rAF-driven `durationMs` ticker, and on `stop()` releases
+the mic tracks and runs the STT step. Three STT
+providers are accepted via a `provider` option: `'stub'`
+(M2a — returns a placeholder), `'wispr'` (M2b — throws
+"not yet wired"), and `'ondevice'` (M2c — same).
+Permission errors are mapped to friendly messages
+(NotAllowedError -> "Microphone access was blocked...",
+NotFoundError -> "No microphone was found...", etc.).
+
+**Voice button** (`src/shared/components/VoiceButton/`):
+the mic toggle on the AI composer. Four visual states
+(idle, requesting with spinner, recording with red
+pulsing background + M:SS timer, error with red border).
+`aria-pressed` while recording, `aria-busy` while
+requesting or transcribing, the last error message in
+the `title` attribute for hover.
+
+**Composer integration**: the AI panel's `<Composer>`
+now renders a `<VoiceButton>` to the left of the Send
+button. When a transcript lands in the store
+(`useVoiceStore.transcript` flips to a non-empty value),
+the composer's effect calls `mergeTranscript` and clears
+the store so a re-render doesn't re-merge the same text.
+The button is disabled when the provider isn't
+configured (no key — there's no point recording a
+message the user can't send) and during streaming /
+tool execution.
+
+**Bundle impact**: ~5.5 KB gzipped (618 KB total JS,
+80 KB total CSS). No new dependencies, no Rust changes.
+
+**Verified**: 381/381 tests pass (+32 for M2a: 14
+voiceStore + 13 useVoiceCapture + 5 VoiceButton render).
+`tsc`, `vite build`, `cargo check`, and
+`cargo tauri build --debug` all clean. Bundles rebuilt:
+`Lipi_0.0.2_x64_en-US.msi` (12.2 MB, WiX) +
+`Lipi_0.0.2_x64-setup.exe` (7.3 MB, NSIS).
+
+### Added (M2b — Wispr Flow WebSocket client)
+
+The headline voice provider is now wired to Wispr Flow's
+streaming WebSocket API. The microphone in the AI panel
+captures speech, base64-encodes 16 kHz mono Int16 PCM
+chunks, and streams them to Wispr's `/api/v1/dash/client_ws`
+endpoint; the server returns a final transcript that's
+merged into the composer (mirroring the M2a stub flow).
+
+**Wispr API key storage** (`src/ipc/secrets.ts`,
+`src-tauri/src/lib.rs`, `src-tauri/src/secrets.rs`).
+A new `voice.wisprApiKey` field is accepted by the
+existing OS keychain-backed secrets store, sitting
+alongside the AI provider keys (`openai.apiKey`,
+`anthropic.apiKey`, etc.). The Settings screen picks it
+up via the new `WisprCard` component in the
+`SettingsProvider` "Voice" section, with a password field
+and a "Test connection" button (the button posts a 1-second
+silent WS session to confirm the key is valid). A new
+`secrets_get_api_key` Rust command (and the matching
+`secretsGetApiKey` TS wrapper) lets the WebView fetch the
+raw key at start time. The key is held in memory only for
+the duration of one capture, dropped on `stop()`, and never
+written to disk or sent anywhere except the Wispr
+endpoint (see Decision #41 in HANDOFF).
+
+**PCM audio capture** (`src/voice/pcmCapture.ts`). The
+M2a `MediaRecorder` path produced encoded audio (Opus /
+AAC inside a Blob); Wispr needs raw 16 kHz, 16-bit, mono
+PCM. We swap to `AudioContext` + `ScriptProcessorNode`:
+50 ms chunks of Float32, converted to Int16, base64-encoded
+on demand for the WS frames. The chunk size (800 samples)
+is small enough to feel live, large enough to keep the
+per-chunk overhead <1%. The script processor is deprecated
+but supported on every Tauri WebView target (WebView2,
+WKWebView, WebKitGTK); an upgrade to `AudioWorkletNode` is
+noted as Decision #42 in HANDOFF for a future phase that
+needs lower scheduling jitter.
+
+**Wispr WebSocket client** (`src/voice/wisprClient.ts`).
+Pure-function `transcribeViaWispr(pcm, apiKey, opts?)` that
+takes an `AsyncIterable<Int16Array>` of PCM chunks and an
+API key, returns a `Promise<string>` of the final
+transcript. Internally: opens the WS, sends an `auth`
+frame with the key as `client_key=Bearer%20<key>` and the
+`LIPI_APP_CONTEXT` payload (`{ name: 'Lipi', type: 'editor' }`),
+streams one `append` per chunk with base64 PCM, RMS volume,
+and a 0.05 s `packet_duration`, then sends a `commit` with
+`total_packets` when the iterator ends. A re-arming
+30-second timeout rejects with `WisprClientError` on
+silence; auth errors map to a friendly message; close
+events before a final resolve with the last partial or
+`''` if the server was clean. Error codes are stable for
+the UI to switch on (see `WisprClientErrorCode` and
+`wisprErrorMessage`).
+
+**Hook wiring** (`src/shared/hooks/useVoiceCapture.ts`).
+`start()` branches on `provider`: `'wispr'` fetches the
+key from the keychain (BEFORE opening the mic, so the
+"no key" error doesn't trigger a permission prompt the
+user has to dismiss), opens PCM capture, kicks off
+`transcribeViaWispr`, and wires the resulting promise
+back to the same 5-state machine (`requesting` →
+`recording` → `transcribing` → `idle` / `error`). All M2a
+invariants — generation guards, rAF ticker, cleanup on
+unmount, key drop on stop — are preserved on the Wispr
+path.
+
+**VoiceButton default** (`src/shared/components/VoiceButton/VoiceButton.tsx`).
+The default STT provider flips from `'stub'` to `'wispr'`.
+A new `useVoicePreferencesStore` (Zustand + `localStorage`
+under `lipi:voicePreferences:v1`) holds the user's choice
+across sessions. The Command Palette's new **Voice**
+group adds two toggle commands: "Voice: Use Wispr Flow"
+and "Voice: Use Stub (debug)" so the stub provider is
+still one keystroke away for engineers.
+
+**Verified**: 429/429 tests pass (+48 for M2b: 8
+pcmCapture + 12 wisprClient + 4 useVoiceCapture wispr
+path + 4 voicePreferencesStore + 20 misc store /
+commands / settings). `tsc`, `vite build`, `cargo check`,
+and `cargo tauri build --debug` all clean. Bundles
+rebuilt: `Lipi_0.0.2_x64_en-US.msi` + `Lipi_0.0.2_x64-setup.exe`.
+
+### Added (F — icon, splash, About dialog, app menu)
+
+The four cosmetic-polish pieces that bridge Lipi from "runs"
+to "feels like a real product".
+
+**Branded app icon.** The placeholder "L on dark slate"
+icon is replaced by a hand-drawn monogram with the brand
+gradient and an accent dot. The source of truth is
+`src-tauri/icons/app-icon.svg` (a 1024x1024 SVG). Re-running
+`cargo tauri icon` against the SVG regenerates the full
+32-icon set (Windows ICO + macOS ICNS + iOS appiconset +
+Android mipmap + Linux PNGs) without any rasterizer
+dependency on the dev machine. Render script lives at
+`src-tauri/icons/render-source.ps1`.
+
+**Cold-start splash.** `index.html` now renders a
+brand-matching CSS splash (gradient mark + "LIPI" wordmark)
+from page load until React's first commit, then fades out
+via a 200ms CSS transition triggered by setting the
+`splash-done` class on `<html>`. Pure CSS, zero image
+dependencies, no spinners.
+
+**Native application menu.** A real OS menu bar is
+registered via the Tauri 2 menu module (`src-tauri/src/menu.rs`).
+On Windows / Linux: File / Edit / View / Window / Help. On
+macOS the platform auto-generates a "Lipi" app menu with
+About / Hide / Quit. The Edit submenu uses
+`PredefinedMenuItem` for cut/copy/paste/select-all so the
+OS handles clipboard routing for free. The Rust side does
+not execute any action — it emits a `lipi://menu` event
+with a `commandId` payload, and the frontend dispatches
+through the same command-palette registry. This keeps the
+action logic in one place.
+
+**About dialog.** A new `AboutModal` (F.5) shows the
+product name, live version (via a new `get_app_version` /
+`open_devtools` IPC pair), brand mark, description, license,
+and project URL. Reachable from two surfaces:
+- **Help > About** in the native menu (routed by
+  `useMenuEvents` to the same `useAboutStore.show()` action)
+- **Command Palette > "About Lipi"** in the new
+  `Help` group
+
+Tests cover the modal's open/close, version rendering
+placeholder, static metadata, brand mark presence, a11y
+attributes, and the new palette entry. All 349 tests
+pass.
+
+### Added (B — distribution packaging)
+
+Lipi now builds end-to-end on Windows.
+`cargo tauri build --debug` produces
+both a WiX `.msi` installer and an
+NSIS `.exe` side-load installer,
+verified working on the dev machine
+on 2026-06-11:
+
+- `Lipi_0.0.2_x64_en-US.msi` — 12.1 MB
+- `Lipi_0.0.2_x64-setup.exe` — 7.3 MB
+
+The Tauri bundler auto-downloads WiX
+3.14 and NSIS 3.11 on first build
+(cached in `%LOCALAPPDATA%`).
+
+**Updater signing keypair is now real.**
+A `lipi-dev` Ed25519 keypair was
+generated with `cargo tauri signer
+generate`. The **public** key is
+committed in `tauri.conf.json`
+(`plugins.updater.pubkey`) so
+contributors can build out of the box.
+The **private** key (`lipi-dev.key`)
+is git-ignored and protected with the
+hard-coded dev password
+`lipi-dev-not-a-real-secret` (passed
+via the `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+env var at build time). The pubkey is
+embedded into the built `lipi.exe` so
+the running app can verify future
+updates. Production CI rotates the
+keypair from a secret store; the dev
+key has a known password and must
+never sign a release.
+
+**`<owner>` placeholders replaced.**
+`tauri.conf.json` (homepage + updater
+endpoint) and `Cargo.toml`
+(repository) now use `lipi-dev/lipi`
+as an honest pre-publication slug.
+The real owner is a one-line swap at
+publish time. The endpoints are still
+non-functional (no `updater.json`
+exists at the URL yet) — they're
+config-time only, no runtime side
+effects until a release is published.
+
+**Persistence path validated for
+packaging.** Confirmed via the build
+that the `localStorage` keys
+(`lipi:workspace:v1`,
+`lipi:firstRun:v1`,
+`lipi:toolSettings:v2`,
+`lipi:toolDecisionLog:v1`,
+`lipi:customTools:v1`) survive
+packaging because Tauri 2 scopes
+`localStorage` to the bundle id.
+The data lives in
+`%LOCALAPPDATA%\app.lipi.ide\EBWebView\Default\Local Storage\leveldb\`,
+fully isolated from the dev
+(`http://localhost:1420`) origin and
+from other Tauri apps. Caveat: dev
+and packaged apps have separate
+`localStorage` partitions, so
+settings made in dev do NOT appear in
+the packaged app (correct behaviour,
+but a footgun for testing — see
+HANDOFF Decision #31).
+
+**No code signing yet.** SignPath
+(free for OSS) or Azure Trusted
+Signing for Windows + Apple Developer
+ID + notarization for macOS are a
+future-publication task per Section 8
+of HANDOFF. Unpacked installers will
+trigger SmartScreen / Gatekeeper
+warnings on first run; sign the
+release build before publishing.
+
+### Added (D — first-run no-API-key interstitial)
+
+Lipi now intercepts new users on the
+Welcome screen and prompts them to add
+an API key before they hit the chat
+panel and get a generic "Invalid API
+key" error. The flow is:
+
+1. On launch, if no workspace is
+   open AND no provider key is
+   configured AND the user hasn't
+   dismissed the panel, a
+   `<FirstRunOnboarding />` panel
+   appears above the Welcome hero.
+2. The CTA "Add OpenAI key" (or
+   whatever the first provider
+   is) routes to Settings AND
+   persists the dismissal — the
+   user is now in the right
+   place, so we don't show the
+   panel again.
+3. The "Skip for now" link
+   persists the dismissal but
+   leaves the user on Welcome.
+   They can re-open the panel
+   later via the command
+   palette's "Reopen first-run
+   setup" command (which also
+   closes the current workspace
+   so the gate's
+   `currentPath === null`
+   condition is met).
+
+This is a *soft* on-ramp — no
+wizard, no progress bar, no
+forced flow. The user can always
+add keys later via Settings →
+AI Providers (which already
+existed in 5a).
+
+- **`useFirstRunStore`** (new
+  shared Zustand store).
+  Two fields: `hydrated` and
+  `dismissed`. The
+  `dismissed` flag persists
+  to `localStorage` under
+  `lipi:firstRun:v1` (same
+  `localStorage` + version
+  pattern as
+  `workspaceStore`).
+  Actions: `hydrate()`,
+  `dismiss()`, `reset()`.
+  The `reset()` action is
+  used by the command
+  palette's "Reopen
+  first-run setup" command
+  to re-arm the flag.
+- **`<FirstRunOnboarding />`**
+  (new shared component, in
+  `src/shared/components/FirstRunOnboarding/`).
+  Pure presentational: takes
+  `primary`, `onAdd`, `onSkip`
+  as props. The primary CTA
+  says "Add {provider} key"
+  when a provider is
+  available, or "Add a key"
+  as a fallback. The "Skip
+  for now" button is
+  rendered alongside. The
+  panel has an accent
+  border (left-only) and a
+  subtle gradient background
+  to draw attention without
+  looking like an error.
+- **`useFirstRunOnboarding`**
+  hook (new, in
+  `src/shared/hooks/`). The
+  gate logic: subscribes to
+  `useFirstRunStore`,
+  `useWorkspaceStore`, and
+  the keychain IPC
+  (`aiGetConfiguredProviders`).
+  Exposes `{ show, primary,
+  onAdd, onSkip }`. `show`
+  is `true` exactly when:
+    - `firstRun.hydrated`
+    - `!firstRun.dismissed`
+    - `currentPath === null`
+    - `configuredProviders
+       .length === 0`
+  The `configuredProviders`
+  state is fetched on demand
+  (not in a separate store)
+  because it changes out-of-
+  band with our app — the
+  user can add a key from
+  the OS UI at any time.
+  IPC failures are handled
+  with a sentinel
+  (`['__unknown__']`) so we
+  never show the panel based
+  on a stale error.
+- **Command palette
+  integration**: a new
+  `firstRun.openSetup`
+  command — "Reopen first-
+  run setup" — lets a user
+  manually re-arm the
+  dismissed flag. Always
+  enabled (the visible
+  panel is still gated).
+  The command also closes
+  the current workspace so
+  the user can see the
+  panel they just re-armed.
+- **`AppRoot` updates**:
+  - Hydrates
+    `useFirstRunStore` once
+    on mount (same pattern
+    as
+    `useWorkspaceStore.hydrate`).
+  - The Welcome screen now
+    accepts a new optional
+    `firstRunPanel` prop
+    (slot pattern, mirroring
+    `renderActions`).
+    `AppRoot` computes the
+    gate logic and passes
+    either a rendered
+    `<FirstRunOnboarding />`
+    or `null`. The Welcome
+    screen remains agnostic
+    of the first-run
+    concept.
+- **Tests**: 26 new tests
+  across 3 files (was 312,
+  now 338):
+  - `firstRunStore.test.ts`
+    (9 tests): hydration,
+    dismissal, persistence,
+    idempotency, corrupt
+    JSON fallback,
+    private-mode fallback.
+  - `FirstRunOnboarding.test.tsx`
+    (7 tests): rendered
+    HTML structure,
+    primary CTA text,
+    fallback text, click
+    handlers (primary +
+    skip), and the
+    `__none__` sentinel
+    path.
+  - `useFirstRunOnboarding.test.ts`
+    (7 tests): the pure
+    `computeShouldShow` gate
+    — every condition in
+    the visibility contract
+    (hydrated, dismissed,
+    no workspace, no keys,
+    IPC-failure sentinel).
+  - `commands.test.ts` (3
+    new tests, was 22, now
+    25): the
+    `firstRun.openSetup`
+    command — exists in
+    the registry, resets
+    the firstRun store on
+    `run()`, always
+    enabled.
+- **Verification**:
+  - `npx tsc --noEmit` —
+    clean.
+  - `npx vitest run` —
+    338/338 pass.
+  - `npm run build` —
+    clean, 182 modules
+    (+1 for the new
+    `FirstRunOnboarding`
+    component), 76 kB CSS,
+    592 kB JS.
+  - `cargo check` — clean.
+
+### Added (M1 — mobile-first responsive shell + top-8 device emulator)
+
+- **`useDeviceEmulatorStore`** (new
+  Zustand store, dev-only,
+  `sessionStorage`-backed). A
+  single `enabled` flag that
+  shows / hides the device
+  emulator strip. Bound to
+  `Cmd-Shift-D` /
+  `Ctrl-Shift-D` via the
+  `useDeviceEmulatorShortcutWhenDev`
+  hook (mounted in
+  `EditorWorkspace`; the
+  hook is a no-op in prod
+  builds — the global
+  keydown listener is never
+  registered when
+  `isDev === false`).
+  `sessionStorage` (not
+  `localStorage`) so a
+  closed tab / new window
+  is a clean slate.
+- **Device-emulator strip
+  rewrite**: each frame
+  renders the LIVE
+  `MobileShell` (the real
+  mobile UX) scaled down
+  via `transform: scale()`,
+  with the device's
+  `--safe-top` /
+  `--safe-bottom` CSS
+  variables applied to the
+  frame's `screen` element
+  so the `MobileShell`'s
+  chrome (top bar + tab
+  bar) lines up with the
+  painted notch + home
+  indicator. Each
+  `MobileShell` is mounted
+  via `createPortal` so the
+  per-frame CSS variables
+  are inherited (the
+  MobileShell is a single
+  shared component, so
+  portal is the only way
+  to scope its variables).
+  Pointer events are
+  blocked at the frame
+  level — the emulator is
+  a layout preview, not a
+  runtime; clicking a tab
+  in a scaled frame would
+  change the state of
+  that frame's local
+  MobileShell (each has
+  its own `useState`),
+  which is confusing when
+  the real app is hidden.
+- **New
+  `DeviceSpec.safeAreaTop` /
+  `safeAreaBottom` fields
+  in `src/dev/devices.ts`**:
+  the safe-area insets the
+  OS reports via
+  `env(safe-area-inset-*)`,
+  in UNSCALED CSS px. iPhone
+  15 Pro: 47/34. iPhone SE
+  3: 20/0 (hardware home
+  button). Galaxy S24:
+  24/22. Pixel 8: 30/24.
+  iPad Air M2: 20/20. Etc.
+  The new fields drive
+  both the `MobileShell`'s
+  chrome positioning AND
+  the painted notch / home
+  indicator on the device
+  frame — they MUST agree
+  for the preview to be
+  visually accurate.
+- **New `MobileTopBar`
+  component** on the
+  `MobileShell`:
+  renders the OS status
+  bar ("9:41", "5G",
+  "100%") pushed down by
+  `padding-top:
+  var(--safe-top)`, plus
+  a thin app bar with the
+  "Lipi" title and a
+  model badge. The badge
+  reads the live
+  `aiStore` provider +
+  configured state.
+- **Touch UX baseline on
+  the mobile shell**:
+  - 48px minimum tab
+    height (kept
+    from 5a)
+  - `touch-action:
+    manipulation` on
+    tabs + app bar
+    to kill iOS
+    double-tap-zoom
+  - `-webkit-tap-highlight-color:
+    transparent` to
+    kill the gray
+    tap flash on
+    Android Chrome
+  - `user-select:
+    none` on tab
+    labels + app
+    bar title (the
+    user might
+    swipe-down to
+    reveal the OS
+    notification
+    center; we
+    don't want
+    the "Lipi"
+    text to get
+    selected)
+  - `padding-bottom:
+    var(--safe-bottom)`
+    on the tab bar
+    (kept from 5a)
+  - `padding-top:
+    var(--safe-top)`
+    on the top bar
+    (M1)
+- **Files / Edit / Voice /
+  Git tab bodies** are
+  still placeholders
+  (their panes are
+  desktop-only — wiring
+  them to mobile is
+  3a-3c / 5d-5e work, not
+  M1). M1's job is the
+  SHELL: chrome, safe
+  areas, touch targets.
+
+### Verified
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run` — **195/195
+  pass** (12 files),
+  including 9 new
+  `deviceEmulatorStore`
+  tests and 8 new
+  `TOP_8_DEVICES` shape /
+  invariant tests
+- `npm run build` — clean
+- `cargo check` — clean
+
+### Added (Phase 5c — tool call review before run: edit args in the confirmation modal)
+
+- **Editable args before run.** The
+  `ConfirmToolCallModal` is now a
+  *review* surface, not just a
+  confirmation prompt. The user can
+  edit the args JSON before approving
+  a tool call. The 5d modal
+  (`<pre>{pending.argsJson}</pre>`)
+  is replaced by a `<textarea>` with:
+  - **Live JSON validation** —
+    `JSON.parse` runs in a `useEffect`
+    on every keystroke. The
+    "Run once" / "Always allow"
+    buttons are disabled when the
+    JSON doesn't parse. "Deny" stays
+    always enabled (a stuck tool can
+    always be refused, regardless of
+    args validity).
+  - **Inline error message** — when
+    the JSON is invalid, a
+    `role="alert"` region under the
+    textarea shows the parse error.
+    The textarea itself gets a red
+    border via `data-invalid="true"`
+    and a faint red glow.
+  - **"Reset to model's version"
+    link** — visible only when the
+    user has edited. Clicking it
+    reverts the textarea to the
+    original `pending.argsJson`.
+  - **Footer hint adapts** — when
+    edited, the hint reads "Edits
+    will be sent to the tool as the
+    executed arguments." (vs the
+    default "The model wants to call
+    this tool. Choose how to handle
+    it.").
+  - **A11y hardening** — the
+    textarea disables spellcheck,
+    iOS auto-correct, and
+    auto-capitalise (each can
+    mutate JSON keys / quotes).
+    `tab-size: 2` so hand-formatting
+    is pleasant. `aria-invalid` and
+    `aria-describedby` wire the
+    error to the textarea for
+    screen readers.
+- **`resolveConfirmation(decision,
+  editedArgsJson?)`** — the store's
+  confirmation resolver now takes an
+  optional second arg. The resolver
+  computes the *executed args*:
+  - If the caller passes a
+    non-undefined `editedArgsJson`,
+    that's the executed args.
+  - Otherwise, the resolver falls
+    back to `pending.argsJson` (the
+    pretty-printed version that's
+    pre-cached on the modal). This
+    is backward compatible with 5d
+    call sites that don't pass the
+    second arg.
+- **Write-back to `call.input`.**
+  `applyConfirmationAndResume` writes
+  the executed args back to the
+  `ToolCall.input` field *before* the
+  executor runs. This means:
+  - The follow-up `ai://chunk` stream
+    sees the executed args in the
+    assistant message's `toolCalls`
+    (replay uses edited values, not
+    the model's).
+  - The activity log (5e) records
+    the executed args (the user can
+    audit exactly what ran, not what
+    the model emitted).
+  - The ToolTrace UI (5b-6) shows
+    the executed args in the call
+    card.
+  - Deny short-circuits the
+    write-back (preserves the wire
+    args for the ToolTrace audit
+    display — the user can still
+    see what the model wanted to
+    run).
+- **Executor sees executed args
+  directly.** The executor call now
+  passes the local `executedArgsJson`
+  variable to `arguments:` (not the
+  stale `call.input` reference,
+  which was captured at the top of
+  `applyConfirmationAndResume` and
+  frozen before the write-back). The
+  change is one line but easy to
+  miss — the test suite guards it
+  (regression test: "passes edited
+  args to the executor").
+- **Decision logging semantics**
+  changed: the `argsPreview` field
+  on a `DecisionRecord` now records
+  the *executed* args, not the
+  model's original. This makes
+  the activity log the
+  ground-truth audit trail of what
+  actually ran.
+
+### Verified
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run` — **255/255
+  pass** (13 files), including 7
+  new `edit args before run (5c)`
+  tests in `aiStore.test.ts`:
+  - passes edited args to the
+    executor (allow_once)
+  - writes edited args back to
+    call.input (audit trail sees
+    executed args)
+  - records edited args in the
+    activity log (not the model
+    original)
+  - passes edited args to the
+    executor on allow_always (and
+    still promotes the policy)
+  - does NOT write back to
+    call.input on deny (no
+    execution happened)
+  - falls back to the model
+    original when editedArgsJson
+    is undefined (backward compat)
+  - passes edited args through to
+    the follow-up tool message
+    (the model sees the edits)
+- `npm run build` — clean
+- `cargo check` — clean
+
+### Added (Command palette — `Cmd-Shift-P` / `Ctrl-Shift-P` launcher)
+
+- **Cross-screen launcher.** New
+  `CommandPaletteModal` mounted
+  in `main.tsx` (above the
+  screen router) so the
+  palette is always reachable
+  regardless of which screen
+  is active. Bound to
+  `Cmd-Shift-P` /
+  `Ctrl-Shift-P` via a new
+  `useCommandPaletteShortcut`
+  hook (also in
+  `src/shared/hooks/`). The
+  shortcut is suppressed when
+  the user is typing in an
+  `<input>` /
+  `<textarea>` /
+  `[contenteditable]` so it
+  doesn't pop a modal over
+  Monaco's editor.
+- **Data-driven command
+  registry.** New
+  `src/shared/commands/commands.ts`
+  defines a `Command`
+  interface (`id`, `title`,
+  `subtitle?`, `group`,
+  `keywords?`, `shortcut?`,
+  `isDev?`, `isEnabled?`,
+  `run`) and a `COMMANDS`
+  array. Adding a new command
+  is one entry in the array —
+  no UI changes needed.
+  Initial command set (10):
+  - **Open Settings** —
+    `appStore.setActiveScreen('settings')`
+  - **Go to Editor** —
+    `appStore.setActiveScreen('editor')`
+  - **New chat** —
+    `aiStore.clearMessages()`,
+    disabled while a stream is
+    in flight
+  - **Cancel current stream**
+    — `aiStore.stop()`,
+    enabled only while
+    streaming
+  - **Switch AI provider:
+    OpenAI / Anthropic** —
+    `aiStore.setProvider(…)`
+  - **Reset all tool
+    settings** —
+    `toolSettingsStore.clearAllSettings()`,
+    disabled when there's
+    nothing to clear
+  - **Clear activity log** —
+    `toolDecisionLogStore.clearLog()`,
+    disabled when the log is
+    empty
+  - **Reload custom tools
+    from `lipi-tools.json`** —
+    enabled only when a
+    workspace is open
+  - **Toggle device emulator**
+    — dev-only
+- **Fuzzy filter.**
+  `filterCommands(query)` is a
+  pure subsequence matcher —
+  every char in the query
+  must appear in the
+  haystack in order, case-
+  insensitive, across title +
+  subtitle + keywords. Multi-
+  term queries split on
+  whitespace; every term must
+  match somewhere. Scoring:
+  exact-prefix title (0) <
+  exact title (1) <
+  subsequence in title (2) <
+  subsequence in subtitle (3)
+  < subsequence in keywords
+  (4). Within a score tier,
+  original registry order is
+  preserved (common commands
+  are declared first). No
+  external fuzzy library —
+  the command set is small
+  (currently 10) and a
+  subsequence matcher is
+  sub-millisecond.
+- **Context-aware
+  `isEnabled` predicates.**
+  Some commands are only
+  meaningful in certain
+  states ("Cancel stream" is
+  only enabled while a stream
+  is in flight; "New chat"
+  is only enabled when no
+  stream is in flight;
+  "Reload custom tools" only
+  when a workspace is open;
+  "Reset all tool settings"
+  only when there's
+  something to reset). The
+  predicates run on every
+  render (every keystroke),
+  so the row state is
+  always up-to-date. Disabled
+  rows render dimmed but
+  stay focusable (with
+  `aria-disabled="true"`) so
+  screen-reader users can
+  still hear "this command
+  exists, just not now".
+- **a11y.** The input has
+  `role="combobox"` +
+  `aria-expanded` +
+  `aria-controls` +
+  `aria-activedescendant`
+  pointing at the currently
+  highlighted row. The list
+  is `role="listbox"`, each
+  row is `role="option"` with
+  `aria-selected`. Up/Down
+  arrows move the highlight
+  (clamped to the visible
+  list, with auto-scroll-
+  into-view via a
+  `useEffect` that watches
+  the clamped index). Enter
+  runs the highlighted
+  command. Escape closes (via
+  the shared `Modal`
+  primitive's built-in ESC
+  handler). Home/End jump
+  to top/bottom.
+- **`useCommandPaletteStore`**
+  (new, in
+  `src/shared/state/`). Tiny
+  UI-state primitive: `open`,
+  `query`, `selectedIndex`,
+  plus `show` / `hide` /
+  `setQuery` /
+  `moveSelection` /
+  `setSelection`. `setQuery`
+  resets `selectedIndex` to
+  0 (launcher convention —
+  the user always starts at
+  the top after a query
+  change). The store does
+  NOT clamp the index; the
+  modal does that against
+  the filtered list length
+  (and treats `selectedIndex
+  < 0` as "no selection" for
+  an empty result list).
+- **Modal positioning.**
+  Uses the shared `Modal`
+  primitive with a
+  narrower `className`
+  override (480px instead of
+  the default 520px). The
+  list scrolls inside the
+  modal's
+  `max-height: 80vh`. z-index
+  is 10000 (vs
+  `ConfirmToolCallModal`'s
+  9000) so the palette wins
+  on conflicts.
+
+### Verified
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run` —
+  **281/281 pass** (15
+  files), including 16 new
+  `filterCommands` tests in
+  `src/shared/commands/commands.test.ts`
+  and 10 new store tests in
+  `src/shared/state/commandPaletteStore.test.ts`:
+  - empty / whitespace
+    query returns the full
+    list
+  - exact title prefix
+    match ranks first
+  - exact title match
+    still high-ranked
+  - keyword matches
+    surface commands not
+    in the title
+  - multi-term query
+    (every term must
+    match)
+  - non-matching term
+    excludes the command
+  - case-insensitive
+  - stable registry order
+    within a score tier
+  - subsequence match
+    (chars in order)
+  - empty result for
+    no-match query
+  - subtitle text matches
+  - well-formed groups
+  - dev commands
+    flagged
+  - non-empty id / title /
+    run function
+  - unique command ids
+  - store: show() opens
+    and clears stale state
+  - store: hide() closes
+    but preserves query /
+    selection
+  - store: setQuery
+    resets selectedIndex
+  - store: setQuery('')
+    also resets
+  - store: moveSelection
+    increments /
+    decrements
+  - store: moveSelection
+    does NOT clamp (the
+    modal does)
+  - store: setSelection
+    sets explicit index
+  - store: full lifecycle
+    (show → type →
+    navigate → hide)
+- `npm run build` — clean
+- `cargo check` — clean
+
+### Added (Open Folder / Welcome screen)
+
+- **`useWorkspaceStore`** (new
+  Zustand store in
+  `src/shared/state/`). The
+  cross-screen source of
+  truth for "which folder
+  is currently open". State:
+  `hydrated`, `currentPath`,
+  `recents` (capped at 5,
+  most recent first, deduped),
+  and a transient
+  `status: 'idle' | 'opening'
+  | 'ready' | 'error'`.
+  Actions: `hydrate()` (reads
+  from `localStorage` once,
+  idempotent), `open(path)`
+  (commits the path,
+  prepends to recents,
+  persists), `close()`
+  (clears `currentPath` but
+  preserves recents),
+  `setStatus(status)` for
+  transient UI, `clearRecents()`
+  and `removeRecent(path)`.
+  Storage keys:
+  `lipi:workspace:v1` (the
+  current path) and
+  `lipi:workspace:recents:v1`
+  (the recents list). Hydration
+  validates the JSON shape —
+  a corrupt `currentPath` is
+  dropped to `null`, a
+  non-array `recents` is
+  dropped to `[]` (so a
+  poisoned `localStorage`
+  entry can't take down the
+  router).
+- **Welcome screen**
+  (`src/screens/Welcome/`).
+  Renders when
+  `useWorkspaceStore.currentPath
+  === null`. Body: brand
+  mark, one-line value
+  prop, primary "Open
+  Folder" button (large,
+  shows spinner on
+  `status: 'opening'`),
+  inline error banner on
+  `status: 'error'`,
+  recents list (capped at
+  5, most recent first,
+  with a per-row "remove"
+  button that calls
+  `removeRecent()`), and
+  a footer hint about
+  the command-palette
+  shortcut. The screen
+  receives a `renderActions`
+  prop for the host
+  (`AppRoot`) to inject
+  top-right buttons (e.g.
+  Settings) without the
+  screen importing the
+  app store directly.
+- **`useOpenWorkspace()`**
+  hook + `openWorkspace()`
+  pure function (in
+  `src/screens/Welcome/hooks/`).
+  The single bridge between
+  the "Open Folder" UI and
+  the Tauri filesystem.
+  Pure function holds the
+  control flow (concurrent-
+  open guard via
+  `status.kind === 'opening'`,
+  picker-throws → error
+  banner, picker-returns-null
+  → cancel-and-idle,
+  success → `useWorkspaceStore.open(path)`)
+  and the hook is a thin
+  `useCallback` wrapper so
+  the same logic is callable
+  from the palette / Welcome
+  button / future
+  auto-restore flows. Native
+  picker is the existing
+  `fs_pick_folder` Rust
+  command
+  (`tauri-plugin-dialog`)
+  re-exposed on the TS side
+  as `pickFolder()`.
+- **Two-axis router** in
+  `src/main.tsx`. Priority:
+  (1) `useAppStore.activeScreen === 'settings'`
+  → `<SettingsProvider />`
+  (overlays both bases);
+  (2) `useWorkspaceStore.hydrated
+  === false` → invisible
+  boot placeholder (one-
+  frame, prevents the hero
+  from flashing when a
+  saved workspace is about
+  to load); (3)
+  `useWorkspaceStore.currentPath
+  === null` → `<Welcome />`;
+  (4) otherwise →
+  `<EditorWorkspace />`.
+  The `appStore` `Screen`
+  union is extended to add
+  `'welcome'` (initial
+  value) — the existing
+  `'editor'` and `'settings'`
+  values are kept. The
+  Settings screen's back
+  button now branches on
+  `workspaceStore.currentPath`:
+  back to `'welcome'` if
+  no folder is open, back
+  to `'editor'` otherwise.
+- **Command palette gets
+  three new commands**:
+  `workspace.open` ("Open
+  Folder…", bound to the
+  new `Cmd-Shift-O` /
+  `Ctrl-Shift-O` global
+  shortcut), `workspace.close`
+  ("Close Folder", enabled
+  only when a folder is
+  open), and a dynamic
+  `workspace.recent.0..N`
+  set — one per entry in
+  `useWorkspaceStore.recents`,
+  built at render time
+  via a new
+  `getRecentsCommands()`
+  exported from
+  `src/shared/commands/commands.ts`.
+  The modal merges the
+  static + dynamic lists
+  and runs the same fuzzy
+  subsequence scoring on
+  both, so typing
+  "recent" surfaces the
+  recent entries. The
+  palette's `useMemo`
+  re-runs whenever
+  `recents` changes
+  (subscribed via
+  `useWorkspaceStore`).
+- **`useOpenFolderShortcut`**
+  hook
+  (`src/shared/hooks/`).
+  Dedicated global
+  `Cmd-Shift-O` /
+  `Ctrl-Shift-O` listener
+  that calls
+  `openWorkspace()` directly,
+  bypassing the palette
+  modal — the picker is
+  a native dialog and a
+  dedicated shortcut is
+  more ergonomic than
+  going through a
+  cross-screen modal. The
+  shortcut is suppressed
+  when the user is typing
+  in an input / textarea
+  / contenteditable. The
+  `Command` registry's
+  `workspace.open` entry
+  advertises the same
+  shortcut on its row, so
+  the two surfaces stay
+  in sync.
+- **`useWorkspaceSync`**
+  hook
+  (`src/shared/hooks/`).
+  The bridge that makes
+  the new
+  `useWorkspaceStore` the
+  single source of truth
+  for "which folder". On
+  mount, it propagates the
+  current workspace path
+  to the three downstream
+  stores that previously
+  each tracked their own
+  `rootPath` /
+  `workspaceRoot`:
+  `useFileTreeStore`
+  (calls `setRoot(next)`
+  or `reset()` for
+  null), `useGitStore`
+  (calls `setRoot(next)`),
+  and `useCustomToolsStore`
+  (sets `workspaceRoot`
+  via `setState`). On
+  subsequent
+  `useWorkspaceStore`
+  changes, the same
+  propagation runs.
+  `useFileTree.openFolder()`
+  (the file tree's own
+  "open" affordance) now
+  pushes the chosen path
+  to `useWorkspaceStore`
+  first (so the recents
+  list gets the path)
+  before kicking off the
+  file tree's lazy
+  `readDir`.
+- **`appStore` updated**:
+  the `Screen` union grows
+  from `'editor' | 'settings'`
+  to `'editor' | 'settings'
+  | 'welcome'`. The default
+  `activeScreen` is now
+  `'welcome'` (the router
+  in `main.tsx` ignores it
+  when a workspace is open;
+  the welcome screen is the
+  natural default for
+  first-run anyway).
+- **Welcome screen styles**:
+  new
+  `Welcome.module.css` —
+  centred hero, folder
+  glyphs (inline SVG, no
+  asset files), per-row
+  remove button that
+  appears on hover /
+  focus-within.
+- **Settings header button**:
+  `AppRoot` injects a
+  ghost-variant "Settings"
+  button into the Welcome
+  screen header via
+  `renderActions`, so the
+  user can open the AI
+  provider config from
+  the Welcome screen (useful
+  for first-run when they
+  haven't set a key yet).
+  The same `setActiveScreen('settings')`
+  action that the
+  editor's titlebar ⚙
+  uses — no new code path.
+
+### Verified
+
+- All 312 tests pass
+  (`npx vitest run`):
+  - 20 new tests for
+    `useWorkspaceStore`
+    (hydrate, open, close,
+    recents dedup, status,
+    persistence round-trip,
+    `removeRecent`)
+  - 5 new tests for
+    `openWorkspace()` (no-arg
+    picker, with-arg path,
+    user cancel, picker
+    throws, concurrent-open
+    guard)
+  - 6 new tests for the
+    palette's workspace
+    commands + recents
+- `npx tsc --noEmit` —
+  clean
+- `npm run build` — clean
+- `cargo check` — clean
+- Titlebar subtitle bumped
+  from `dev · 5c` to
+  `dev · welcome` in
+  `EditorWorkspace.tsx`
+
+### Known limitations
+
+- The Welcome screen
+  doesn't auto-restore
+  the last workspace yet
+  — it always shows the
+  hero on first paint, and
+  the workspace is
+  re-opened via the recents
+  list or a manual "Open
+  Folder" click. A future
+  phase will add a
+  "Resume last workspace"
+  button at the top of the
+  recents list.
+- The `useWorkspaceSync`
+  hook is mounted in
+  `AppRoot` and runs once.
+  It has no test (mounting
+  a React component in a
+  Vitest harness requires
+  `@testing-library/react`,
+  which the project does
+  not ship). The
+  propagation logic is
+  covered indirectly by
+  the store tests (each
+  downstream store's
+  state-shape is verified
+  after a `setRoot` call).
+
+### Added (Phase 5a — bulk reset all tool settings with undo)
+
+- **Soft-delete + undo for tool
+  settings** in `toolSettingsStore`.
+  Three new actions:
+  `clearAllSettings()`,
+  `undoClearAllSettings()`, and
+  `discardUndoAllSettings()`. Mirrors
+  the 5h activity-log pattern, but
+  the undo buffer is
+  `localStorage`-backed
+  (`lipi:toolSettings:undo:v1`) —
+  not in-memory — so a page reload
+  during the 5s window doesn't
+  silently drop the user's reset.
+  Rationale in the
+  `STORAGE_KEY_UNDO` JSDoc.
+- **`hasPendingUndo()` selector**
+  for the UI to react to the
+  pending state.
+- **No-op semantics**: a clear is
+  a no-op when the current state
+  is fully empty (no disabled
+  tools AND only default-mode
+  entries in `confirmationMode`)
+  so the UI doesn't pop a
+  confusing "Reset nothing"
+  toast.
+- **`pendingUndo` field** on the
+  store, hydrated from the
+  undo-buffer key on startup.
+  Lets the UI re-arm the 5s
+  timer on mount after a reload.
+- **Danger Zone section** at the
+  bottom of the Settings screen,
+  with a single card
+  ("Reset all tool settings") and
+  a 5-second undo toast. The
+  card uses the design system's
+  `Button variant="danger"`
+  variant and a thin
+  `--color-danger` left border
+  to signal "destructive" without
+  screaming. The body text
+  explains the soft-delete
+  contract.
+- The AI provider API keys
+  (in the OS keychain) are NOT
+  affected by this button — only
+  the per-tool settings. This is
+  called out in the section lede.
+- 14 new store tests covering:
+  soft-delete on a non-empty
+  state, the empty-state
+  no-op, the
+  buffer-write path, restore +
+  buffer-drop, no-op when the
+  buffer is absent, malformed-
+  buffer defensive drop, the
+  full clear→undo→clear→undo
+  cycle, `discardUndo` happy
+  path + no-op, and the
+  `hydrate()` round-trip
+  (pendingUndo survives a
+  reload, is `false` when the
+  buffer is absent).
+
+### Verified
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run` — **210/210
+  pass** (12 files), including
+  the 14 new
+  `toolSettingsStore` 5a tests
+- `npm run build` — clean
+- `cargo check` — clean
+
+### Added (Phase 5b — settings export / import)
+
+- **New module
+  `src/shared/settingsIO.ts`**
+  with the pure IO functions:
+  `buildSettingsFile()`,
+  `parseSettingsFile()`,
+  `serialiseSettingsFile()`,
+  `suggestFilename()`. Plus
+  the schema-versioned
+  envelope types
+  (`SettingsFile`,
+  `SettingsFileData`,
+  `ExportedToolSettings`) and
+  the `ParseResult` /
+  `ParseError` tagged union
+  (so the UI can show a
+  specific error message
+  instead of a generic
+  "bad file" toast).
+- **File format**:
+  ```json
+  {
+    "format": "lipi-settings",
+    "version": 1,
+    "exportedAt": "2026-06-11T15:30:00.000Z",
+    "data": {
+      "toolSettings": {
+        "disabledToolNames": [...],
+        "confirmationMode": {...}
+      }
+    }
+  }
+  ```
+  Pretty-printed with 2-space
+  indent so a user can open
+  the file in a text editor
+  and see what they're
+  importing. The `format`
+  magic string is the first
+  guard — a user accidentally
+  picking the wrong file
+  gets a clear "not a Lipi
+  settings file" error
+  before the parser even
+  looks at the data.
+- **Scope decision** (in the
+  JSDoc): only the tool
+  settings are exported. The
+  activity log is per-machine
+  audit trail, the device
+  emulator flag is
+  session-only, the undo
+  buffer is transient
+  recovery state — none of
+  them belong in a portable
+  settings file. The OS-
+  keychain API keys are
+  obviously not included
+  (they're not even in JS).
+- **`toolSettingsStore`**:
+  new `applyImportedSettings()`
+  action. Replace semantics
+  (not merge — merging would
+  silently combine per-tool
+  entries from two sources,
+  which is surprising). Goes
+  through the same 5a soft-
+  delete + 5s-undo pattern:
+  the pre-import state is
+  stashed in the existing
+  `lipi:toolSettings:undo:v1`
+  buffer, the user can
+  `undoClearAllSettings()`
+  within the 5s window to
+  restore. No-op when the
+  imported state matches the
+  current state (no spurious
+  undo toast for a
+  round-trip on the same
+  machine).
+- **Shared helper
+  `replaceWithUndo()`** in
+  the store — module-level
+  function that takes
+  `(get, set, next)` and
+  handles the
+  snapshot-then-write dance.
+  Used by both
+  `clearAllSettings` (5a)
+  and
+  `applyImportedSettings`
+  (5b), so the two
+  destructive write paths
+  stay in lock-step.
+- **New "Backup & Restore"
+  section** at the top of
+  the Settings screen,
+  above the Danger Zone
+  (because it's the more
+  common / less destructive
+  action). Two buttons:
+  `Export…` (downloads
+  `lipi-settings-YYYY-MM-DD.json`
+  via `Blob` + `<a download>`)
+  and `Import…` (triggers a
+  hidden file input).
+  Import errors surface as
+  a sticky red bar with the
+  parser's specific message
+  (e.g. "File is from a
+  newer Lipi (version 2)").
+  Success notices auto-
+  dismiss after 3s. The
+  undo toast is SHARED with
+  the Danger Zone's "Reset
+  all" — both go through
+  `replaceWithUndo`, so
+  there's a single
+  consistent "5 seconds to
+  undo" affordance.
+- **28 new tests in
+  `settingsIO.test.ts`**:
+  happy-path round-trips
+  (empty, non-empty, 100-
+  tool + 100-policy),
+  rejection paths (bad JSON,
+  non-object top-level,
+  wrong `format` magic,
+  missing `version`,
+  non-integer `version`,
+  version too new, version
+  too old, missing `data`,
+  missing `toolSettings`,
+  `disabledToolNames` not
+  array, `disabledToolNames`
+  with non-strings,
+  `confirmationMode` not
+  object, `confirmationMode`
+  with invalid mode value),
+  filename formatting
+  (local date, zero-pad),
+  file-size sanity (typical
+  export < 10KB, 1000-tool
+  export < 100KB), error-
+  message human-readability
+  (mentions the field name).
+- **10 new tests in
+  `toolSettingsStore.test.ts`**:
+  `applyImportedSettings`
+  replaces state, sets
+  `pendingUndo`, writes the
+  undo buffer, persists to
+  v2, no-op on matching
+  state, no-op on
+  empty-to-empty, undo via
+  the shared 5a buffer,
+  last-write-wins on the
+  undo buffer (a Reset
+  followed by an Import
+  leaves the buffer at the
+  pre-Import state), the
+  full round-trip through
+  persistence (import →
+  reload → undo restores
+  pre-import state).
+
+### Verified
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run` — **248/248
+  pass** (13 files; +28 in
+  `settingsIO.test.ts`, +10
+  in `toolSettingsStore.test.ts`)
+- `npm run build` — clean
+- `cargo check` — clean
+
+### Added (Phase 5h — soft-delete with undo for Clear log)
+
+- **Soft-delete with undo** in
+  `toolDecisionLogStore`. The
+  destructive `clearLog()` action
+  no longer hard-deletes the
+  records: it moves the current
+  `records` array into a new
+  `lastCleared` field, so the
+  records can be restored via
+  `undoClear()`. `clearLog()`
+  on an empty log is a no-op
+  (no phantom undo offer).
+- **`undoClear()` and
+  `discardUndo()` actions**:
+  `undoClear()` restores the
+  buffer and clears it
+  (single-shot undo); both
+  are no-ops when the buffer
+  is null. `discardUndo()`
+  drops the buffer without
+  restoring — the UI calls
+  this when the 5-second undo
+  window expires.
+- **Undo toast in the
+  Settings UI**: clicking
+  [Clear log] no longer shows
+  a `window.confirm` dialog.
+  Instead, the records are
+  cleared immediately AND a
+  small bar appears at the
+  top of the Activity Log
+  section: "Cleared N
+  decisions. [Undo]". The
+  toast has a 5-second
+  window (matching industry
+  conventions — Gmail's
+  Undo Send, Notion's trash
+  restore, Linear's archive
+  undo). The bar uses
+  `role="status"` +
+  `aria-live="polite"` so
+  screen readers announce
+  it; the Undo button is a
+  plain `<button>` with an
+  accent colour and
+  underline-on-hover for
+  keyboard users.
+- **In-memory only**: the
+  undo buffer is not
+  persisted to `localStorage`.
+  A page reload drops the
+  buffer. The trade-off is
+  intentional: the window is
+  short (5s), persisting the
+  buffer would grow the
+  storage footprint, and the
+  reload case is the user
+  walking away from the
+  action — at that point the
+  clear is final.
+
+### Verified
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run` — **177/177
+  pass** (10 files), including
+  4 new `toolDecisionLogStore`
+  `clearLog` / `undoClear` /
+  `discardUndo` tests
+- `npm run build` — clean
+- `cargo check` — clean
+
+### Added (Phase 5g — inline revert for allow_always)
+
+- **`DecisionRecord.decision` extended**
+  with a 4th value `'revert'` for
+  the inline Undo action. The
+  validator and the existing
+  `recordDecision` / `getRecent*`
+  selectors are updated to accept
+  it. Revert records use
+  well-known sentinel ids
+  (`'revert'`) for `requestId`,
+  `assistantMessageId`, and
+  `toolCallId` so they are
+  distinguishable from real
+  tool-call decisions in
+  cross-referencing code.
+- **`Unrevert` button on
+  `allow_always` rows** in the
+  Activity Log. A small ghost
+  button (danger colour on
+  hover/focus — signals
+  "downgrades a previously-
+  granted permission") next to
+  the existing "Jump to chat"
+  button. Only `allow_always`
+  rows get the button (deny /
+  allow_once don't change the
+  policy, so there's nothing to
+  revert). On click: sets the
+  tool's policy to
+  `'always_confirm'` (the safe
+  default — principle of least
+  privilege) AND records a
+  synthetic `revert` decision
+  so the audit trail shows
+  "user reverted their
+  always-allow for tool X at
+  time T".
+- **Revert badge style**: a
+  neutral grey, NOT danger
+  colour. The revert is a
+  positive safety action
+  (tightening permissions), not
+  an error.
+
+### Verified
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run` — **172/172
+  pass** (10 files), including
+  3 new `toolDecisionLogStore`
+  `revert` tests
+- `npm run build` — clean
+- `cargo check` — clean
+
+### Added (Phase 5f — jump to chat from Activity Log row)
+
+- **`chatNavStore`** (new Zustand store,
+  in-memory only, no `localStorage`
+  persistence). Holds a single
+  `pendingJump` record
+  (`{ messageId, toolCallId, issuedAt }`).
+  The Settings screen writes
+  (`requestJump`); the AIPanel reads
+  (`consumeJump`). Clear-on-read
+  prevents the same jump from firing
+  twice; a 30-second expiry
+  (`JUMP_MAX_AGE_MS`) defends against
+  far-stale jumps causing a visual
+  flicker after a long idle.
+- **AIPanel jump wiring**: the AIPanel
+  holds two `Ref<Map<id, HTMLElement>>`
+  (one for messages, one for tool
+  traces). Each rendered
+  `MessageRow` / `ToolTrace`
+  registers its element by id via
+  a ref-callback. On `pendingJump`,
+  the AIPanel looks up the matching
+  elements, scrolls the message into
+  view (`scrollIntoView({block:
+  'center'})`), and adds a
+  `data-jump-highlight` attribute
+  for 2 seconds. CSS animates a
+  soft two-pulse ring around both
+  the message bubble and the
+  tool-trace card. Honours
+  `prefers-reduced-motion` (no
+  animation, single soft outline).
+- **`DecisionRecord.toolCallId`**
+  (new required field). The
+  `toolDecisionLogStore` validator
+  now requires it; 5e-era records
+  (without the field) are dropped on
+  hydrate. The recording site in
+  `aiStore.resolveConfirmation`
+  stamps the id from the
+  `PendingConfirmation` at decision
+  time.
+- **Settings → Editor transition on
+  row click**: the
+  `DecisionLogCards` component now
+  writes a jump to `chatNavStore`
+  AND calls
+  `useAppStore.setActiveScreen('editor')`.
+  Order matters: jump first, then
+  switch screen, so the AIPanel's
+  subscribe callback fires after
+  the panel is mounted.
+- **Per-row "Jump to chat" button**:
+  a small ghost button at the end
+  of each row's main line. Visible
+  affordance (not a hidden
+  click-anywhere target) so users
+  don't accidentally navigate
+  away from Settings. Keyboard
+  accessible (Tab + Enter). The
+  row also gets a thin left-border
+  accent (`data-jumpable`) so the
+  interactive rows are visually
+  distinguishable at a glance.
+
+### Verified
+
+- `npx tsc --noEmit` — clean
+- `npx vitest run` — **169/169
+  pass** (10 files), including 7
+  new `chatNavStore` tests and 2
+  new `toolDecisionLogStore`
+  `toolCallId` tests
+- `npm run build` — clean
+- `cargo check` — clean
+
+## [0.0.2] — 2026-06-09
+
+### Added (Phase 5e — persistent per-decision activity log)
+
+- **Per-decision activity log** (new
+  `toolDecisionLogStore`, Zustand, separate from
+  `toolSettingsStore` and `aiStore`): records every
+  `[Deny] / [Run once] / [Always allow]` click the user
+  makes on a custom-tool confirmation modal. Capacity
+  **500 entries** (locked per user call — bumping the
+  cap is a one-line constant change). Ring-buffer
+  semantics: when the post-append size exceeds 500, the
+  OLDEST entry is dropped.
+- **Record shape**: `{ id, timestamp, toolName,
+  decision, argsPreview, requestId,
+  assistantMessageId }`. `argsPreview` is truncated
+  to **2KB** (UTF-8 byte count, not character count) at
+  write time — typical tool args are 100-200B, the 2KB
+  cap is 10x headroom and bounds worst-case storage to
+  ~1MB. `id` is `crypto.randomUUID()` (with a
+  `Date.now() + random` fallback for older webviews /
+  tests).
+- **Recording point**: the AI store's
+  `resolveConfirmation(decision)` action records a
+  `DecisionRecord` BEFORE delegating to
+  `applyConfirmationAndResume` — the log is
+  observational and should land even if the resume
+  helper throws. Stale decisions (the resolver bailed
+  because the `requestId` was stale) are NOT recorded.
+- **Localstorage key**: `lipi:toolDecisionLog:v1`
+  (separate from `lipi:toolSettings:v2` — different
+  concern, no version coupling). The hydration
+  transparently drops malformed records (a single
+  corrupt row from a past bug doesn't wipe the entire
+  history).
+- **Settings UI**: new "Activity Log" section below
+  "Custom Tools", with a count badge ("N decisions" or
+  "N decisions (cap reached)"), a [Clear log] button
+  (irreversible in 5e, confirmed via `window.confirm`),
+  and rows that show:
+  - A color-coded decision badge (`deny` red,
+    `allow_once` green, `allow_always` blue).
+  - The tool name in monospace.
+  - A relative timestamp ("just now", "5m ago",
+    "yesterday", "2026-06-09") — no `Intl.DateTimeFormat`
+    for portability.
+  - An expandable `<details>` block with the truncated
+    args preview.
+  - The `assistantMessageId` as muted text (for the
+    future "Jump to chat" feature).
+  - Empty state when the log is empty: "No decisions
+    recorded yet. They'll appear here as you use the
+    chat."
+- **Pagination**: at most **50 rows in the DOM** at a
+  time. The store holds 500; older rows are off-screen
+  but accessible via the [Show older] button which
+  expands the limit by another 50. Keeps the React
+  tree small for a setting the user rarely scrolls.
+- **No "Jump to chat"** (deferred to 5f+ — needs
+  AIPanel cross-store navigation).
+- **No per-row "Revert allow_always" button** (deferred
+  to 5f+).
+- **No undo toast on Clear log** (deferred — 5e keeps
+  the destructive action irreversible and the UI
+  minimal).
+- **Test coverage**: 18 new tests for
+  `toolDecisionLogStore` (record/append, capacity
+  enforcement at 500 + boundary, clear, getRecentForTool
+  filter, getRecent limit, persistence round-trip,
+  malformed-record filtering, corrupt v1 → defaults,
+  hydrate-guard, 4 `truncateArgsPreview` tests
+  including a UTF-8 byte-bound test) + 4 new tests for
+  `aiStore` (deny records a deny entry, allow_once
+  records, allow_always records AND promotes the
+  policy, stale decision does NOT record).
+
+### Verified
+
+- `npm run typecheck` — clean.
+- `npx vitest run` — 160/160 passing (was 138; +18 in
+  `toolDecisionLogStore.test.ts` + +4 in
+  `aiStore.test.ts`).
+- `npm run build` — clean.
+- `cargo check` (Rust side untouched in 5e, smoke check
+  only) — clean.
+
+### Added (Phase 5d — per-tool invocation allowlist)
+
+- **Per-tool confirmation policy** (3 modes):
+  `always_allow` (default — preserves 5c behaviour), `per_call`
+  (ask once per assistant turn, then auto-approve subsequent
+  calls of the same tool in the same turn), `always_confirm`
+  (ask before every invocation, regardless of round state).
+  Configured per-tool on the Settings → AI Tools cards; the
+  segmented control appears next to the existing on/off switch.
+- **Confirmation prompt modal** (`ConfirmToolCallModal`,
+  mounted at the `EditorWorkspace` root): three buttons
+  `[Deny]` (red), `[Run once]` (primary, auto-focused), and
+  `[Always allow]`. The modal pretty-prints the call's
+  arguments as JSON, shows the tool description, and renders
+  a kind badge (`shell` / `http` / `builtin`). `Esc` key
+  triggers Deny. Auto-focus the primary action on open so
+  `Enter` approves.
+- **Tool-loop pause/resume**: when a tool call needs
+  confirmation, the `runToolExecutionRound` function parks
+  the round BEFORE entering the parallel executor. The
+  `RequestStatus` becomes `'awaitingConfirmation'`, and a
+  new `pendingConfirmation` field on the AI store records
+  the call id, name, description, args JSON, assistant
+  message id, the original chat-stream requestId (used to
+  detect stale decisions), and the round number. The user
+  clicks a button → `resolveConfirmation(decision)` →
+  `applyConfirmationAndResume` helper → either starts the
+  follow-up stream (last call in the round) or re-enters
+  `runToolExecutionRound` for the remaining calls (which
+  may park again on the next `shouldConfirm: true` call).
+- **Localstorage bump `lipi:toolSettings:v1` → `v2`**: the
+  v2 payload carries both `disabledToolNames` (the existing
+  set) and a new `confirmationMode` map (`Record<toolName,
+  ConfirmationMode>`). The hydrate path transparently
+  migrates a v1 file forward — copies the disabled names,
+  adds an empty `confirmationMode: {}`, and LEAVES the v1
+  key in place (a v1 reader can still load the old state).
+  Tools not in the map use the default `always_allow`, so
+  a v1 → v2 migration is a no-op for the user-visible
+  behaviour.
+- **New `RequestStatus` variant**: `'awaitingConfirmation'`.
+  `clearMessages` now refuses during this state (the
+  pending decision would be orphaned); the in-flight
+  decision is preserved.
+- **`toolRegistry.shouldConfirm(name, confirmedForRound)`
+  predicate** + `toolSettingsSelectors.shouldConfirm`:
+  pure function the AI store consults. Returns `false` for
+  disabled tools, `true` for `always_confirm`, and for
+  `per_call` returns the inverse of the round flag (a
+  caller-side set marks a tool as "user already approved
+  once this round").
+- **`toolSettingsStore.setConfirmationMode(name, mode)`**:
+  sets the policy. When set back to the default
+  (`always_allow`), the entry is REMOVED from the map to
+  keep the persisted JSON small. `applyConfirmationAndResume`
+  calls this with `'always_allow'` when the user picks
+  `[Always allow]` in the modal.
+- **Test coverage**: 15 new tests for `toolSettingsStore`
+  (5d predicate behaviour, v1→v2 migration, default-mode
+  drops from the map, persistence round-trip) + 6 new
+  tests for `aiStore` (park on `always_confirm`, deny
+  records error and resumes, allow_once executes but
+  leaves the policy unchanged, allow_always executes and
+  promotes the policy, default `always_allow` does NOT
+  park, `clearMessages` refuses during
+  `'awaitingConfirmation'`, stale-requestId resolver
+  bails).
+
+### Key decisions
+
+- **`per_call` semantics = "ask once per assistant turn"**:
+  the user picks `per_call` for a tool the model might
+  call repeatedly in a single response (e.g.
+  `get_file_contents` called for 5 files). The modal
+  surfaces once; subsequent calls of the same tool in
+  the same round execute silently. The next `send()`
+  re-prompts.
+- **No click-outside-to-dismiss**: an accidental click
+  while typing a long prompt could let the model run a
+  shell command. Modal stays open until the user picks a
+  button (or hits `Esc` for deny).
+- **Stale-confirmation race protection**: the
+  `pendingConfirmation` record carries the chat-stream
+  `requestId` (captured at parking time in a module-level
+  `lastStreamRequestId` set by `send()` / `sendEdit()`).
+  The resolver drops the decision if the requestId has
+  rolled over (a new send happened while the user was
+  deciding). `activeRequestId` is NOT sufficient because
+  it goes to `null` once `ai://done` arrives.
+- **`v1` key left intact on migration**: a v1 reader
+  (e.g. a downgrade) can still load the old state. The
+  next state-changing action writes the v2 payload;
+  `v1` is left alone forever.
+
+### Verified
+
+- `npm run typecheck` — clean.
+- `npx vitest run` — 138/138 passing (32 in
+  `toolSettingsStore.test.ts`, 41 in `aiStore.test.ts`).
+- `npm run build` — clean (no TS / Vite errors).
+- `cargo check` (Rust side untouched in 5d, smoke check
+  only) — clean.
+
+### Added (Phase 1b — Tauri shell on Windows)
+
+- Installed Rust 1.96.0 (stable, MSVC ABI, minimal profile) via `rustup-init.exe`.
+- Installed Visual Studio Build Tools v14.44.35207 (C++ workload) and
+  Windows SDK 10.0.22621.0 at `C:\BuildTools\`.
+- Installed Tauri CLI 2.11.2 via `cargo install tauri-cli --version "^2.0" --locked`.
+- Wrote `src-tauri/` scaffold by hand (no `cargo tauri init`):
+  - `Cargo.toml` (Tauri 2 + tauri-plugin-updater, release profile optimised for size)
+  - `tauri.conf.json` (bundle ID `app.lipi.ide`, dev URL `http://localhost:1420`, 5 LLM hosts in CSP, 5 platforms targeted)
+  - `build.rs` (Tauri build script)
+  - `src/main.rs` (Windows entry)
+  - `src/lib.rs` (`get_app_version` IPC command, updater plugin, title-set in `setup`)
+  - `capabilities/default.json` (main window ACL)
+  - `icons/` (32 icons generated via `cargo tauri icon` from a placeholder 1024×1024 "L" PNG)
+- Verified: `cargo tauri dev` opens a native Tauri window showing the existing
+  React EditorWorkspace shell, with the IPC bridge live (Tauri ↔ Vite ESTABLISHED on :1420).
+- Updated `package.json` with `dev:tauri`, `build:tauri`, `preview:tauri`, `tauri` scripts.
+- Updated HANDOFF.md (Section 3, 5, 6 + decisions #22–25) and README.md.
+- Adopted 7 engineering rules in HANDOFF.md Section 10 (long-form in `docs/ENGINEERING.md`).
+
+### Added (Phase 2a — virtual filesystem + IPC bridge)
+
+- Rust module `src-tauri/src/fs.rs` with `FsEntry`, `FileContent`, `FsError` (tagged enum).
+- `read_dir` (sorts dirs first, files second, both alphabetical), `read_file`
+  (5 MB cap, NUL-byte → binary detection, UTF-8 returns), `write_file` (atomic,
+  creates missing parent dirs).
+- 4 Tauri commands: `fs_read_dir`, `fs_read_file`, `fs_write_file`,
+  `fs_pick_folder` (uses `tauri-plugin-dialog`).
+- TS wrapper `src/ipc/fs.ts` with `FsError` class and typed re-exports.
+- 7 Rust unit tests, all pass.
+
+### Added (Phase 2b — file tree UI)
+
+- `src/screens/EditorWorkspace/state/fileTreeStore.ts` (Zustand):
+  discriminated `FileTreeStatus` union (`idle` / `opening` / `loading` /
+  `ready` / `error`), `rootPath`, `entriesByDir` cache, `expanded` set,
+  `selectedPath`.
+- `src/screens/EditorWorkspace/hooks/useFileTree.ts` — side effects
+  (open folder, read dir, toggle, select).
+- `FileTreePane` rewritten to use `PaneShell` + recursive `TreeNode` with
+  keyboard navigation, aria attributes, and first-class empty / loading /
+  error / non-folder states.
+- `TitleBar` extended to read `rootPath` and show it as a breadcrumb.
+- `PaneShell` got a new `headerAction` slot (used by the "Open folder" button).
+
+### Added (Phase 2c — Monaco + tabs + dirty state + save)
+
+- `src/shared/hooks/useKeyboardShortcut.ts` — generic, platform-aware
+  (Cmd on macOS, Ctrl elsewhere), skips text inputs (with a Monaco exception
+  for `Ctrl+S`).
+- `src/shared/components/KeyHint/` — small `<kbd>`-style component that
+  renders `⌘S` on macOS and `Ctrl+S` elsewhere.
+- `editorTabsStore.ts` — Zustand store with `order`, `tabs`, `activeId`,
+  `TabLoadStatus` discriminated union, `inferLanguage`, `inferDisplayName`.
+- `useEditorTabs.ts` — `openFile` (uses `readFile`), `saveActive` (uses
+  `writeFile`), `closeTab`, `setContent`.
+- `TabStrip` — `EditorTab` items with name, dirty dot, close button, active state.
+- `EditorPane` rewritten to host Monaco + `TabStrip`, wired to the store
+  and `useKeyboardShortcut('mod+s', saveActive)`. Loads / saves via the
+  Rust `fs` commands. Renders loading / error / binary / empty states.
+- `StatusBar` got a `dirty` prop and a `● unsaved` indicator.
+- `EditorWorkspace` orchestrator: `fileTreeStore.selectedPath` → `openFile`.
+  (Rule 6: cross-section wiring is explicit at the screen level.)
+
+### Added (Phase 3a — read-only git pipe)
+
+- Rust module `src-tauri/src/git.rs` over `gix = "=0.78.0"` (pinned — see
+  HANDOFF Decision #26 for the gix 0.79+ compile bug rationale).
+  - `RepoHandle` (opaque handle = the repo's working tree path),
+    `RepoStatus` snapshot, `ChangedFile` with `staged` / `unstaged` bits,
+    `ChangeKind` discriminated union (Added / Modified / Deleted /
+    Renamed / Copied / Untracked / TypeChange / Conflict), `GitError`
+    tagged enum (NotARepository / Git).
+  - `open_repo` re-opens cheaply on each call (gix is fast for read-only
+    status); capped at 1000 changed files to bound memory.
+  - Ahead/behind reported as `(0, 0)` for now (real `gix-revwalk` count
+    is Phase 3b stretch).
+  - 7 unit tests: open on a real repo, open fails on a non-repo, current
+    branch = `main` after init, status on a clean repo is clean, modified
+    file surfaces as unstaged, untracked file surfaces as Untracked,
+    staged add surfaces as Added+staged.
+- 3 Tauri commands: `git_open`, `git_status`, `git_current_branch`.
+- TS wrapper `src/ipc/git.ts` with `gitOpen` / `gitStatus` /
+  `gitCurrentBranch`, `GitError` class, `changeKindLabel` and
+  `changeKindBadge` helpers.
+- Verified: `cargo test --lib` → **14/14 pass** (7 fs + 7 git);
+  `npm run typecheck` → 0 errors; `cargo tauri dev` → Tauri window
+  opens, screenshot captured.
+- 3a adds no UI surface by design (that's 3b's job).
+
+### Known limitations
+
+- No diff or discard yet — those land in 3c.
+- No real ahead/behind count (returned as 0/0).
+- No git UI in the side panel — that's 3b.
+- `gix` is pinned to 0.78 (see Decision #26). When upstream fixes the
+  non-exhaustive-match bug in gix-hash 0.23+, we can drop the pin and
+  bump.
+
+### Added (Phase 3b — GitPanel side panel UI)
+
+- `src/screens/EditorWorkspace/state/gitStore.ts` (Zustand):
+  `GitPanelStatus` discriminated union (`idle` / `opening` /
+  `not-a-repo` / `loading` / `ready { status }` / `error { message }`),
+  `rootPath`, `isRefreshing`, and 6 selectors (`status`, `rootPath`,
+  `isRefreshing`, `changedFiles`, `branch`, `ahead`, `behind`, `isClean`).
+- `src/screens/EditorWorkspace/hooks/useGitStatus.ts` — `openRoot`
+  (probe with `gitOpen`, then `gitStatus`), `refresh` (re-fetch
+  current root), `close`. Maps the `GitError(NotARepository)` case
+  to the `not-a-repo` state; other errors land in `error`.
+- `src/screens/EditorWorkspace/components/GitPanel/`:
+  - `GitPanel.tsx` — PaneShell with `Source Control · Git` header
+    and a refresh `IconButton`. Renders a `Body` switch over the
+    6 statuses. In `ready` state, shows a `BranchHeader` (⎇ icon,
+    branch name, ↑N / ↓N pills), a `SummaryBar` (e.g. "3 changes ·
+    1 staged · 2 unstaged" + Refresh button), and a `ChangedFilesList`
+    with one row per file: `changeKindBadge` (A / M / D / R / C / U /
+    T / !) color-coded by `ChangeKind`, plus a left border in success
+    or warning color based on `staged` / `unstaged` bits.
+  - `GitPanel.module.css` — token-based styles (every value is
+    `var(--space-*)`, `var(--color-*)`, `var(--font-*)`).
+  - `index.ts` — barrel.
+- `src/screens/EditorWorkspace/components/SidePanelPane/SidePanelPane.tsx`
+  rewritten to mount `<GitPanel />` (replaces the empty placeholder).
+- `src/screens/EditorWorkspace/EditorWorkspace.tsx` got the
+  cross-store orchestrator: when `fileTreeStore.rootPath` changes,
+  call `useGitStatus().openRoot(rootPath)`; when the file tree is
+  closed, call `useGitStatus().close()`. Rule 6 satisfied: the
+  `gitStore` and `fileTreeStore` never know about each other.
+- `src/shared/styles/tokens.css` — added `--color-success-soft`,
+  `--color-warning-soft`, `--color-danger-soft`,
+  `--color-danger-strong-soft` for the badge backgrounds (so the
+  component CSS contains no raw `rgba`).
+- `src-tauri/src/lib.rs` re-exports `open_repo`, `status`, and the
+  public types (`ChangeKind`, `ChangedFile`, `RepoHandle`, `RepoStatus`)
+  so the integration test binary can hit them.
+- `src-tauri/tests/git_status_smoke.rs` — 3 integration tests:
+  - `open_and_status_round_trip_on_a_real_temp_repo` — spins up a
+    fresh temp git repo, opens it, fetches status, asserts
+    `branch == "main"`, `is_clean == true`, `is_detached == false`.
+  - `status_kind_discriminator_is_exhaustively_named` — compile-time
+    tripwire: a new `ChangeKind` variant without a `name` mapping
+    breaks the build.
+  - `changed_file_serialises_with_camel_case_field_names` — snapshots
+    the JSON wire shape (camelCase fields, kebab-case `kind` enum)
+    to catch any future serde-rename regression.
+- Titlebar dev subtitle bumped from `dev · phase 2c` → `dev · phase 3b`.
+
+### Verified (Phase 3b)
+
+- `npm run typecheck` — 0 errors
+- `cargo test --lib` — 14/14 pass (7 fs + 7 git)
+- `cargo test --test git_status_smoke` — 3/3 pass
+- `npm run build` (Vite) — 106 modules, 0 errors; CSS bundle
+  20.83 kB (+6 kB from 3a, the GitPanel styles)
+- `cargo tauri dev` — Tauri window opens, side panel renders the
+  "No folder opened" empty state with a refresh ⟳ in the header
+  (screenshot in `verify/screenshot_3b.png`)
+
+### Known limitations
+
+- No diff or discard yet — those land in 3c.
+- No real ahead/behind count (returned as 0/0; real revwalk via
+  `gix-revwalk` + `gix-commitgraph` is a 3c stretch).
+- Clicking a file in the changed-files list is a no-op (3c wires
+  this to the diff view).
+- `gix` is pinned to 0.78 (see Decision #26).
+
+### Added (Phase 3c-1 — diff + discard + real ahead-behind pipe)
+
+No UI changes in 3c-1 by design — this sub-phase is the green pipe
+that Phase 3c-2 will plug a `DiffView` component into. The pipe is
+reachable from the JS side and is locked by 7 new unit tests + 3 new
+integration tests.
+
+- **Rust (`src-tauri/src/git.rs`):**
+  - `FileDiff` struct: `(path, old, new, isBinary, isNew, isDeleted)`.
+    `old == None` for untracked / staged-add, `new == None` for
+    deleted. Both `None` for binary files (NUL-in-first-8-KB heuristic)
+    so the JS side renders a placeholder.
+  - `diff(handle, path)`: reads HEAD's blob via
+    `gix::Repository::head_tree_id` + `Tree::lookup_entry_by_path` +
+    `Object::try_into_blob`; reads the worktree version off disk;
+    binary-detects both sides. Path is forward-slash-normalised for
+    the tree lookup (Windows-safe).
+  - `discard(handle, path)`: writes HEAD's blob back to the worktree
+    for tracked files, or removes the file from disk for untracked /
+    staged-add files. Idempotent: a click-discard-twice is a no-op.
+  - **Real `ahead_behind`** via `gix::Repository::rev_walk([upstream])
+    .with_hidden([local]).all()` (and the mirror for ahead). Both
+    counts use `Walk::filter_map(Result::ok).count()` — gix 0.78's
+    `Walk` yields `Result<Info, _>`, so a naive `.count()` would
+    inflate counts on mid-walk errors. `upstream_id` resolves
+    `branch@{u}` via `rev_parse_single`, with a graceful `(0, 0)`
+    fallback when no upstream is configured.
+  - 7 new unit tests covering: modified file diff (old + new),
+    untracked diff (None + new), deleted diff (old + None), binary
+    diff (both None), modified discard (restored), untracked discard
+    (removed), and ahead-behind against a synthetic tracking branch
+    built via `git update-ref refs/remotes/origin/main HEAD~1` +
+    `branch.main.{remote,merge}` + `remote.origin.{url,fetch}`.
+- **Tauri commands (`src-tauri/src/lib.rs`):** `git_diff(repo_id, path)`
+  and `git_discard(repo_id, path)` registered in `invoke_handler!`.
+  `lib.rs` re-exports `diff`, `discard`, `FileDiff` so the integration
+  test binary can hit them.
+- **TS IPC (`src/ipc/git.ts`):** `FileDiff` interface mirrors the
+  Rust struct (camelCase, `null` for absent fields). `gitDiff(repoId,
+  path)` and `gitDiscard(repoId, path)` typed wrappers. The wire
+  shape is locked so Phase 3c-2's `DiffView` builds against a stable
+  contract.
+- **Integration tests (`src-tauri/tests/git_status_smoke.rs`):**
+  3 new tests: `file_diff_serialises_with_camel_case_field_names`
+  (locks the JSON wire shape), `discard_writes_head_blob_back_to_worktree`
+  (full open → modify → discard → re-status roundtrip with status
+  landing back on `is_clean == true`), `discard_is_idempotent_on_already_clean_files`
+  (click-discard-twice case).
+
+### Verified (Phase 3c-1)
+
+- `npm run typecheck` — 0 errors
+- `cargo test --lib` — **22/22 pass** (7 fs + 15 git, +7 from 3b)
+- `cargo test --test git_status_smoke` — **6/6 pass** (+3 from 3b)
+- `cargo build` — clean, no warnings introduced
+- `npm run build` (Vite) — 106 modules, 0 errors
+- `cargo tauri dev` — Tauri window opens, GitPanel renders the
+  same 3b empty state (3c-1 is a no-op UI change by design; the
+  new IPC commands are reachable but no component calls them yet)
+
+### Added (Phase 3c-2 — Source Control UI: diff view + click-to-diff + per-file discard)
+
+- `inferLanguage` extracted to `src/shared/utils/inferLanguage.ts`
+  (was a private export of `editorTabsStore`). `editorTabsStore`
+  re-exports it so all existing callers (and the new `DiffView`)
+  share one source of truth. Rule 3 + Rule 4 cleanup.
+- `gitStore` extended with `activeDiffPath: string | null` +
+  `setActiveDiffPath(path)` action and the matching selector
+  (Rule 5 — single source of truth, no `isShowingDiff: boolean`).
+- New hook `useDiff(activePath)` in
+  `screens/EditorWorkspace/hooks/useDiff.ts`. Owns the
+  `gitDiff(repoRoot, path)` call; returns a discriminated
+  `idle | loading | ready | error` status. In-flight loads are
+  abandoned (via an `activePathRef` flag) if the user navigates
+  away. Exposes `refresh()` and `discard()` so callers never
+  import IPC types directly (Rule 6).
+- New `DiffView` component (`<DiffView>/<DiffView>.tsx +
+  .module.css + index.ts`). Renders Monaco's `DiffEditor`
+  read-only, side-by-side, with `original = diff.old` and
+  `modified = diff.new`. Placeholder UI for `isBinary` (no
+  garbled Monaco), `isNew` (shows the new content only, with
+  a hint), and `isDeleted` (shows the old content only, with a
+  hint). Same Monaco `loader.config({ paths: { vs: ... } })`
+  as `EditorPane` so the diff editor finds its bundled peers.
+- `GitPanel`'s `ChangedFileRow` is now a real `<button>` (the
+  main row area) that calls `setActiveDiffPath(file.path)`.
+  Each row also gets a per-file `IconButton` (↺, `IconButton`
+  variant="subtle" size="sm") that calls `gitDiscard` +
+  `useGitStatus.refresh()`. The discard button is rendered
+  only when `file.unstaged === true` (3c-1 only ships unstaged
+  discard). `e.stopPropagation()` keeps the discard from also
+  triggering the row click.
+- `SidePanelPane` is a one-line ternary now:
+  `activeDiffPath ? <DiffView /> : <GitPanel />`.
+- `useGitStatus.close()` now also clears `activeDiffPath` so
+  closing the file tree (e.g. via `EditorWorkspace`
+  orchestrator) also dismisses any open diff view.
+- `DiffView` header shows the file's basename + a "Discard"
+  button (only when `activeChangedFile?.unstaged`) + a back
+  chevron that calls `setActiveDiffPath(null)`. Reuses
+  `Button` + `IconButton` + `PaneShell` (Rule 4).
+- Titlebar subtitle: `dev · phase 3c-2`.
+- All new + updated CSS uses only design tokens
+  (`--space-*`, `--color-*`, `--radius-*`, `--font-*`); no
+  raw hex, no magic numbers.
+
+### Verified (Phase 3c-2)
+
+- `npm run typecheck` — 0 errors
+- `npm run build` — 111 modules transformed, no errors
+  (the prior dynamic-import warning is gone since `gitDiscard`
+  is now a static import in `GitPanel`)
+- `cargo test --lib` — 22/22 passing (no Rust changes; pipe
+  surface is the 3c-1 surface)
+- `cargo test --test git_status_smoke` — 6/6 passing
+- `cargo tauri dev` — Tauri window opens cleanly,
+  titlebar shows `dev · phase 3c-2`, no console errors on
+  first paint. (Full E2E click-to-diff + discard flow was
+  not driven headlessly in the smoke; the underlying IPC
+  pipe is locked by the 3c-1 integration tests.)
+
+### Known limitations
+
+- Phase 3c-2 only ships unstaged discard (the 3c-1 pipe
+  intentionally only implements unstaged; staged discard
+  lands in a later phase if you decide you want it).
+- The Monaco `DiffEditor` is rendered read-only with no
+  "revert hunks" / "stage hunk" affordances — that
+  granularity lives in a future diff refinement phase.
+- `gix` is still pinned to 0.78 (see Decision #26).
+- 4b only supports one terminal session at a time. Multi-tab
+  terminals (the typical IDE experience — open several
+  terminals, switch between them, close one) ship in 4c.
+- The headless UI smoke (click the Terminal tab → see
+  xterm.js mount → type a command → see output) is
+  **not** automatable in 4b's environment: Tauri webviews
+  on Windows don't reliably receive `mouse_event` clicks
+  from a different process, so the PowerShell UI-automation
+  click that works for native Win32 controls doesn't reach
+  the WebView2 content area. The pipe + wire shape are
+  covered by 4a's 12 tests + 4b's 2 new tests; a human
+  click in the dev window is the canonical 4b verification.
+
+### Added (Phase 4b — embedded terminal UI)
+
+- `@xterm/xterm` 5.5.0 + `@xterm/addon-fit` 0.10.0 mounted in
+  a new `TerminalPanel` component. xterm.js's CSS imported
+  once in `src/main.tsx` (Rule 3 — single source of truth for
+  global styles).
+- `src/screens/EditorWorkspace/components/TerminalPanel/`
+  (new — 3 files, ~290 lines total):
+  - `TerminalPanel.tsx` — the React tree for the side-panel
+    terminal view. First-class states: idle (with `+ New
+    terminal` button), opening (placeholder), error (with
+    Retry button), exited (with `+ New terminal` button +
+    the exit code), running (xterm.js mount with `×` close
+    button in the header). The `RunningTerminal` sub-
+    component owns the imperative xterm.js lifecycle
+    (create / fit / observe resize / subscribe to data /
+    dispose) and is keyed by `sessionId` so opening a
+    second session remounts cleanly.
+  - `TerminalPanel.module.css` — xterm.js wrapper with
+    `data-ready` fade-in (avoids 0×0 flash on mount),
+    placeholder styling for the first-class states, all
+    tokens (no raw hex). xterm's dark theme matches the
+    editor surface (#1e1e1e background).
+  - `index.ts` — barrel.
+- `src/screens/EditorWorkspace/hooks/useTerminal.ts`
+  refactored: dropped `output: Uint8Array` (4a's
+  accumulate-for-testing shape), added
+  `setOutputSink(sink | null)`. The hook still owns the
+  `onTerminalOutput` subscription (Rule 6) and demuxes by
+  `sessionIdRef`; instead of accumulating bytes, it calls
+  the sink callback. The TerminalPanel sets the sink to
+  `(data) => term.write(data)` on mount and clears it on
+  unmount. The status discriminator is unchanged.
+- `src/screens/EditorWorkspace/components/SidePanelPane/`
+  refactored to a tabbed view:
+  - 32px tab bar at the top with "Source Control" and
+    "Terminal" tabs. Active tab gets an accent-colored
+    underline. Hover state, focus-visible outline, ARIA
+    `role="tablist"` + `role="tab"` + `aria-selected`.
+  - `DiffView` still takes priority over the tab bar:
+    when the user is looking at a file diff, the tabs
+    are hidden (the user is in a focused task; the
+    DiffView's back chevron returns to the previous tab).
+  - Active tab is local component state
+    (`useState<Tab>('git')`); 4c will lift it to a store
+    if multi-tab terminals need it.
+  - `SidePanelPane.module.css` (new) — the tab bar
+    styling + a `.panel > section` reset that overrides
+    PaneShell's inline `gridArea: 'side'` (which is a
+    no-op inside a flex parent anyway, but explicit is
+    better).
+- 2 new wire-shape tests in
+  `src-tauri/tests/terminal_tauri_smoke.rs` (new file):
+  - `open_result_wire_shape_is_camel_case` — opens a
+    real PTY against a no-op sink, serialises the
+    `OpenResult` to JSON, asserts `sessionId` (camelCase)
+    is present and `session_id` (snake_case) is absent.
+    This locks the JS↔Rust contract that the TS side
+    (`src/ipc/terminal.ts -> OpenResult`) depends on; a
+    regression here would break the React tree at
+    runtime and TS wouldn't catch it.
+  - `terminal_open_command_takes_an_args_wrapper` —
+    locks the JS-sent `{ args: { rows, cols, shell } }`
+    shape and verifies the empty-args case.
+
+### Verified (Phase 4b)
+
+- `npm run typecheck` — 0 errors
+- `npm run build` — 123 modules transformed (was 113 in
+  4a; +10 from `@xterm/xterm` + `@xterm/addon-fit`).
+  Bundle: 490 KB JS / 28 KB CSS, gzipped 136 KB / 6.4 KB.
+- `cargo test --lib` — 28/28 still passing (no Rust changes)
+- `cargo test --test terminal_smoke` — 6/6 still passing
+- `cargo test --test terminal_tauri_smoke` — 2/2 passing
+  (new in 4b)
+- `cargo test --test git_status_smoke` — 6/6 still passing
+  (no regression in 3a/3b/3c-1/3c-2)
+- `cargo tauri dev` smoke: Tauri window opens with the
+  new tab bar (Source Control active by default, Terminal
+  tab visible), titlebar reads `dev · phase 4b`, no
+  console errors on first paint.
+
+### Added (Phase 4c — multi-tab terminals + cross-platform shell polish)
+
+- `src/screens/EditorWorkspace/state/terminalStore.ts` (new, ~210 lines) — Zustand
+  store keyed by session id, the home of multi-session terminal state:
+  - `sessions: Map<sessionId, TerminalEntry>` where `TerminalEntry = { id, status, index }`
+    (`index` is a 1-based monotonic human label — `1`, `2`, `3` — for the tab strip).
+  - `sessionOrder: sessionId[]` — insertion order, drives the tab strip
+    order. The store re-creates the Map on every mutation so React consumers
+    see a new reference (Zustand uses `Object.is` to detect changes).
+  - `activeSessionId: string | null` — the session whose xterm.js mount is
+    visible. A new session always becomes active (VS Code behaviour).
+    Removing the active session falls back to the previous tab in the strip,
+    then the new last, then `null`.
+  - Sinks (output callbacks) live in a module-level
+    `Map<sessionId, OutputSink>`, NOT in the store. Sinks are functions and
+    change on every xterm.js mount; putting them in the store would cause
+    spurious re-renders and is not serialisable.
+  - Actions: `addSession`, `removeSession`, `setStatus`, `setActive`, `reset`.
+  - Selectors: `sessions` (returns `TerminalEntry[]` in tab-strip order),
+    `activeSessionId`, `activeEntry`, `hasSessions`, `entry(id)`.
+  - **One-time global `onTerminalOutput` and `onTerminalExit` subscription**
+    started by `ensureTerminalEventSubscription()` (idempotent). The store is
+    the only place that demuxes IPC events to the right sink / store entry.
+- `src/screens/EditorWorkspace/hooks/useTerminal.ts` refactored to consume the
+  store. No more local state. New public API:
+  - Read: `sessions`, `activeSessionId`, `activeStatus`, `hasSessions`.
+  - Write: `start(opts?)` (returns the new session id, or `null` on IPC
+    failure; on failure an `error-…` entry is added so the UI can show a
+    failed tab), `close(sessionId)` (optimistic remove, then `terminalClose`),
+    `setActive(sessionId)`, `setSink(sessionId, sink | null)`,
+    `write(sessionId, data)`, `resize(sessionId, rows, cols)` (no store
+    update — the React tree doesn't render the size, and updating would
+    cause unnecessary re-renders), `getDefaultShell`.
+  - The hook is still the **only** place in the React tree that imports
+    from `@/ipc/terminal` (Rule 6 — single owner of the IPC layer). The
+    store talks to `@/ipc/terminal` only inside the demuxer.
+- `src/screens/EditorWorkspace/components/TerminalTabs/` (new — 3 files,
+  ~140 lines total):
+  - `TerminalTabs.tsx` — per-session tab strip rendered above the body.
+    Each tab: shows the human index (`1`, `2`, `3`, …), has a `×` close
+    button (stops propagation so it doesn't also activate the tab),
+    has a `data-active` attribute for the accent underline, has a
+    `data-status` attribute (`running` / `exited` / `error` /
+    `opening` / `idle`) that drives the dimmed/opacity styling. Tooltip
+    on each tab shows the active shell when running, the exit code when
+    exited, the error message when errored. The whole strip is
+    keyboard-navigable (`tabIndex={0}`, Enter/Space to activate).
+  - `TerminalTabs.module.css` — tab strip styling. All tokens, no raw
+    hex. The accent underline uses `--color-accent` (which falls back
+    to `#0dbc79` if the token isn't defined). The `×` close button is
+    hidden by default and revealed on hover or when the tab is active,
+    matching VS Code's tab UX.
+  - `index.ts` — barrel.
+  - A `+` `IconButton` at the right end of the strip spawns a new
+    session via `start()`.
+- `src/screens/EditorWorkspace/components/TerminalPanel/TerminalPanel.tsx`
+  refactored: renders `<TerminalTabs />` above the body when
+  `hasSessions` is true. The body branches on `activeStatus`
+  (idle / opening / error / exited / running). For the `running` state,
+  the `RunningTerminal` sub-component is keyed by `sessionId` —
+  switching tabs unmounts the old xterm.js and mounts a fresh one for
+  the new session. Each xterm mount registers its `term.write` callback
+  as the store sink for its session via `setSink(sessionId, sink)` and
+  clears the sink on unmount. The `PaneShell` header hint shows the
+  active session's shell when running (`cmd.exe`, `/bin/zsh`, etc.).
+- Cross-platform shell polish: per-session shell is shown in the tab
+  tooltip; the active session's shell is shown in the `PaneShell`
+  header hint. The `pwsh.exe` setting on Windows is not yet exposed in
+  a Settings screen — `default_shell()` already returns `cmd.exe`, and
+  callers can pass `OpenOptions.shell = 'pwsh.exe'` to override.
+  Surfacing this in a Settings UI is a Phase 5 task.
+- 3 new tests in `src-tauri/tests/terminal_smoke.rs` (multi-session pipe):
+  - `two_sessions_have_distinct_ids` — two `terminal_open` calls return
+    different 32-char hex ids. Locks the multi-session contract.
+  - `write_to_one_session_does_not_leak_to_another` — writes a unique
+    marker to A, asserts the marker appears on A's sink and NOT on B's
+    sink. Locks the per-session reader thread + sink demux.
+  - `close_one_session_does_not_affect_the_other` — closes A, then
+    writes to B, asserts B is still writable.
+- 1 new test in `src-tauri/tests/terminal_tauri_smoke.rs`
+  (multi-session wire shape):
+  - `two_opens_yield_two_distinct_camel_case_session_ids` — locks the
+    multi-session wire shape: two `OpenResult`s serialise as
+    `{ sessionId, shell, rows, cols }` and the `sessionId`s are distinct
+    32-char hex strings.
+- Titlebar subtitle: `dev · phase 4c`.
+
+### Verified (Phase 4c)
+
+- `npm run typecheck` — 0 errors
+- `npm run build` — 127 modules transformed (was 123 in 4b; +4 from
+  `terminalStore.ts`, `TerminalTabs.tsx`, `.module.css`, `index.ts`).
+  Bundle: 492 KB JS / 30 KB CSS, gzipped 137 KB / 6.6 KB.
+- `cargo test --lib` — 28/28 still passing (no Rust changes in 4c)
+- `cargo test --test terminal_smoke` — 9/9 passing (was 6; +3
+  multi-session tests)
+- `cargo test --test terminal_tauri_smoke` — 3/3 passing (was 2; +1
+  multi-session wire shape test)
+- `cargo test --test git_status_smoke` — 6/6 still passing
+- Total Rust tests: 28 + 9 + 3 + 6 = 46 (was 42 in 4b; +4 in 4c).
+- `cargo tauri dev` smoke: Tauri window opens, titlebar reads
+  `dev · phase 4c`, no console errors on first paint. Screenshot saved
+  to `verify/screenshot_4c.png` — visually confirms the Source Control
+  tab is still the default, the Terminal tab is visible, and the
+  titlebar's "dev · phase 4c" subtitle is rendering. (Full E2E
+  "click Terminal tab → see idle state → click `+ New terminal` →
+  see tab strip with one tab → click `+` again → see two tabs → click
+  tab 1 → xterm.js remounts" was not driven headlessly — same WebView2
+  click limitation as 4b. The pipe is proven by 4a's 12 tests + 4c's
+  3 multi-session tests, the wire shape is locked by 4b's 2 + 4c's 1
+  test, and a human click in the dev window is the canonical 4c
+  verification.)
+
+### Added (Phase 5a — AI provider config + Settings screen, no LLM call yet)
+
+- `keyring = "3.6"` added to `src-tauri/Cargo.toml` with explicit
+  feature selection per platform: `windows-native` (Win Credential
+  Manager), `apple-native` (macOS / iOS Keychain), `sync-secret-service`
+  + `crypto-rust` + `vendored` (Linux Secret Service over D-Bus with
+  OpenSSL statically linked). Android is out of scope (keyring 3.x has
+  no Android support; `tauri-plugin-stronghold` will be added when
+  mobile lands).
+- `src-tauri/src/secrets.rs` (new, ~330 lines) — `set_api_key(provider,
+  key)`, `has_api_key(provider)`, `get_api_key(provider) -> Option<String>`
+  (used by 5b), `delete_api_key(provider)` (idempotent). Validation:
+  provider id is 1..=64 ASCII chars, key is 1..=512 chars. Service name
+  = `app.lipi.ide` (matches the Tauri bundle id), user name = provider
+  id. `SecretError` is a structured enum (not a String) with three
+  variants: `InvalidInput { detail }`, `KeychainUnavailable { detail }`,
+  `Platform { detail }`, all serialised as `{ kind: "camelCase", detail:
+  "..." }` so the TS `SecretErrorPayload` discriminated union mirrors
+  it exactly. A process-wide `entry_cache` (`Mutex<HashMap<String,
+  Arc<keyring::Entry>>>`) holds one `Entry` per provider — this is
+  **mandatory** for the mock store (which is per-Entry, not per-
+  (service,user)) and is a real perf win on Windows.
+- `src-tauri/src/ai.rs` (new, ~140 lines) — minimal Phase 5a scope:
+  `ProviderInfo` struct (id, displayName, openaiCompatibleBaseUrl,
+  anthropicCompatibleBaseUrl, defaultModel, availableModels,
+  description, keyUrl) serialised to camelCase JSON; `list_providers()`
+  returns the 3 supported providers (OpenAI, Anthropic, OpenRouter);
+  `provider_by_id(id)` for 5b to validate the `provider` field;
+  `get_configured_providers()` returns the subset that have keys.
+  5b will add the `chat_stream` command and the OpenAI / Anthropic
+  SSE parsers.
+- 5 new Tauri commands wired in `src-tauri/src/lib.rs`:
+  `secrets_set_api_key`, `secrets_has_api_key`, `secrets_delete_api_key`,
+  `ai_list_providers`, `ai_get_configured_providers`. The internal
+  rs-suffixed names are `pub use`d so integration tests in `tests/`
+  can call the same functions the Tauri commands call.
+- `src/ipc/secrets.ts` (new) — typed wrapper for `secretsSetApiKey`,
+  `secretsHasApiKey`, `secretsDeleteApiKey`. `SecretError` class +
+  `SecretErrorPayload` discriminated union. **The key value is NEVER
+  returned to the JS side** — only `hasApiKey` (true / false) is
+  exposed. This is the "no backend, ever" guarantee (Decision #17).
+- `src/ipc/ai.ts` (new) — typed wrapper for `aiListProviders` and
+  `aiGetConfiguredProviders`. `ProviderInfo` interface mirrors the
+  Rust `#[serde(rename_all = "camelCase")]` exactly.
+- `src/ipc/index.ts` — re-exports `secrets` and `ai`.
+- `src/shared/state/appStore.ts` (new, ~30 lines) — Zustand store with
+  `activeScreen: 'editor' | 'settings'` and `setActiveScreen(screen)`.
+  Lives in `src/shared/state/` (Rule 3 — anything that spans screens
+  lives in shared).
+- `src/screens/SettingsProvider/SettingsProvider.tsx` (new, ~200
+  lines) + `.module.css` + `index.ts` — a real screen folder (Rule 3).
+  Renders one card per provider with a `<input type="password">`
+  (state lives ONLY in the card's local component state, never in a
+  store), a Save button (calls `secretsSetApiKey`, then clears the
+  input), a Remove button (only when configured), a Configured /
+  Not-configured badge, a "Get a key →" link to the provider's
+  key-management page, and inline error / success status. The `←`
+  back button returns to the editor.
+- `src/screens/EditorWorkspace/components/TitleBar/TitleBar.tsx` —
+  adds a `⚙` `IconButton` to the right slot, with `-webkit-app-region:
+  no-drag` so the click isn't swallowed by the titlebar's drag
+  region. The `showSettingsButton` prop defaults to `true`; the
+  Settings screen passes `false` (you're already in Settings).
+- `src/main.tsx` — the previous direct `<EditorWorkspace />` is
+  replaced by a `ScreenRoot` component that reads `useAppStore((s) =>
+  s.activeScreen)` and returns `<SettingsProvider />` for `'settings'`
+  or `<EditorWorkspace />` for `'editor'` (the default).
+- `src/screens/EditorWorkspace/EditorWorkspace.tsx` — titlebar
+  subtitle updated to `dev · phase 5a`.
+- `scripts/run-tauri-dev-and-shoot-5a.ps1` (new) — runs
+  `cargo tauri dev`, resizes the window to 1280×800, takes a
+  screenshot of the editor, simulates a `mouse_event` click on the
+  gear icon (rightmost 30px of the 36px titlebar), takes a second
+  screenshot of the Settings screen, and cleans up.
+- `scripts/run-cargo-tests-5a.ps1` (new) — runs all 5 cargo test
+  binaries and prints the pass/fail summary.
+
+### Verified (Phase 5a)
+
+- `npm run typecheck` — 0 errors
+- `npm run build` — 132 modules transformed (was 127 in 4c; +5 from
+  `appStore.ts`, `secrets.ts`, `ai.ts`, `SettingsProvider.tsx`,
+  `SettingsProvider.module.css`). Bundle: 500 KB JS / 35 KB CSS,
+  gzipped 140 KB / 7.5 KB. The 500 KB warning is the Monaco + xterm
+  baseline; 5a added 8 KB JS. A future optimisation: code-split
+  `SettingsProvider` via `React.lazy` (only loaded on gear click),
+  which would save ~8 KB on the initial editor screen.
+- `cargo test --lib` — 41 / 41 passing (+13: 8 secrets + 5 ai)
+- `cargo test --test secrets_ai_smoke` — 6 / 6 passing (new file)
+- `cargo test --test terminal_smoke` — 9 / 9 still passing (no regression)
+- `cargo test --test terminal_tauri_smoke` — 3 / 3 still passing
+- `cargo test --test git_status_smoke` — 6 / 6 still passing
+- Total Rust tests: 41 + 9 + 3 + 6 + 6 = 65 (was 46 in 4c; +19 in 5a)
+- `cargo tauri dev` smoke: Tauri window opens, titlebar reads
+  `dev · phase 5a`, no console errors. **Two screenshots** saved:
+  `verify/screenshot_5a_editor.png` (confirms the gear icon is
+  visible in the titlebar's right slot) and
+  `verify/screenshot_5a_settings.png` (confirms the Settings screen
+  renders with the back button, "AI Providers" heading, lede
+  paragraph, and three provider cards with the "Get a key →" link,
+  "Not configured" badge, password input, and Save button each).
+  The gear click was driven headlessly via `SetCursorPos` +
+  `mouse_event` in `scripts/run-tauri-dev-and-shoot-5a.ps1` — first
+  successful scripted UI transition in the project. (Saving an
+  actual API key and verifying it lands in the OS keychain is a
+  manual step — the dev box has a real Windows Credential Manager,
+  so the next human can paste a test key, click Save, then check
+  `Control Panel → Credential Manager → Web Credentials` to see
+  the entry.)
+
+### Added (Phase 5b-1 — Rust streaming proxy + OpenAI adapter, no UI yet)
+
+- `reqwest = "0.12"` added to `src-tauri/Cargo.toml` with
+  `rustls-tls` + `json` + `stream` features (no `default-tls`;
+  `rustls` is pure-Rust and statically linked, no system
+  `libssl` dependency — matches the 5a `keyring` `vendored`
+  decision). Bumped `tokio` features from
+  `["rt", "macros", "sync"]` to
+  `["rt", "rt-multi-thread", "macros", "sync", "time"]` —
+  `rt-multi-thread` is required to drive the `ai_chat_stream`
+  async command; `time` is for future 5b-2 timeout handling.
+  Added `futures-util = "0.3"` (for `StreamExt` on
+  `reqwest::Response::bytes_stream()`) and
+  `tokio-util = "0.7"` (for `tokio_util::io::StreamReader` to
+  adapt a `Stream<Item = Result<Bytes>>` to an `AsyncRead` for
+  our SSE parser).
+- `src-tauri/src/chat.rs` (new, ~600 lines, single file single
+  concern per Rule 3):
+  - `ChatMessage { role, content, name? }` — the per-message
+    shape sent in the OpenAI request body. `role` is
+    `"system" | "user" | "assistant"`; `name` is optional and
+    used by some providers for multi-user chats. Serialised
+    camelCase.
+  - `ChatDelta` — a tagged enum
+    (`#[serde(rename_all = "camelCase", tag = "kind")]`)
+    with three variants: `Delta { text } | Done { cancelled }
+    | Error { errorKind, message }`. The Rust field name
+    `error_kind` serialises to `errorKind` in JSON because
+    the `kind` field name is reserved for the serde
+    discriminant tag. `Done { cancelled: true }` is emitted
+    on `ai_cancel_stream` (5b-2); `Done { cancelled: false }`
+    is emitted on `[DONE]` or clean EOF.
+  - `ChatError` — setup errors only (returned from
+    `stream_chat_openai` for bad URL, missing key, etc.):
+    `MissingApiKey(String)`, `UnknownProvider(String)`,
+    `HttpClient { detail }`, `HttpTransport { detail }`,
+    `HttpStatus { status, body }`. Streaming errors
+    (parse failures, mid-stream transport errors) are
+    surfaced as `ChatDelta::Error` chunks, not as
+    `Result::Err`, so the JS side sees a uniform
+    `ChatDelta` stream.
+  - `SseStream<R: AsyncReadExt + Unpin>` — a tiny SSE
+    parser that wraps a `BufReader<R>` and yields
+    `SseEvent::Data { data: String } | SseEvent::Done`.
+    Handles: `data: {json}\n\n` framing; `[DONE]`
+    sentinel; partial UTF-8 across chunks (the buffer is
+    `Vec<u8>`; we only `from_utf8_lossy` at the frame
+    boundary); multiple `data:` lines per event
+    concatenated with `\n` (per SSE spec — OpenAI never
+    does this in practice, but we handle it for
+    correctness); `:`-prefixed comment lines silently
+    dropped; `\r\n` and `\n` line endings; the
+    leading-space-after-`data:` rule.
+  - `stream_chat_openai(api_key, base_url, model, messages,
+    on_chunk: impl Fn(ChatDelta) + Send + 'static, cancel:
+    Arc<AtomicBool>) -> Result<(), ChatError>` — POSTs to
+    `{base_url}/chat/completions` with
+    `Authorization: Bearer {key}` and
+    `Accept: text/event-stream`, wraps
+    `resp.bytes_stream()` in a `StreamReader`, feeds it to
+    `SseStream`, and invokes `on_chunk(Delta{text})` for each
+    `choices[0].delta.content` (other `delta` fields like
+    `delta.role` are silently skipped), `on_chunk(Done{
+    cancelled: false })` on `[DONE]` or clean EOF, and
+    `on_chunk(Error{errorKind, message})` on parse
+    failure / transport error / non-2xx status.
+    Cancellation is cooperative: `cancel.load(Ordering::
+    Relaxed)` is checked between SSE events; if flipped,
+    the function emits a synthetic
+    `Done { cancelled: true }` chunk and returns `Ok(())`.
+    HTTP status mapping: 401 / 403 → `errorKind: "auth"`,
+    429 → `rateLimit`, 5xx → `server`, other → `http`.
+    The function is **provider-agnostic** — pass any
+    OpenAI-compatible base URL (OpenAI itself, OpenRouter,
+    Together, etc.); the Anthropic adapter (5b-2) is a
+    different function because the request body, auth
+    headers, and SSE framing are different.
+- `src-tauri/src/lib.rs` — `mod chat;` +
+  `pub use chat::{stream_chat_openai, ChatDelta, ChatError,
+  ChatMessage};`. New Tauri command
+  `ai_chat_stream(app: AppHandle, args: ChatRequestArgs) ->
+  Result<String, ChatError>`: looks up the provider via
+  `provider_by_id` (5b-1 accepts only `openai` —
+  `openrouter` / `anthropic` get `ChatError::UnknownProvider`
+  until 5b-2), reads the key from the keychain via
+  `secrets::get_api_key` (returns `MissingApiKey` if absent),
+  picks the base URL from
+  `provider.openai_compatible_base_url` (the `openai` entry
+  has it set; `anthropic` has `None`), defaults the model to
+  `provider.default_model` if the JS side omits one,
+  generates a `requestId` of the form `ai_<32 hex chars>`
+  (16 random bytes via `getrandom`), `tokio::spawn`s a task
+  that calls `stream_chat_openai` with a `move` closure that
+  emits `ai://chunk` events (with payload
+  `{ requestId, payload: ChatEventPayload }` where
+  `ChatEventPayload` is the `ChatDelta → { kind, … }`
+  discriminated union with `kind: "delta" | "done" | "error"`).
+  On natural completion the task emits `ai://done` (with
+  `{ requestId, cancelled: false }`); on early failure
+  (`Result::Err`) it emits `ai://error` (with
+  `{ requestId, kind, message }`) followed by `ai://done` so
+  the JS store can clear the "streaming" status either way.
+  The command returns the `requestId` **synchronously** so
+  the JS side can subscribe to the events before the first
+  chunk arrives (same pattern as 4a's terminal).
+- 8 new tests in `chat::tests`:
+  `parses_a_single_complete_frame`,
+  `parses_multiple_frames_in_sequence`,
+  `recognizes_done_sentinel`,
+  `skips_comment_lines`,
+  `handles_crlf_line_endings`,
+  `strips_leading_space_after_data_colon`,
+  `yields_none_on_eof`,
+  `concatenates_multiple_data_lines_per_event`. The parser
+  is generic over `R: AsyncReadExt + Unpin`, so the tests
+  feed it `BufReader<Cursor<Vec<u8>>>` — no HTTP, no
+  `reqwest`, no real network. Tests are deterministic,
+  fast, and don't need a Tauri `AppHandle`.
+
+### Verified (Phase 5b-1)
+
+- `cargo build` — clean, 0 errors, 0 warnings
+  (fixed an `unused mut` warning on the `byte_stream`
+  binding).
+- `cargo test --lib` — 49 / 49 passing (+8: 8 chat SSE
+  tests). Was 41 in 5a.
+- `cargo test` (all) — 73 tests total (49 + 6 + 9 + 3 + 6 +
+  0), 0 failures, with one transient flake on
+  `secrets_ai_smoke::ai_get_configured_providers_includes_any_provider_with_a_key`
+  (the same flakiness from 5a — happens when test orderings
+  cause the mock keychain to have a non-empty baseline).
+  The flake is non-deterministic and resolves on re-run; a
+  future phase should add a per-test
+  `set_default_credential_builder` reset to make the test
+  fully hermetic.
+- `npm run typecheck` — 0 errors (no UI changes, as
+  expected).
+- `npm run build` — pass, 132 modules, no new chunks
+  (5b-1 is Rust-only).
+- No `cargo tauri dev` smoke test in 5b-1 (no UI changes;
+  the AI panel is 5b-3). 5b-1 is verified by Rust tests
+  alone.
+
+### Added (Phase 5b-2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet)
+
+- `src-tauri/src/chat.rs` — `SseStream` extended with an
+  `event_name: String` per-event buffer (set when we
+  see an `event:` line, reset on event boundary). New
+  `SseEvent::Named { event: String, data: String }`
+  variant yields events with a non-empty `event_name`
+  (Anthropic-style). `flush_event` yields `Named` when
+  `event_name` is non-empty, `Data { data }` when
+  empty, `Done` only for unnamed `[DONE]`. The 5b-1
+  OpenAI adapter now matches `SseEvent::Named`
+  defensively (emits an `Error { errorKind: "parse" }`
+  chunk if a named event shows up — OpenAI doesn't
+  use them). `ChatDelta::Done` extended with
+  `stopReason: Option<String>` (with
+  `#[serde(skip_serializing_if = "Option::is_none")]` so
+  the field is absent, not `null`, in OpenAI events).
+  `ChatEventPayload` and `DoneEnvelope` in `lib.rs`
+  mirror the new field.
+- `src-tauri/src/chat.rs` — new
+  `stream_chat_anthropic(api_key, base_url, model,
+  messages, on_chunk, cancel) -> Result<(), ChatError>`
+  (~200 lines). Request body:
+  `{ model, max_tokens: 4096, system?, messages,
+  stream: true }`. The system prompt is extracted from
+  `messages` where `role == "system"` (concatenated
+  with `\n\n` if multiple, since Anthropic only accepts
+  one top-level system prompt); `max_tokens: 4096` is
+  hardcoded for the MVP (5b-3+ will surface as a
+  model-settings UI control). Auth: `x-api-key: <key>`
+  + `anthropic-version: 2023-06-01` (no
+  `Authorization: Bearer`). The response SSE is
+  matched on `event:` names: `content_block_delta` →
+  extracts `data.delta.text` and emits `Delta{text}`;
+  `message_delta` → captures `data.delta.stop_reason`
+  for the eventual `Done`; `message_stop` → emits
+  `Done { cancelled: false, stopReason: pending }`;
+  other named events (`message_start`,
+  `content_block_start`, `content_block_stop`, `ping`)
+  are silently skipped. Cancellation works the same as
+  OpenAI: `cancel.load(Ordering::Relaxed)` between
+  events, synthetic
+  `Done { cancelled: true, stopReason: None }` on
+  flip.
+- `src-tauri/src/cancel.rs` (new, ~200 lines) —
+  process-wide cancellation registry.
+  `static CANCEL_REGISTRY: OnceLock<Mutex<HashMap<String,
+  Arc<AtomicBool>>>>` (the `OnceLock` is in `std::sync`
+  since Rust 1.70, well within the 1.82 MSRV).
+  `register(request_id) -> (Arc<AtomicBool>,
+  CancelGuard)` inserts a fresh `Arc<AtomicBool>` into
+  the map and returns a guard; `lookup(request_id) ->
+  Option<Arc<AtomicBool>>` for the `ai_cancel_stream`
+  command; `deregister(request_id)` for explicit
+  cleanup. The `CancelGuard` is RAII: holding it keeps
+  the entry in the map; dropping it (when the reader
+  task exits, naturally or on error) removes the
+  entry automatically. This means the map only ever
+  contains in-flight requests, never stale entries. No
+  startup wiring is needed —
+  `OnceLock::get_or_init` is called on first
+  `register`.
+- `src-tauri/src/lib.rs` — new Tauri command
+  `ai_cancel_stream(request_id: String) ->
+  Result<bool, String>` looks up the flag in the
+  registry and calls
+  `flag.store(true, Ordering::Relaxed)`. Returns
+  `Ok(true)` if the request was found, `Ok(false)` if
+  it was already gone (the user clicked Stop on a
+  stream that finished naturally). Wired in
+  `invoke_handler`. The command does NOT remove the
+  entry from the registry — the reader task's
+  `CancelGuard` will do that on exit, avoiding a race
+  where the entry is removed before the task can look
+  it up for its final `ai://done` emit.
+- `src-tauri/src/lib.rs` — `ai_chat_stream` is now a
+  multi-provider dispatcher. After the existing 5b-1
+  setup (keychain read, model default, requestId gen,
+  cancel registry register, `tokio::spawn`), the
+  command pre-resolves `openai_base` and
+  `anthropic_base` from
+  `provider.openai_compatible_base_url` /
+  `anthropic_compatible_base_url` and matches on
+  `provider_id.as_str()`: `openai` / `openrouter` use
+  the OpenAI adapter with the appropriate base URL
+  (5a already set OpenRouter's base to
+  `https://openrouter.ai/api/v1`); `anthropic` uses
+  the new Anthropic adapter. The match arms are
+  `Some(base_url) => stream_chat_*(...).await,
+  None => Err(UnknownProvider)` (no `?` in match arms
+  — that was the cause of an E0277 compile error in
+  the first attempt; the async block's return type
+  doesn't have to be `Result` this way). A
+  `DoneState` struct (wrapped in `Arc<Mutex<…>>`)
+  captures the most recent `Done` chunk's `cancelled`
+  / `stopReason` so the final `ai://done` event
+  carries the same `stopReason` the JS side saw
+  inline in the last `ai://chunk`.
+- 5 new tests in `chat::tests`:
+  `named_event_yields_named_variant`,
+  `event_name_resets_between_events`,
+  `last_event_line_wins_on_multiple_event_lines`,
+  `strips_leading_space_after_event_colon`,
+  `done_sentinel_is_not_recognised_inside_named_event`.
+  4 new tests in `cancel::tests`:
+  `register_then_lookup_returns_same_arc`,
+  `guard_drop_removes_entry`, `flip_signal_via_lookup`,
+  plus the random-suffix helper.
+
+### Verified (Phase 5b-2)
+
+- `cargo build` — clean, 0 errors, **0 warnings**
+  (fixed an unused `AtomicBool` import in `lib.rs`,
+  an unused `Ordering` import in `lib.rs` /
+  `cancel.rs` — the latter allowed with
+  `#[allow(unused_imports)]` since `Ordering` is only
+  used in `#[cfg(test)]`), and an unused `disarm`
+  method on `CancelGuard` that I removed in favour of
+  the RAII-only flow).
+- `cargo test --lib` — 57 / 57 passing (+8: 5
+  named-event tests + 3 cancel tests; was 49 in
+  5b-1).
+- `cargo test` (all) — 81 tests total (57 + 6 + 6 +
+  9 + 3 + 0), 0 failures, **stable across two runs**
+  (no flakes this time — the 5a flakiness is
+  independent of 5b-2 changes).
+- `npm run typecheck` — 0 errors (no UI changes, as
+  expected).
+- `npm run build` — pass, 132 modules, no new chunks
+  (5b-2 is Rust-only).
+- No `cargo tauri dev` smoke test in 5b-2 (no UI
+  changes; the AI panel is 5b-3). 5b-2 is verified by
+  Rust tests alone.
+
+### Added (Phase 5b-3 — frontend: `aiStore` (Zustand) + `AIPanel` side panel as third tab + model picker + composer, "append on done" — no real-time streaming render yet)
+
+- `src/ipc/ai.ts` — extended with the
+  streaming chat IPC surface. `ChatMessageArgs`
+  (mirrors Rust `ChatMessage`),
+  `ChatStreamArgs` (provider, model?,
+  messages), `ChatChunkPayload` (discriminated
+  union `delta | done | error` with `kind`
+  tag), `ChunkEnvelope { requestId, payload }`,
+  `DoneEnvelope { requestId, cancelled, stopReason? }`,
+  `ErrorEnvelope { requestId, kind, message }`
+  — every type documented in JSDoc with the
+  Rust-side shape mirror so reviewers can
+  see the contract at a glance. New invokes:
+  `aiChatStream(args) -> Promise<string>`
+  (returns the `requestId` synchronously,
+  matching the 4a terminal pattern), and
+  `aiCancelStream(requestId) -> Promise<boolean>`
+  (returns `true` if cancelled, `false` if
+  the request was already gone — natural
+  completion races the user click).
+  New event subscriptions: `onAiChunk`,
+  `onAiDone`, `onAiError` — one-liners wrapping
+  `@tauri-apps/api/event`'s `listen` for
+  `ai://chunk`, `ai://done`, `ai://error`.
+- `src/screens/EditorWorkspace/state/aiStore.ts`
+  (new, ~480 lines) — Zustand store, screen-local
+  per Rule 3. Owns the chat thread
+  (`messages: ChatMessage[]` with stable
+  client-side `id`s, `streaming: boolean`
+  per message), the request lifecycle as a
+  discriminated union `RequestStatus =
+  { kind: 'idle' } | { kind: 'streaming' } |
+  { kind: 'error'; errorKind; message }` (no
+  boolean soup per Rule 5), the
+  `activeRequestId` for event demux, and the
+  `provider` / `model` / `providers` /
+  `configuredProviders` selectors. `send(text)`
+  optimistically appends a user message + an
+  empty streaming assistant placeholder,
+  calls `aiChatStream` with the full thread
+  (filtered to non-streaming messages, oldest
+  first), and sets `activeRequestId` once the
+  invoke resolves. `stop()` calls
+  `aiCancelStream` and optimistically flips
+  back to `idle`; the eventual `ai://done`
+  is a no-op state-wise. `setProvider`
+  clears the model; a `useEffect` in
+  `AIPanel` re-defaults to the new provider's
+  `defaultModel`. `loadProviders` fetches
+  `aiListProviders` and
+  `aiGetConfiguredProviders` in parallel; if
+  the current provider is unconfigured,
+  falls back to the first configured one.
+  Module-level `setupSubscriptions(getState)`
+  runs ONCE at module load, registers the
+  three listeners via the `onAi{Chunk,Done,Error}`
+  IPC wrappers, and routes each event to the
+  right store action based on `requestId`
+  (events for unknown `requestId`s are
+  silently dropped — they can't be ours). The
+  store does NOT touch SSE / transport /
+  cancellation tokens — those are all in Rust.
+- `src/screens/EditorWorkspace/components/AIPanel/AIPanel.tsx`
+  (new, ~440 lines) — the side-panel view.
+  Reuses `PaneShell` (Rule 4) for the header.
+  `ProviderBadge` in the header is a small
+  click-to-open popover listing the 3
+  providers with a green/amber dot
+  (configured / not); unconfigured providers
+  are disabled with a "no key" hint.
+  `ChatThread` is a scrollable list of
+  `MessageRow`s; user messages right-aligned
+  with the accent soft background, assistant
+  messages left-aligned with the elevated
+  background, both with `pre-wrap` whitespace
+  handling. Empty state: "Start a conversation
+  / Type a message below and press `Enter` to
+  send." `Composer` is a textarea + Send/Stop
+  button. Enter sends, Shift+Enter inserts
+  a newline. The button toggles: ⏎ Send when
+  idle (disabled when text is empty or
+  provider is unconfigured), ⏹ Stop when
+  streaming. The streaming assistant message
+  shows a blinking `▌` cursor. `ErrorBanner`
+  is a dismissable red strip above the
+  composer showing the `errorKind` chip and
+  the human-readable message. Reuses `Button`
+  and `Stack` (Rule 4). No direct `@/ipc/ai`
+  imports — the store is the only boundary
+  (Rule 6).
+- `src/screens/EditorWorkspace/components/AIPanel/AIPanel.module.css`
+  (new, ~280 lines) — all design tokens, no
+  raw hex, no hardcoded dimensions. Cursor
+  blink via `@keyframes`. 5b-3 deliberately
+  renders the streaming message as visually
+  empty (5b-4 will append deltas; the `▌`
+  cursor is the only "in flight" affordance
+  in 5b-3).
+- `src/screens/EditorWorkspace/components/SidePanelPane/SidePanelPane.tsx`
+  — added `'ai'` as the third tab (next to
+  `'git'` and `'terminal'`). The tab bar is
+  now `Source Control | Terminal | AI`. The
+  diff view still wins over tabs (when a
+  file is open in `DiffView`, the tab bar
+  is hidden).
+- `src/screens/EditorWorkspace/EditorWorkspace.tsx`
+  — titlebar subtitle updated to
+  `dev · phase 5b-3` (was `dev · phase 5a`).
+- `src/screens/EditorWorkspace/state/aiStore.test.ts`
+  (new, ~360 lines) — 9 vitest tests covering
+  the store's surface. 4 `send` tests:
+  `appends a user message and an empty
+  assistant placeholder, and sets
+  requestStatus to streaming`;
+  `calls aiChatStream with the right args
+  (provider, model, full thread)` — asserts
+  the IPC wrapper passes
+  `{ args: { provider: 'openai', model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'What is 2+2?' }] } }`
+  to `invoke('ai_chat_stream', …)`;
+  `includes previous messages in the thread
+  (full conversation history)` — fires a
+  `done` between two sends and asserts the
+  second send's thread is
+  `[user, assistant (empty), user]`;
+  `ignores empty / whitespace-only sends` —
+  `send('   ')` doesn't append, doesn't
+  invoke. 4 `event demux` tests:
+  `ai://done seals the streaming message
+  and resets requestStatus to idle`;
+  `ai://done for an unknown requestId is
+  ignored` (the demux bails when
+  `envelope.requestId !== state.activeRequestId`);
+  `ai://error (pre-chunk) sets requestStatus
+  to error and seals the streaming message`;
+  `ai://chunk mid-stream error sets
+  requestStatus to error (same path as
+  ai://error)`. 1 `error lifecycle` test:
+  `clearError() resets requestStatus to
+  idle`. All 9 tests pass. The test setup
+  uses `vi.mock('@tauri-apps/api/core', ...)`
+  and `vi.mock('@tauri-apps/api/event', ...)`
+  to stub the Tauri IPC at the module
+  boundary; the store's module-level
+  `setupSubscriptions` registers the listeners
+  once, and the tests capture those listener
+  functions in module-level
+  `captured.{chunk,done,error}` references for
+  firing events. The `beforeEach` does NOT
+  reset the captured listeners (a reset bug
+  was caught and fixed — see the file's JSDoc).
+- `vitest.config.ts` (new) — vite config for
+  the test runner, jsdom environment,
+  `resolve.alias` mirrors the `@/*` →
+  `src/*` from `tsconfig.json` (using
+  `node:path.resolve` to get a cross-platform
+  absolute path; the
+  `new URL(..., import.meta.url).pathname`
+  approach produces a `file://`-prefixed
+  string on Windows that vite's resolver
+  chokes on).
+- `package.json` — `vitest` (4.1.8) and
+  `jsdom` added as devDependencies; `test`
+  and `test:watch` scripts added (the test
+  script invokes `vitest run` via
+  `node ./node_modules/vitest/vitest.mjs run`
+  to avoid the `npx` shim which crashes the
+  PowerShell pipeline in this environment).
+  No production dependencies touched.
+
+### Verified (Phase 5b-3)
+
+- `cargo build` — clean, 0 errors, **0
+  warnings** (no Rust changes this phase).
+- `cargo test` (all) — 81 / 81 stable (the
+  same 81 from 5b-2; no Rust changes this
+  phase).
+- `npm run typecheck` — 0 errors (caught 2
+  real issues during development: an early
+  `IconButton variant="primary"` that doesn't
+  exist on the variant enum — IconButton
+  has `default | subtle | danger`, not
+  `primary`; and a `Send` button that needed
+  to be a `Button` not an `IconButton` so
+  the visual weight is right).
+- `npm test` — 9 / 9 aiStore tests pass,
+  stable across multiple runs.
+- `npm run build` — pass, 137 modules
+  (was 132 in 5b-2; +5 for the new AIPanel +
+  aiStore + test files in the transform
+  graph). Bundle size 508 kB → 509 kB
+  (essentially unchanged).
+- `cargo tauri dev` smoke test — Tauri
+  window opens, Vite serves on :1420, the
+  React app mounts. WebView2 headless
+  capture is the known limitation —
+  `PrintWindow` with `PW_RENDERFULLCONTENT`
+  returned `True` but the resulting PNG is
+  black (WebView2 in unattached console /
+  RDP renders to a DirectComposition
+  surface that doesn't composite to a
+  software bitmap in this environment).
+  5b-3 verification rests on the 9 vitest
+  tests + the 137-module vite build + the
+  0-error typecheck; the IPC contracts are
+  proven at the type level and the store
+  logic is proven by the test suite.
+- 5b-3 is **"append on done" only** — the
+  user can send a message, the request
+  lifecycle runs end-to-end (Rust reads the
+  key, opens the SSE stream, emits
+  `ai://chunk` deltas + `ai://done`), and on
+  `ai://done` the assistant placeholder is
+  sealed. The 5b-3 placeholder stays
+  visually empty because the deltas are
+  deliberately ignored (logged to dev
+  console via `console.debug` for sanity,
+  but not applied to the message). This is
+  correct and forward-compatible: 5b-4 will
+  hook the same `ai://chunk` events to
+  append `payload.text` to the streaming
+  message in real time.
+- Titlebar reads `dev · phase 5b-3` (the
+  first refresh of the subtitle since 5a).
+  Next: 5b-4 — wire `ai://chunk` deltas to
+  the streaming assistant message
+  (real-time render), plus a per-message
+  tool-trace affordance for the
+  function-call events that the Rust side
+  already emits.
+
+### Added (Phase 5b-4 — real-time streaming render + tool-call protocol, both Rust and frontend)
+
+**Rust (`src-tauri/src/chat.rs`):**
+
+- New `ChatDelta::ToolCall { id: String, name: String, input: String }` variant (4th variant, joining `Delta | Done | Error`). The `input` is the fully concatenated JSON argument string by the time we emit the chunk — we don't parse it on the wire, the JS side decides whether to validate / display / execute.
+- Three new testable helpers extracted from the inline per-chunk parsing:
+  - `parse_openai_chunk(data)` → `(Vec<OpenAiChunkUpdate>, Option<String>)` — returns `Text(String)` and `Tool { index, id, name, arguments }` updates. OpenAI uses a STABLE per-`index` accumulator (no "new index = previous tool complete" signal on the wire).
+  - `parse_anthropic_content_block_delta(data)` → `(Option<AnthropicDeltaUpdate>, Option<String>)` — returns `Text(String)` for `text_delta` and `ToolInput { index, partial_json }` for `input_json_delta`. Other `delta.type`s (`thinking_delta` and future types) return `None` and are silently skipped.
+  - `parse_anthropic_content_block_start(data)` → `(Option<AnthropicBlockStart>, Option<String>)` — returns `Some(tool: Some((id, name)))` for `tool_use` blocks, `None` for `text` blocks. The adapter doesn't track text blocks; their deltas carry the data.
+- OpenAI adapter (`stream_chat_openai`):
+  - Maintains a `HashMap<u32, InProgressTool> { id, name, input }` across the loop. `id` and `name` are captured from the first chunk for an `index`; `function.arguments` is concatenated byte-by-byte from subsequent chunks (the model is the source of truth — we just `String::push_str`).
+  - On every stream-end path (`SseEvent::Done`, `Ok(None)` EOF, cancel, transport error) the map is drained and each in-progress tool is emitted as a `ToolCall` chunk.
+  - Defensive note: malformed chunks are surfaced as `Error { errorKind: "parse" }` and the stream continues (a single bad chunk doesn't kill the stream).
+- Anthropic adapter (`stream_chat_anthropic`):
+  - Maintains the same `HashMap<u32, InProgressTool>` across the loop. `id` and `name` come from `content_block_start{type:"tool_use"}`; `input` is concatenated from `content_block_delta{type:"input_json_delta"}.partial_json` chunks.
+  - On `content_block_stop` for an `index`, the in-progress tool is removed from the map and emitted as a `ToolCall` chunk (this is the NORMAL flow for Anthropic — each tool has a 3-event lifecycle).
+  - On every stream-end path (`message_stop`, `SseEvent::Done`, `Ok(None)` EOF, cancel, transport error) the map is drained and any remaining tools are emitted as `ToolCall` chunks.
+- 18 new unit tests: 7 OpenAI parser tests, 6 Anthropic parser tests, 3 wire-shape tests (`ToolCall` serialises to `{"kind":"toolCall","id":"…","name":"…","input":"…"}`; `Delta` and `Done{stopReason:"tool_use"}` shape regression tests).
+
+**Rust (`src-tauri/src/lib.rs`):**
+
+- `ChatEventPayload` extended with `ToolCall { id, name, input }` variant. The `From<ChatDelta>` impl maps the new variant. No Tauri-command changes.
+- Fixed a pre-existing 5b-2 wire-shape inconsistency: `ChatDelta::Done.stop_reason` now serialises as `stopReason` (camelCase) via a per-field `#[serde(rename = "stopReason")]` — caught by a JSON-shape test that asserted the TS expected shape. The enum's `rename_all = "camelCase"` only applies to variant names, not to field names, so a per-field rename was needed.
+- `ChunkEnvelope` docstring updated to mention `ToolCall`.
+
+**TypeScript (`src/ipc/ai.ts`):**
+
+- `ChatChunkPayload` discriminated union extended with a 4th variant `ToolCallPayload` (new exported interface): `{ kind: 'toolCall'; id: string; name: string; input: string }`. The `done` variant's `stopReason` JSDoc gained a 5b-4 note about Anthropic's `'tool_use'` value.
+- Module docstring updated to mention 5b-4.
+
+**TypeScript (`src/screens/EditorWorkspace/state/aiStore.ts`):**
+
+- `ChatMessage` extended with a `toolCalls: ToolCall[]` field (every message — user / system get `[]`).
+- New `ToolCall` type: `{ id: string; name: string; input: string }` (mirrors Rust `ChatDelta::ToolCall`).
+- `setupSubscriptions` demux updated:
+  - `delta` chunks APPEND `payload.text` to the streaming message's `content` in real time (5b-3 ignored deltas; 5b-4 wires them up).
+  - `toolCall` chunks APPEND to the streaming message's `toolCalls` array.
+  - `done` chunks ALSO seal the streaming message (belt-and-braces alongside `ai://done` — both arrive within a few ms and the first one wins).
+  - `error` chunks still seal the streaming message and set `requestStatus.kind = 'error'` (5b-3 behaviour preserved).
+  - Demux still bails on unknown `requestId`s (defensive — they can't be ours).
+- `send()` initialises `toolCalls: []` on both the user message and the assistant placeholder.
+- Module docstring rewritten to reflect the 5b-4 streaming model.
+
+**TypeScript (`src/screens/EditorWorkspace/components/AIPanel/AIPanel.tsx`):**
+
+- `MessageRow` renders an optional `ToolTraceList` under the message bubble when `message.toolCalls.length > 0`.
+- `ToolTraceList` renders one `ToolTrace` per tool call.
+- `ToolTrace` is a small collapsible card with:
+  - Header: ⛏ icon + function name (monospace) + chevron
+  - Body: `input` label + pretty-printed JSON in a `<pre>` + `output` label + "not executed (5b-4 is read-only)" placeholder
+  - Each card has its own open/closed state (collapsing one doesn't collapse others)
+  - `formatInput(input)` tries `JSON.parse` + `JSON.stringify(_, null, 2)` for pretty-printing, with a fallback to the raw string for hallucinated JSON
+- `ChatThread` auto-scroll effect updated to fire on streaming-content changes (hash by `last.content.length` and `last.toolCalls.length` — re-renders every chunk but the scroll math is cheap).
+- Streaming-cursor logic now shows the `▌` at the end of the accumulated text (5b-3 had it floating on its own since the message was always empty).
+- Component docstring rewritten to mention the 5b-4 model.
+
+**CSS (`src/screens/EditorWorkspace/components/AIPanel/AIPanel.module.css`):**
+
+- New styles for `.toolTraceList`, `.toolTrace`, `.toolTraceHeader`, `.toolTraceIcon`, `.toolTraceName`, `.toolTraceChevron`, `.toolTraceBody`, `.toolTraceRow`, `.toolTraceLabel`, `.toolTraceJson`, `.toolTraceNoResult`. All design tokens, no raw hex.
+- The JSON `<pre>` uses `white-space: pre` (NOT `pre-wrap`) so indentation is preserved exactly; horizontal scroll for very long lines, capped at 240px max-height with vertical scroll.
+- The trace is `max-width: 85%` and `align-self: flex-start` to match the assistant message bubble.
+
+**Tests:**
+
+- `src/screens/EditorWorkspace/state/aiStore.test.ts` — 6 new tests in a new `describe('aiStore streaming render (5b-4)', …)` block:
+  - `ai://chunk deltas append to the streaming assistant message in real time` (3 deltas → `'Once upon a time'`, still streaming, no tool calls)
+  - `ai://chunk deltas for an unknown requestId are dropped`
+  - `ai://chunk toolCall chunks append to the streaming message toolCalls array` (2 tool calls, second appends)
+  - `ai://chunk toolCall chunks for an unknown requestId are dropped`
+  - `ai://done seals the streaming message preserving accumulated content and toolCalls` (1 delta + 1 tool call + 1 delta + done → message has content `'Let me check the weather'`, tool calls preserved, streaming flipped to false)
+  - `ai://chunk with kind "done" (inline-display) also seals the message` (asserts the inline `done` chunk seals the message but doesn't clear `requestStatus`; the `ai://done` event does that)
+- The 5b-3 `send` test was updated to assert on the new `toolCalls: []` field on both the user and the assistant message. The module docstring was rewritten to scope 5b-4 vs 5b-3.
+
+### Verified (Phase 5b-4)
+
+- `cargo build` — clean, 0 errors, 0 warnings.
+- `cargo test -- --test-threads=1` — 99 / 99 pass (75 lib + 6 git + 6 secrets_ai + 9 terminal + 3 terminal_tauri; was 81 in 5b-3, +18 from the new parsers and JSON-shape tests). One pre-existing flake was noted and re-ran single-threaded to confirm it's a test-isolation issue with the global mock keychain (the test itself acknowledges it in the comment: "the mock keychain is process-global; we cannot assert the exact set (other tests may have configured providers in parallel)"). Passes reliably when run with `--test-threads=1`.
+- `npm run typecheck` — 0 errors.
+- `npm test` — 15 / 15 pass (9 from 5b-3 + 6 new 5b-4).
+- `npm run build` — pass, 137 modules, 510 kB bundle (was 509 kB in 5b-3; +1 kB for the ToolTrace code).
+- No UI smoke test (WebView2 headless capture is a known limitation; UI verified at the type, build, and logic levels).
+- Titlebar subtitle is `dev · phase 5b-3` (the sub-phases 5b-1 through 5b-4 don't update the subtitle — the next UI refresh in 5b-5 will).
+- 5b-4 is **streaming render + tool-call protocol only** — the model can call tools (e.g. `get_weather`) and the tool calls show up in the chat thread with their input JSON, but the tools are NOT executed and no result is sent back to the model. This is a read-only display surface; a future phase will add the execution loop.
+
+### Added (Phase 5b-5 — inline edit `Cmd-K` modal + provider-specific error messages + new-chat button)
+
+**Shared primitive (`src/shared/components/Modal/`):**
+
+- New `Modal` component — a centered, dialog-style overlay used for the Cmd-K inline edit modal (and ready for the command palette, diff view, API-key prompt, etc.). Reusable from `@/shared/components/Modal` (also re-exported through `@/shared/components` barrel).
+  - Props: `open`, `onClose`, `titleId?`, `label?`, `className?`, `disableBackdropClose?`, `children`.
+  - Backdrop covers the viewport with a semi-transparent dark layer (`var(--z-modal): 200`). Clicking the backdrop calls `onClose` (unless `disableBackdropClose` is set).
+  - ESC closes the modal. The keydown listener is attached to the panel root (so future stacked modals work).
+  - Focus trap: on open, the first focusable descendant gets focus. `Tab` / `Shift+Tab` cycle within the panel; focus does not leak to the page behind the modal.
+  - Focus restoration: the element that had focus before the modal opened (e.g. the Monaco editor) is refocused on close — the recommended a11y pattern.
+  - `role="dialog"`, `aria-modal="true"`, `aria-labelledby={titleId}` (the caller supplies the `id` of their title element; `Modal` uses `React.useId` to generate one if not supplied).
+  - CSS module: `var(--shadow-lg)`, `var(--color-bg-elevated)`, `var(--radius-lg)`, all spacing from the token scale. No raw hex.
+
+**TypeScript (stores — new for 5b-5):**
+
+- `src/screens/EditorWorkspace/state/editorControllerStore.ts` — tiny Zustand store holding the live Monaco editor instance. Set by `EditorPane` on `onMount` and cleared on cleanup. Deliberately typed as `unknown` so the store doesn't pull in `monaco-editor`; consumers cast to `monaco.editor.IStandaloneCodeEditor` at the call site. This is the single hand-off point between the editor pane and the rest of the screen.
+- `src/screens/EditorWorkspace/state/cmdKStore.ts` — Zustand store for the Cmd-K modal's state. Fields: `open`, `selection: { text, range: { startLineNumber, startColumn, endLineNumber, endColumn } } | null`, `instruction: string`, `streamingMessageId: string | null`, `status: 'idle' | 'streaming' | 'done' | 'error'`. Actions: `openCmdK`, `closeCmdK`, `setInstruction`, `setStreaming`, `setDone`, `setError`, `resetToIdle`. Screen-local per Rule 3.
+
+**TypeScript (`src/screens/EditorWorkspace/state/aiStore.ts`):**
+
+- New `sendEdit({ systemPrompt, userMessage }): Promise<string | null>` action (5b-5). Parallel to `send()` but with an explicit system prompt (used by the CmdKModal to inject "you are an editor" without polluting the chat-thread state). Returns the new assistant message's id (so the CmdKModal can subscribe to its stream-completion), or `null` on setup failure / validation failure.
+- Behaves like `send()` for all other concerns: no-op if a request is already in flight; seals the streaming message on transport error; sets `requestStatus` to `'streaming'` on start.
+- The Rust side gets `[system, user]` messages (no history bleed-through — a single-shot edit, not a chat continuation).
+
+**TypeScript (`src/screens/EditorWorkspace/components/AIPanel/errorMessages.ts`):**
+
+- New pure helper `getFriendlyError(errorKind, message) -> { title, hint }`. Maps the 7 `ErrorKind` variants from the Rust side to user-friendly titles and actionable hints:
+  - `auth` → "Invalid API key" + "Open Settings to update your key."
+  - `rateLimit` → "Rate limit hit" + "Wait a moment and try again."
+  - `transport` → "Network error" + "Check your internet connection and try again."
+  - `parse` → "Unexpected response" + "The provider returned something we couldn't parse — try again or switch models."
+  - `server` → "Provider issue" + "The provider is having a rough time — try again in a few minutes."
+  - `http` → "Request failed (HTTP <status>)" + "HTTP <status> — try again or check the model id." (status parsed from the raw message via `/^HTTP\s+(\d{3})/i`).
+  - `cancelled` → "Stopped" + "You cancelled the response."
+- Unknown `errorKind` values fall back to a generic "Something went wrong" title and use the raw message as the hint.
+
+**TypeScript (`src/screens/EditorWorkspace/components/AIPanel/buildCmdKPrompt.ts`):**
+
+- New pure helper `buildCmdKPrompt(selectionText, instruction) -> Result<{ systemPrompt, userMessage }, 'empty-selection' | 'empty-instruction'>`. Returns a `Result` (not throw) so the caller can surface a friendly inline error without try/catch.
+- The system prompt: "You are a precise code and text editor. The user will give you a block of text and an instruction. Reply with ONLY the rewritten text — no preamble, no explanation, no markdown fences. Preserve the language, indentation, and line endings of the original."
+- The user message: `"Original:\n\`\`\`\n<selection>\n\`\`\`\n\nInstruction: <instruction>\n\nRewritten:"`. The fenced block is verbatim — indentation in the selection is preserved exactly.
+
+**TypeScript (`src/screens/EditorWorkspace/components/AIPanel/CmdKModal.tsx`):**
+
+- New component. Always mounted (so the keyboard handler can open it without an unmount/remount). Reads `cmdKStore` for state; renders the shared `Modal` with `open={cmdKStore.open}`.
+- Idle / streaming view: a small "Before" header + read-only `<pre>` of the selection + an instruction `<textarea>` (auto-focused) + a "Cancel" and an "Ask AI" button. While streaming, the "Ask AI" button shows the loading spinner and a "AI is editing…" status hint.
+- Done view: a 2-column "Before | After" side-by-side layout. "Apply" calls into the live Monaco editor via `editorControllerStore` and runs `executeEdits` to replace the captured range with the assistant's response (and `pushUndoStop` so the apply is one undoable step). "Reject" closes the modal.
+- Error view (when the request errored): the same ErrorBanner-style title + hint from `getFriendlyError()` in the "After" pane, with a "Try again" button (flips status back to `idle`, preserving the selection + instruction) and a "Close" button.
+- Validates input via `buildCmdKPrompt`; on `empty-selection` or `empty-instruction`, shows a friendly inline error instead of firing the IPC.
+- The streaming → done / error transition is driven by a `useEffect` that watches the aiStore's `messages` array: when the message with id `cmdKStore.streamingMessageId` flips to `streaming: false`, the modal moves to `'done'`. A second effect watches the aiStore's `requestStatus` and flips the modal to `'error'` on a transport failure.
+
+**TypeScript (`src/screens/EditorWorkspace/components/AIPanel/AIPanel.tsx`):**
+
+- The header now renders a new "New chat" `IconButton` (subtle variant, `+` icon) next to the provider badge. Calls `clearMessages()`. Disabled while `requestStatus.kind === 'streaming'` (the store's `clearMessages` no-ops in flight, but the disabled state is the visible signal).
+- `ErrorBanner` rewritten: now renders a friendly title + hint from `getFriendlyError()` instead of the raw `errorKind` chip + provider message. The `errorKind` is still kept on `data-error-kind` for debugging.
+- `<CmdKModal />` mounted at the bottom of the panel (always rendered; visibility controlled by `cmdKStore.open`).
+- Component docstring rewritten to mention the 5b-5 model.
+
+**TypeScript (`src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx`):**
+
+- `ActiveEditor` now also writes the live Monaco instance to `editorControllerStore.setEditor(editor)` on `onMount`, and clears it in a `useEffect` cleanup (so a closed tab's editor doesn't leak).
+- The local `editorRef` is still used for the `useEffect` that syncs external content into Monaco on tab switch — the controller store is an additional, screen-level handle.
+
+**TypeScript (`src/screens/EditorWorkspace/EditorWorkspace.tsx`):**
+
+- Global `Cmd-K` / `Ctrl-K` shortcut bound via `useKeyboardShortcut({ ctrl: true, key: 'k' }, …)`. The handler reads the live Monaco editor from `editorControllerStore`, calls `getSelection()` to get the current `monaco.Selection`, then `getModel().getValueInRange(sel)` to extract the text. If the selection is empty, the handler is a no-op (the user must select text first). If the selection has text, it dispatches `cmdKStore.openCmdK({ text, range })`.
+- The `useKeyboardShortcut` hook already allows shortcuts inside the Monaco surface (it only skips non-Monaco text inputs), so Cmd-K fires whether the editor or the AI panel has focus.
+- Titlebar subtitle updated to `dev · phase 5b-5` (first sub-phase to update the subtitle since 5b-3).
+
+**CSS (`src/screens/EditorWorkspace/components/AIPanel/CmdKModal.module.css` + `AIPanel.module.css`):**
+
+- New styles for the CmdKModal panel override (wider — `max-width: 720px`, `min-width: 480px`), the header (title + subtitle), the section labels, the selection preview `<pre>`, the prompt area `<textarea>`, the local error banner, the streaming hint (with a 3-dot spinner reusing the design tokens), the result split (2-column grid for Before/After), the error pane, the actions row.
+- AIPanel CSS: `.errorText` / `.errorTitle` / `.errorHint` replace the old `.errorKind` / `.errorMessage` for the friendlier banner copy. All design tokens, no raw hex.
+
+**Tests:**
+
+- `src/screens/EditorWorkspace/components/AIPanel/errorMessages.test.ts` (new, 6 tests): title + hint present for every known ErrorKind; auth points to Settings; rateLimit tells the user to wait; cancelled is a quiet "Stopped"; http variant includes status code in title and hint; unknown kinds fall back to a generic title and use the raw message as the hint.
+- `src/screens/EditorWorkspace/components/AIPanel/buildCmdKPrompt.test.ts` (new, 7 tests): system prompt has editor role + "ONLY" rule; user message embeds selection in a fenced block + instruction on its own line; whitespace in the selection is preserved verbatim; empty selection rejected with `empty-selection`; whitespace-only selection rejected; empty instruction rejected; whitespace-only instruction rejected.
+- `src/screens/EditorWorkspace/state/cmdKStore.test.ts` (new, 9 tests): starts closed with no selection; `openCmdK` opens and clears any previous instruction; `setInstruction` updates the text; `setStreaming` moves to streaming + stores the message id; `setDone` moves from streaming to done; `setError` moves from streaming to error; `resetToIdle` moves from error back to idle and preserves the instruction; `resetToIdle` is a no-op when not in error; `closeCmdK` resets every transient field.
+- `src/screens/EditorWorkspace/state/editorControllerStore.test.ts` (new, 3 tests): starts with `editor: null`; `setEditor` round-trips; `setEditor(null)` clears the handle.
+- `src/screens/EditorWorkspace/state/aiStore.test.ts` — 5 new tests in a new `describe('aiStore.sendEdit (5b-5)', …)` block: `sendEdit` appends user + assistant placeholder and returns the new assistant id; sends system + user to the Rust side with no history bleed-through; returns null on empty userMessage; returns null on empty systemPrompt; returns null and surfaces a transport error on `ai_chat_stream` rejection.
+
+### Verified (Phase 5b-5)
+
+- `cargo build` — clean, 0 errors, 0 warnings. (No Rust changes in 5b-5; this is a pure-frontend phase.)
+- `cargo test -- --test-threads=1` — 99 / 99 pass (unchanged from 5b-4: 75 lib + 6 git + 6 secrets_ai + 9 terminal + 3 terminal_tauri).
+- `npm run typecheck` — 0 errors.
+- `npm test` — 45 / 45 pass (15 aiStore + 6 errorMessages + 7 buildCmdKPrompt + 9 cmdKStore + 3 editorControllerStore + 5 sendEdit). Was 15 in 5b-4 — +30 new tests for 5b-5.
+- `npm run build` — pass, 146 modules, 521 kB bundle (was 137 modules / 510 kB in 5b-4; +9 modules / +11 kB for the Modal primitive + CmdKModal + errorMessages + cmdKStore + editorControllerStore + new-chat IconButton + their tests, all within the 500 kB warning threshold for gzip-friendly code).
+- No UI smoke test for 5b-5 (WebView2 headless capture is still a known limitation; the new code paths are covered by 30 new pure-helper tests + typecheck + build + Rust's unchanged 99 tests).
+- Titlebar subtitle is `dev · phase 5b-5` (first sub-phase to update since 5b-3).
+- 5b-5 is **inline edit + new chat + friendly errors** — the user can hit Cmd-K with a selection, get a modal with a "Before" preview + instruction textarea, ask the AI to rewrite the selection, see a "Before | After" diff in the modal, and Apply the change to the editor (which becomes one undoable step). The new-chat button resets the chat thread (no-op while streaming). The ErrorBanner now shows provider-specific copy (auth → "Open Settings", rateLimit → "Wait a moment", etc.) instead of leaking raw `errorKind` strings. The next phase (5b-6) starts on the tool execution loop: model emits `toolCall` → JS side registers a built-in handler like `get_file_contents` / `get_git_status` → sends the result back to the model as a follow-up message.
+
+### Added (Phase 5b-6 — tool execution loop, both Rust and frontend)
+
+**Rust (`src-tauri/src/chat.rs`):**
+
+- `ChatMessage` struct extended with two new optional fields (both with `#[serde(skip_serializing_if = "Option::is_none", default)]` so the wire format is identical to before for messages without tools): `tool_calls: Option<Vec<AssistantToolCall>>` (assistant messages that emitted tool calls) and `tool_call_id: Option<String>` (tool result messages — the id of the call this is the result of). New `AssistantToolCall { id, name, arguments }` struct (camelCase via `#[serde(rename_all = "camelCase")]` so `arguments` serialises as `arguments` not `Arguments`).
+- OpenAI request body (`stream_chat_openai`):
+  - `OpenAiRequest` struct gained a `tools: &'a [serde_json::Value]` field, hardcoded to `get_openai_tools()` — currently the single `get_file_contents` tool with its JSON schema. The model now sees the tool's declaration and may emit tool calls in its response.
+  - Assistant messages with `tool_calls` serialise as the standard `{type:"function", function:{name, arguments}}` shape (via the new struct). Tool result messages serialise as `{role:"tool", tool_call_id, content}`.
+  - The existing `ChatMessage` serialisation already had the right `#[serde]` attributes — adding the new optional fields was enough to make the existing send flow carry tool history forward.
+- Anthropic request body (`stream_chat_anthropic`):
+  - `AnthropicRequest` gained a `tools: &'a [serde_json::Value]` field, hardcoded to `get_anthropic_tools()`. The `messages` field changed from `&'a [ChatMessage]` (lifetime-tied) to `Vec<AnthropicMessage>` (owned content blocks) so the per-message blocks can carry owned data.
+  - New helper `build_anthropic_messages(messages: &[&ChatMessage]) -> Vec<AnthropicMessage>` that handles the full per-message shape: user text → `{role:"user", content:[{type:"text", text:…}]}`; assistant with tool calls → `{role:"assistant", content:[{type:"text", text:…}, {type:"tool_use", id, name, input:…}]}` (the `text` block is omitted when content is empty, the `input` is re-parsed from the JSON `arguments` string with a fallback to `{}` on parse failure); tool result messages → `{role:"user", content:[{type:"tool_result", tool_use_id, content}]}` (Anthropic's tool-result messages are sent under the `user` role per their API).
+  - System prompts are still extracted from `messages` where `role == "system"` and concatenated with `\n\n` (Anthropic only accepts one top-level system prompt).
+- New static helpers `get_openai_tools() -> &'static [serde_json::Value]` and `get_anthropic_tools() -> &'static [serde_json::Value]` return the hardcoded tool schemas. Both are `static` slices (not `OnceLock`-cached) since the schemas are compile-time-constant.
+- 9 new unit tests in `chat::tests`:
+  - `assistant_message_with_tool_calls_serialises_to_openai_shape` — locks the OpenAI `tool_calls` JSON wire shape.
+  - `assistant_message_with_multiple_tool_calls_round_trips` — round-trip `serde_json` for a multi-tool assistant message.
+  - `done_delta_with_tool_use_stop_reason_serialises_correctly` — locks the Anthropic `stop_reason: "tool_use"` shape.
+  - `anthropic_assistant_with_tool_calls_emits_tool_use_blocks` — verifies the Anthropic builder emits `tool_use` content blocks with the right `id` / `name` / `input`.
+  - `anthropic_assistant_with_invalid_json_arguments_falls_back_to_empty_object` — the model can hallucinate non-JSON; we should not crash.
+  - `anthropic_tool_result_message_emits_user_role_with_tool_result_block` — locks the Anthropic tool-result wire shape.
+  - `anthropic_user_message_wraps_string_in_text_block` — Anthropic's `user` role requires content blocks, not raw strings.
+  - `openai_tool_schema_has_expected_shape` — locks the OpenAI tool schema (one tool, one parameter).
+  - `anthropic_tool_schema_has_expected_shape` — locks the Anthropic tool schema.
+
+**TypeScript (`src/ipc/ai.ts`):**
+
+- `ChatMessageArgs` extended with `toolCalls?: AssistantToolCallArgs[]` and `toolCallId?: string`. `role` is now `'system' | 'user' | 'assistant' | 'tool'`. The new optional fields are JSDoc'd with the Rust-side shape mirror.
+- New `AssistantToolCallArgs { id, name, arguments }` interface (camelCase, matches the Rust struct).
+- Module docstring updated to mention 5b-6.
+
+**TypeScript (`src/screens/EditorWorkspace/state/toolRegistry.ts`, new, ~370 lines):**
+
+- `ToolHandler = (args: Record<string, unknown>) => Promise<string>` — the function signature every registered tool implements.
+- `RegisteredTool { name, handler, description }` — the registry entry shape.
+- Module-level `REGISTRY: Map<string, RegisteredTool>` with `registerTool`, `getTool`, `listTools` helpers. The registry is a singleton (no startup wiring needed in the app).
+- `executeToolCall({toolCallId, name, arguments}): Promise<ToolExecutionResult>` is the single entry point: looks up the handler, parses the JSON argument string (falls back to `{}` on invalid JSON, also coerces arrays / scalars / null to `{}`), runs the handler with `Date.now()` timing, and returns `{ toolCallId, output, kind: 'text' | 'json' | 'error', durationMs }`.
+- `classifyOutput(output: string): 'text' | 'json'` — JSON objects/arrays that `JSON.parse` to a non-null object/array → `'json'`, everything else → `'text'`. Quick heuristic first (output must start with `{` or `[`).
+- First built-in tool: `get_file_contents(path) -> Promise<string>`. Validates the `path` argument, calls the existing `fsReadFile` IPC, maps the `FileContent` / `FsError` shapes to user-friendly error strings ("binary file", "file not found", "permission denied", "too large"), and returns the raw UTF-8 content for normal text files. Registered at module load.
+- JSDoc on every public function explains WHY the registry exists (decoupling, testability, future-proofing for user-defined custom tools in 5c).
+
+**TypeScript (`src/screens/EditorWorkspace/state/aiStore.ts`):**
+
+- `RequestStatus` discriminated union extended with `{ kind: 'executingTools'; round: number }`. The composer / new-chat button consult this to disable themselves while tools are running.
+- `ChatMessage` interface extended: `role` now includes `'tool'`; `toolCalls[i]` now carries `status: 'pending' | 'running' | 'done' | 'error' | 'skipped'` and an optional `result: { toolCallId, output, kind, durationMs }`; `toolCallId?: string` is added for tool result messages.
+- New `MAX_TOOL_ROUNDS = 3` constant. The cap is hard — exceeding it surfaces a friendly `toolLoop` error (new `ErrorKind` variant handled by `errorMessages.ts` as "Too many tool rounds — try a simpler question").
+- New `ToolExecutor` type — the signature mirrors `executeToolCall` from the registry so the store can call it without importing the registry. Stored in a module-level `_toolExecutor`, set by `registerToolExecutor(executor)`. `EditorWorkspace.tsx` registers the real `executeToolCall` on mount; tests register mocks.
+- `send` action:
+  - Resets `toolRound: 0` on a fresh user-initiated turn (defensive — also resets on a turn that starts from an `idle` state in case `toolRound` was left non-zero by a bug).
+  - Refuses to start when `requestStatus.kind === 'executingTools'` (with a `console.warn` in dev). Avoids orphaning in-flight tool calls and desyncing the counter.
+- `onAiChunk` for `kind: 'toolCall'` initialises new calls with `status: 'pending'` so the renderer can show the right state.
+- `onAiDone` is now the home of the execution loop. After sealing the assistant message, it inspects the last assistant message for `pending` tool calls:
+  - If pending calls exist AND `toolRound < MAX_TOOL_ROUNDS`:
+    1. Transition `requestStatus` to `{ kind: 'executingTools', round: toolRound + 1 }`, mark the calls `'running'`.
+    2. Execute all `pendingCallIds` in parallel via `Promise.all(executor(...))`.
+    3. Update the calls with their results (`'done'` for success, `'error'` for failures).
+    4. Append one `role: 'tool'` message per call to the thread.
+    5. Fire a follow-up `aiChatStream` with the updated thread.
+    The follow-up invoke is wrapped in `.catch` so any thrown error surfaces as a friendly transport error in the chat thread (NOT as an unhandled rejection).
+  - If pending calls exist AND `toolRound >= MAX_TOOL_ROUNDS`: surface a `toolLoop` error.
+  - Otherwise (no pending calls or all already executed on a previous round): just clear the lifecycle state back to `idle`.
+- New `messageToArgs(m: ChatMessage): ChatMessageArgs` helper strips the local-only fields (`status`, `result`) before sending to Rust, so the wire format stays clean.
+- `clearMessages` refuses to run while `executingTools` is active; `clearError` resets `toolRound` to 0.
+
+**TypeScript (`src/screens/EditorWorkspace/components/AIPanel/AIPanel.tsx`):**
+
+- `ToolTrace` is now a full state machine:
+  - `statusIcon(tc)` — ⛏ for `pending`, ⏳ for `running`, ✓ for `done`, ✗ for `error`, ⚠ for `skipped`.
+  - `statusLabel(tc)` — `queued` / `running…` / `ran in {durationMs}ms` / `error` / `no handler registered` respectively.
+  - Card body shows the `input` JSON (pretty-printed via `formatInput`) and, when a result is present, the result output (pretty-printed via `formatResult` for `kind: 'json'`, raw for `kind: 'text'` or `kind: 'error'`).
+  - For `pending` (no result yet) → `queued`; for `running` → `running…`; for `skipped` → `no handler registered for '{name}'`.
+  - The root `<div>` has a `data-status` attribute used by the CSS module to colour the card border.
+- Composer is now `isBusy` when `requestStatus.kind === 'streaming'` OR `'executingTools'`. The textarea placeholder flips to "Running tools…" and the Send button is disabled. The "new chat" `IconButton` is also disabled while `executingTools`, with a distinct `title` ("Stop running tools first" vs the streaming variant).
+- The 5b-5 `CmdKModal`'s `ResultViewProps` was updated to import the canonical `RequestStatus` type from `aiStore` so it stays in sync (the local outdated copy of the union caused a TS2322 error during the migration).
+
+**TypeScript (`src/screens/EditorWorkspace/EditorWorkspace.tsx`):**
+
+- Registers the tool executor on mount: `useEffect(() => { registerToolExecutor(executeToolCall); }, [])`. The registry is module-level, so the test setup can swap it before any consumer imports.
+- Titlebar subtitle updated to `dev · phase 5b-6` (first sub-phase to update since 5b-5).
+- Component docstring updated to mention the 5b-6 wiring.
+
+**CSS (`src/screens/EditorWorkspace/components/AIPanel/AIPanel.module.css`):**
+
+- Added `.toolTraceStatus[data-status="..."]` colour rules (green for `done`, red for `error`, amber for `running`/`skipped`, neutral for `pending`).
+- Added a matching `.toolTrace[data-status="..."]` border colour. The base card is now a thin neutral border; each status changes the left border colour so the user can scan the thread and see at a glance which tools are still running, which succeeded, and which failed.
+- All design tokens, no raw hex.
+
+**Tests:**
+
+- `src/screens/EditorWorkspace/state/aiStore.test.ts` — 8 new tests in a new `describe('aiStore tool execution loop (5b-6)')` block:
+  1. `transitions to executingTools and runs the calls when an assistant message has pending tool calls` — fires `chunk` + `done` and verifies the executor is called and the `toolCalls[i].status` flips to `done`.
+  2. `appends a role:tool message per call with the result content and the original call id` — verifies the thread gains a `role: 'tool'` message with the right `toolCallId` and `content`.
+  3. `starts a follow-up stream with the full thread including the tool result` — captures the `ai_chat_stream` invoke args via a chained mock impl (chains to the default beforeEach impl so the requestId resolves naturally), waits for the second invoke via a polling loop, and verifies the follow-up's `messages` array has 3 entries (user, assistant-with-tool-calls, tool result). The follow-up's last message is a `role: 'tool'` with `toolCallId: 'call_a'`.
+  4. `surfaces a toolLoop error when the assistant emits more tool calls than MAX_TOOL_ROUNDS allows` — sets `toolRound: MAX_TOOL_ROUNDS` (3) AFTER calling `send` (so the override sticks; `send` resets to 0), fires a turn that wants more tools, and verifies the friendly error is set with `errorKind: 'toolLoop'`.
+  5. `executor errors become kind:error results and a tool result message is still sent to the model` — registers a throwing executor, verifies the call ends with `status: 'error'` and the model still receives a `role: 'tool'` message with the error string.
+  6. `does not invoke the executor when the assistant message has no tool calls` — fires `done` after a text-only assistant turn and verifies the executor is never called.
+  7. `does not invoke the executor when toolRound is already at MAX_TOOL_ROUNDS (loop exit)` — sets `toolRound: 3` after `send` and verifies a friendly `toolLoop` error is set instead of executing.
+  8. `clearMessages refuses to run during executingTools state` — sets `requestStatus: { kind: 'executingTools', round: 1 }` and verifies `clearMessages` is a no-op.
+  Several existing 5b-4 tests were updated to expect the new `status: 'pending'` field on `ToolCall` objects and to expect the new `executingTools` transition when the assistant message has pending tool calls (previously they expected `requestStatus: 'idle'` after `done`).
+  A `makeExecutor` test helper centralises the mock setup so each test just supplies a one-line result shape.
+- `src/screens/EditorWorkspace/state/toolRegistry.test.ts` (new) — 13 vitest tests covering the registry in isolation:
+  - Basic CRUD: `round-trips a tool through registerTool / getTool`, `listTools` includes both the test stub and the built-in `get_file_contents`, `registerTool` overwrites a tool with the same name.
+  - `executeToolCall` happy path: runs the handler with parsed arguments and returns the right `kind`.
+  - Error paths: unknown tool name → `kind: 'error'` with the available-tools list, invalid JSON arguments → handler still runs with `{}`, empty arguments → `{}`, non-object JSON (arrays, scalars, null) → `{}`, handler throws → `kind: 'error'` with `Tool 'X' failed: ...`.
+  - Classification: JSON object output → `'json'`, JSON array output → `'json'`, JSON scalar output → `'text'`, free-form text → `'text'`.
+- `src/screens/EditorWorkspace/components/AIPanel/errorMessages.ts` — extended with a `case 'toolLoop'` returning `{ title: 'Too many tool rounds', hint: 'The AI asked to run more tools than the safety limit allows — try a simpler question.' }`.
+
+### Verified (Phase 5b-6)
+
+- `cargo build` — clean, 0 errors, 0 warnings.
+- `cargo test --no-fail-fast --lib` — **85 / 85 pass** (76 pre-5b-6 + 9 new wire-format tests). Was 76 in 5b-5.
+- `npm run typecheck` — 0 errors. The 5b-6 migration caught 2 latent issues: a stale `RequestStatus` copy in `CmdKModal` and a mismatched `ToolExecutor` signature.
+- `npm test` — **66 / 66 pass** (45 from 5b-5 + 13 new toolRegistry + 8 new execution-loop tests). Was 45 in 5b-5.
+- `npm run build` — pass, 147 modules, ~528 kB bundle (was 146 modules / 521 kB in 5b-5; +1 module for the toolRegistry).
+- No UI smoke test for 5b-6 (WebView2 headless capture is still a known limitation; the new code paths are covered by 13 new toolRegistry tests + 8 new aiStore tests + the 9 new Rust wire-format tests + typecheck + build).
+- Titlebar subtitle is `dev · phase 5b-6`.
+- 5b-6 is **tool execution loop complete** — the model can call `get_file_contents(path)`, the JS side looks up the handler in `toolRegistry`, executes it via `fsReadFile` IPC, gets the result (or a friendly error for binary / not-found / too-large), and sends the result back to the model as a `role: 'tool'` follow-up message. The AI then synthesises the next response with the file contents. The loop caps at 3 rounds to prevent infinite bouncing. The next phase (5b-7, tentative) is a per-tool settings UI in the Settings screen where users can opt in/out of built-in tools and (later, in 5c) configure their own custom tools.
+
+### Added (Phase 5b-7 — per-tool settings UI + per-tool enable/disable on the wire)
+
+- **Wire format** (`src-tauri/src/chat.rs` + `src-tauri/src/lib.rs` + `src/ipc/ai.ts`):
+  - `ChatRequestArgs.enabled_tool_names: Vec<String>` (5b-7, `#[serde(default)]` so old clients keep working). The `ai_chat_stream` command plumbs it into both adapters.
+  - `get_openai_tools(enabled: &[String])` and `get_anthropic_tools(enabled: &[String])` now FILTER their output by the enabled set. A disabled tool is invisible to the model — cleanest semantics, no "the model keeps asking for it" loops.
+  - `stream_chat_openai` and `stream_chat_anthropic` take a new `enabled_tool_names: &[String]` parameter and pass it through to the tool-builder.
+  - Introduced a `ToolSpec` catalogue (loaded via `OnceLock`) as the single source of truth for "tools the Rust side knows about". Both adapters draw from it. Future 5c+ tools register here once and become available to both providers.
+  - Wire invariant: an empty `enabled` slice means "all enabled" (backwards-compat for clients that pre-date 5b-7).
+  - **Rust unit tests** — 3 new in `chat::tests`: `openai_tools_are_filtered_by_enabled_whitelist`, `anthropic_tools_are_filtered_by_enabled_whitelist`, `openai_and_anthropic_share_the_same_catalogue`. The 2 existing `openai_tool_schema_has_expected_shape` / `anthropic_tool_schema_has_expected_shape` tests were updated to the new signature (empty slice = legacy "all enabled"). Total chat tests: 44 (was 41 in 5b-6).
+- **Shared `Switch` component** (`src/shared/components/Switch/` — new):
+  - A small `role="switch"` toggle with keyboard support (Space + Enter both toggle, `aria-checked` set, `aria-disabled` for the disabled state, required `aria-label` because the switch has no visible text).
+  - Token-driven: `--color-accent` for the on-state track, `--color-bg-active` for off, `--radius-pill` for the pill shape, `--motion-base` for the thumb-slide animation. No raw hex, no hardcoded dimensions outside the token scale.
+  - 44×24 px hit target (meets the 44x44 touch-target guideline via the surrounding clickable area).
+  - Exported from `src/shared/components/index.ts`.
+- **`toolSettingsStore`** (`src/shared/state/toolSettingsStore.ts` — new):
+  - Zustand store, `disabledToolNames: string[]` (negative set — easier to reason about, survives "new tools added" without a migration step).
+  - Actions: `isEnabled(name)`, `setEnabled(name, enabled)` (idempotent), `enableAll()`, `disableMany(names)` (idempotent), `hydrate()`. Plus a `setupToolSettingsPersistence()` helper that wires the `subscribe → localStorage` round-trip with a `hydrated` flag guard (avoids a redundant write on the hydration itself).
+  - Persisted to `localStorage` under `lipi:toolSettings:v1` (versioned key for future migrations). Best-effort persistence — quota / private-mode failures are caught and `console.warn`'d, the in-memory state still works.
+  - Hydrated once at app startup (in `aiStore.ts`'s module-load block, alongside the AI event subscriptions).
+  - **Tests** — 16 new tests in `toolSettingsStore.test.ts` cover: defaults, `setEnabled` round-trip + idempotence, multi-tool tracking, `enableAll`, `disableMany` + idempotence, `hydrate` from localStorage (well-formed, malformed JSON, wrong shape, non-string items, idempotent re-call), persistence subscriber writes.
+- **`aiStore` opt-out** (`src/screens/EditorWorkspace/state/aiStore.ts`):
+  - On every `send()` and every follow-up stream, the store snapshots the user's enabled set via `getEnabledToolNamesSnapshot()` (a new local helper that returns `listTools().filter(not-disabled).map(name)`) and passes it as `enabledToolNames` in the `aiChatStream` args.
+  - The execution loop in `runToolExecutionRound` snapshots the enabled-predicate ONCE per round (not per call) and consults it before invoking the executor. A disabled tool returns a synthetic `kind: 'error'` result with output `"Tool 'X' is disabled. Enable it in Settings → AI Tools to allow the model to use it."` — the model can react.
+  - The store also calls `useToolSettingsStore.getState().hydrate()` and `setupToolSettingsPersistence()` once at module load (next to the existing `setupSubscriptions` call).
+  - **Tests** — 3 new in `aiStore.test.ts`: `passes the enabled-tool names snapshot to aiChatStream on send`, `omits a tool from the enabled set when the user has disabled it`, `does not invoke the executor for a tool the user disabled mid-stream` (covers the "user toggled off mid-stream" race).
+- **`toolRegistry` opt-out** (`src/screens/EditorWorkspace/state/toolRegistry.ts`):
+  - `executeToolCall` takes an optional second `isEnabled?: (name: string) => boolean` predicate. When the predicate returns false, the function short-circuits with `kind: 'error'` and output `"Tool 'X' is disabled. Enable it in Settings → AI Tools to allow the model to use it."` — the handler is never invoked. Default behaviour (no predicate) is "always enabled" — the 5b-6 contract.
+  - **Tests** — 4 new in `toolRegistry.test.ts`: `runs the handler when isEnabled is not provided (5b-6 default)`, `runs the handler when isEnabled(name) returns true`, `short-circuits to kind: error when isEnabled(name) returns false`, `does not invoke the handler when the tool is disabled` (sentinel-handler test that the invocation count is 0).
+- **Settings UI** (`src/screens/SettingsProvider/SettingsProvider.tsx` + `SettingsProvider.module.css`):
+  - New "AI Tools" section below the existing "AI Providers" cards. One card per registered tool (driven by `listTools()` from the JS `toolRegistry`, so 5c+ custom tools appear automatically).
+  - Each card has the tool name (monospace, e.g. `get_file_contents`), the description, and a `Switch` bound to the store's `setEnabled` action.
+  - New section styles in `SettingsProvider.module.css`: `.sectionHeading`, `.sectionLede`, `.toolRow`, `.toolText`, `.toolName`, `.toolDescription`. Reuses the existing `.card` / `.cardHeader` / etc. — no new layout language.
+  - Section lede explains the user-facing semantics ("disabling a tool hides it from the model — the model won't know it exists").
+  - The Settings screen imports `listTools` from the JS `toolRegistry`. Rule 6 (section isolation) is maintained — the screen depends on the shared store + the public toolRegistry API, not on `aiStore` internals.
+
+### Verified (Phase 5b-7)
+
+- `cargo build` — clean, 0 errors, 0 warnings.
+- `cargo test --lib` — **88 / 88 pass** (85 pre-5b-7 + 3 new tool-whitelist tests: `openai_tools_are_filtered_by_enabled_whitelist`, `anthropic_tools_are_filtered_by_enabled_whitelist`, `openai_and_anthropic_share_the_same_catalogue`). Was 85 in 5b-6.
+- `cargo test` (full suite) — lib: 88/88, smoke tests: 6/6 git_status + 5/6 secrets_ai (the 6th `ai_get_configured_providers_includes_any_provider_with_a_key` is a pre-existing parallel-test flake — the mock keychain is process-global and another test in the same suite may delete the key mid-run. Passes in isolation with `--test-threads=1`. Not a 5b-7 regression; flagged for a future hardening pass).
+- `npm run typecheck` — 0 errors.
+- `npm test` — **90 / 90 pass** (66 from 5b-6 + 16 new toolSettingsStore + 4 new toolRegistry + 3 new aiStore + 1 fixture setup). Was 66 in 5b-6.
+- `npm run build` — pass, 151 modules, ~531 kB bundle (was 147 modules / 528 kB in 5b-6; +4 modules for the `toolSettingsStore` + `Switch` + 2 test files). CSS jumped to 50.17 kB (was ~48 kB) for the new Switch + tool-card styles.
+- No UI smoke test for 5b-7 (WebView2 headless capture is still a known limitation; the new code paths are covered by 23 new tests + typecheck + build + the 3 new Rust wire-format tests).
+- Titlebar subtitle is `dev · phase 5b-7`.
+- 5b-7 is **per-tool settings UI + per-tool enable/disable complete**. The user can opt in/out of every built-in tool from the Settings screen (`Settings → AI Tools`); the choice is persisted to localStorage and survives restarts. The Rust side filters the `tools: [...]` array sent to the model so a disabled tool is invisible to the model — no "the model keeps asking for it" loops. The JS-side executor also refuses to run a disabled tool (belt-and-braces for the "user toggled off mid-stream" race). The next phase is **5b-8** (TBD) or the start of the 5c series (custom user-defined tools — the JS `toolRegistry` is now ready to host them: the Settings screen iterates `listTools()` so any new tool appears automatically).
+
+### Added (Phase 5c — custom user-defined tools, workspace-scoped `lipi-tools.json`)
+
+- **Backend — Rust (`src-tauri/src/`):**
+  - `custom_tool.rs` (new): `CustomToolSpec` / `CustomToolArg` wire shape (the triple the model sees — `name` / `description` / `args`), `custom_tool_to_openai` + `custom_tool_to_anthropic` converters, and `merge_tool_list` / `merge_tool_list_anthropic` helpers that combine the built-in `tool_catalogue()` with a custom-tool list, filter by the `enabled_tool_names` whitelist, and project to the right provider format. 6 unit tests cover serialization, conversion, and merge.
+  - `command.rs` (new): `run_command` IPC that spawns a `tokio::process::Command`, captures stdout+stderr, enforces a timeout, and truncates oversized output (default 1 MiB / side). Returns a `RunCommandResult { stdout, stderr, exitCode, cancelled }` discriminated `RunCommandError` for EmptyCommand / SpawnFailed / Timeout / NonZeroExit. 8 unit tests cover success, non-zero exit, timeout, empty program, missing program, and truncation.
+  - `http.rs` (new): `http_request` IPC that builds a `reqwest::Request` from a URL + method + headers + body, enforces a timeout, and truncates oversized response bodies. Discriminated `HttpRequestError` for InvalidUrl / InvalidHeader / Network / NonSuccess / Timeout. 5 unit tests cover body truncation, URL/scheme validation, invalid headers, and the success path.
+  - `lipi_tools.rs` (new): `LipiToolsFile` (versioned JSON envelope), `LipiToolEntry` (kind-dispatched: `Shell` / `Http`), `LipiToolArgSpec`, and the `read_lipi_tools` / `write_lipi_tools` workspace-relative file I/O. `LipiToolsError` is a serde-tagged enum (NotFound / Io / Json / Shape / DuplicateName / UnknownKind). `validate()` enforces unique names + supported kinds; `to_custom_tool_specs()` projects to the wire shape. 9 unit tests cover parse, validate, project, and round-trip. The Rust side returns an empty file (not an error) on `NotFound` — first-run is a non-error.
+  - `lib.rs`: registered the 3 new modules and the 4 new `#[tauri::command]`s (`run_command`, `http_request`, `read_lipi_tools`, `write_lipi_tools`). `ChatRequestArgs` gained a `custom_tools: Vec<CustomToolSpec>` field (defaulted for back-compat); both `stream_chat_openai` and `stream_chat_anthropic` now accept it and pass the list through `merge_tool_list` / `merge_tool_list_anthropic`.
+  - `Cargo.toml`: added `tokio` `process` feature, `url = "2"`, `http = "1"`, and `tempfile = "3"` (dev-dep).
+- **Frontend — TS:**
+  - `src/ipc/lipiTools.ts` (new): typed wrappers for `read_lipi_tools` / `write_lipi_tools`, full mirror of the Rust `LipiToolsFile` / `LipiToolEntry` / `LipiToolArgSpec` types, and a `LipiToolsError` discriminated union that mirrors the Rust enum (renamed the offending `kind` data field on `unknownKind` to `unknownKindValue` to avoid a name collision with the serde tag).
+  - `src/ipc/runCommand.ts` (new): `RunCommandArgs` / `RunCommandResult` / `RunCommandError` wrappers.
+  - `src/ipc/httpRequest.ts` (new): same shape, for `http_request`.
+  - `src/ipc/ai.ts`: `CustomToolArg` / `CustomToolSpec` types + `customTools?: CustomToolSpec[]` on `ChatStreamArgs`.
+  - `src/ipc/index.ts`: re-exports for the 3 new IPC modules.
+  - `src/screens/EditorWorkspace/state/toolRegistry.ts`: `RegisteredTool` now has a `kind: 'builtin' | 'shell' | 'http'` discriminator and an optional `customConfig?: LipiToolEntry`. New `substitutePlaceholders` helper (replaces `{arg_name}`), `makeShellHandler` (calls `run_command` IPC), `makeHttpHandler` (calls `http_request` IPC), and `registerCustomTool(entry)` for the standard add-or-replace path. The hardcoded `get_file_contents` registration is now explicitly `kind: 'builtin'`.
+  - `src/screens/EditorWorkspace/state/aiStore.ts`: snapshots the current `customToolsStore` state via `getCustomToolSpecsSnapshot()` and passes it as `customTools` on every `ai_chat_stream` call (initial `send`, tool-loop follow-up, Cmd-K `sendEdit`).
+  - `src/shared/state/customToolsStore.ts` (new): the workspace-scoped source of truth for custom tool definitions. Holds `tools: LipiToolEntry[]` + `workspaceRoot` + `loaded` / `loading` / `saving` / `lastError` flags. Actions: `load(workspaceRoot)` (reads `lipi-tools.json` via IPC, re-registers handlers in `toolRegistry`), `addTool` / `updateTool` / `removeTool` (mutate in-memory + call `save` on change), `save()` (writes the in-memory list to disk). The client-side `validateEntry` checks name shape (identifier), kind, kind-specific required fields, and duplicate names. The store auto-syncs the JS `toolRegistry` on every change.
+  - `src/shared/state/customToolsStore.test.ts` (new, 18 tests): default state, `getTool`, `load` (happy path, empty file, IPC error), `addTool` (success, name-collision, missing required field, IPC failure), `updateTool` (success, name collision with another tool), `removeTool` (success, no-op), `save` (no workspace). Mocks `read_lipi_tools` / `write_lipi_tools` Tauri invokes.
+  - `src/screens/EditorWorkspace/state/aiStore.test.ts` (+3 tests): confirms `customTools: []` is sent by default, and that the snapshot from `customToolsStore` is forwarded on `send` + `sendEdit`.
+- **UI:**
+  - `src/screens/SettingsProvider/CustomToolEditor.tsx` (new): JSON-textarea editor for a single `LipiToolEntry`. Includes 1-click templates for `shell` and `http` (so new users don't hand-write JSON), inline parse-error and validation-error messages, and Save / Cancel buttons. Save hands off to `customToolsStore.addTool` / `updateTool`; on success the editor closes; on failure the error message is rendered inline. The toolbar shows a "Detected kind" hint by best-effort parsing the draft.
+  - `src/screens/SettingsProvider/SettingsProvider.tsx`: new "Custom Tools" section below "AI Tools". Renders one card per `LipiToolEntry` (kind-coloured badge: orange for `shell`, blue for `http`, plus Edit / Delete buttons), an "Add custom tool" button, and the workspace path to `lipi-tools.json`. The `CustomToolEditor` mounts inline as a stacked sub-card. The store hydrates on mount (or when the workspace root changes) via the `gitStore`'s `rootPath`.
+  - `src/screens/SettingsProvider/SettingsProvider.module.css`: styles for the toolbar, kind badge, editor dialog (border, monospace textarea, error message, action row). Reuses the existing `.card` / `.toolRow` / `.toolText` / `.toolName` / `.toolDescription` for visual consistency.
+- **Decisions:**
+  - **JSON editor over per-field form**: a `shell` tool needs `command` + `args` + `cwd` + `argsSpec`; an `http` tool needs `url` + `method` + `headers` + `body` + `argsSpec`. A flat form would have ~12 inputs. A JSON textarea is denser, exposes every field at once, and supports copy/paste between projects. Templates give a low-friction on-ramp.
+  - **Workspace-scoped, file-based (not `localStorage`)**: tool DEFINITIONS belong in version control (next to the code that uses them). `localStorage` is for per-user, per-device settings (the existing `toolSettingsStore`). Mixing the two would have meant two different persistence paths in one store.
+  - **Rust-owned execution for shell + http**: Tauri's renderer (the React tree) can't spawn processes or call `reqwest` directly — both go through IPC. The Rust side enforces timeouts, output limits, and (eventually) an allowlist. The JS side never touches `child_process` or `fetch` for custom tools.
+  - **No `kind` data field on the `unknownKind` variant**: serde's `#[serde(tag = "kind")]` discriminator would collide with a payload field also called `kind`. Renamed the payload to `unknownKindValue` on both sides to keep the wire format unambiguous.
+  - **Idempotent `removeTool`**: if the name doesn't exist, the action is a no-op — no file write. Saves a needless round-trip and keeps the on-disk file stable.
+
+### Verified (Phase 5c)
+
+- `cargo build` — clean, 0 errors, 0 warnings.
+- `cargo test --lib` — **117 / 117 pass** (88 pre-5c + 6 from `custom_tool.rs` + 8 from `command.rs` + 5 from `http.rs` + 9 from `lipi_tools.rs` + 1 from existing). Was 88 in 5b-7.
+- `npm run typecheck` — 0 errors.
+- `npm test` — **116 / 116 pass** (113 pre-5c + 18 new `customToolsStore` + 3 new `aiStore` custom-tools plumbing tests; net +20 after subtracting 1 from 5b-7 fixture count). Was 90 in 5b-7.
+- `npm run build` — pass, 156 modules, ~542 kB bundle (was 151 / 531 kB in 5b-7; +5 modules for `customToolsStore` + `lipiTools` IPC + `runCommand` / `httpRequest` IPC + the `CustomToolEditor` + its CSS).
+- No UI smoke test for 5c (WebView2 headless capture is still a known limitation). The new UI code path is covered by the `customToolsStore` tests (which exercise the exact store actions the editor calls) + typecheck + build.
+- Titlebar subtitle is `dev · phase 5c`.
+- 5c is **custom user-defined tools complete**. The user can add / edit / delete `shell` and `http` tools in the Settings screen; definitions live in `<workspace>/lipi-tools.json` and are version-controlled alongside the code. The AI model sees them in the `tools: [...]` payload on every chat call (merged with the built-in catalogue by the Rust side); when the model calls one, the JS executor dispatches to `run_command` (shell) or `http_request` (http) and returns the result. Disabling is per-tool and re-uses the existing `toolSettingsStore` Switch (the new entries are registered in the same `toolRegistry` so they show up in the existing "AI Tools" list above).
+
+### Added (Phase 4a — embedded terminal pipe)
+
+- `portable-pty = "0.8"` added to `src-tauri/Cargo.toml` as
+  the cross-platform PTY backend. `getrandom = "0.2"` added
+  for the session-id generator (was already in the tree
+  transitively).
+- `src-tauri/src/terminal.rs` (new, ~330 lines):
+  - `TerminalState` — one-per-app, held behind
+    `Arc<Mutex<HashMap<String, Session>>>`. Registered with
+    Tauri's state manager.
+  - `Session` — `master: Mutex<Box<dyn MasterPty + Send>>`
+    (mutex because the trait object isn't Sync),
+    `writer: Mutex<Box<dyn Write + Send>>`,
+    `child: Mutex<Option<Box<dyn Child + Send + Sync>>>`.
+  - `EventSink` trait — abstracts the output / exit event
+    destination so the `open` core is testable without a
+    Tauri context. `TauriEventSink` wraps `AppHandle::emit`
+    in `lib.rs`; `TestEventSink` captures events in tests.
+  - `open` / `write` / `resize` / `close` / `default_shell`
+    public functions. `open` spawns a `std::thread` reader
+    (portable-pty is sync, not async — this avoids the
+    spawn_blocking tax and the cross-platform async-FD
+    mismatch on Windows ConPTY). Default 24×80, 4 KiB read
+    chunks, `$TERM=xterm-256color` if unset.
+  - Cross-platform shell: cmd.exe on Windows, `$SHELL` or
+    `/bin/sh` on Unix. Test-friendly: integration tests
+    skip (don't fail) if the host has no working shell.
+- 4 Tauri commands wired in `src-tauri/src/lib.rs`:
+  `terminal_open`, `terminal_write`, `terminal_resize`,
+  `terminal_close` (+ `terminal_default_shell_cmd` for the
+  future settings panel). `TerminalState` is managed via
+  `tauri::Builder::manage(Arc::new(TerminalState::new()))`.
+- Two Tauri events emitted by the reader thread:
+  `terminal://output` (payload `{ sessionId, data: Vec<u8> }`)
+  and `terminal://exit` (payload `{ sessionId, exitCode: i32 | null }`).
+  Subscribed from JS via `listen` — see `useTerminal`.
+- `src/ipc/terminal.ts` (new) — typed wrappers for all 5
+  IPC commands, `TerminalError` class matching the Rust
+  error enum (Io / Spawn / NotFound / AlreadyClosed / Pty),
+  `onTerminalOutput` / `onTerminalExit` event subscriptions.
+  Re-exported from `src/ipc/index.ts`.
+- `src/screens/EditorWorkspace/hooks/useTerminal.ts` (new) —
+  discriminated `idle | opening | running | exited | error`
+  status, `output` buffer (4a accumulates; 4b will switch
+  to event-driven streaming), `start` / `write` / `resize`
+  / `close` / `clearOutput` actions, `isReady` boolean.
+  Per Rule 6, this hook is the only place in the React tree
+  that imports from `@/ipc/terminal`.
+
+### Verified (Phase 4a)
+
+- `npm run typecheck` — 0 errors
+- `npm run build` — 113 modules transformed, 0 errors
+  (+2 from `terminal.ts` + `useTerminal.ts` vs 3c-2)
+- `cargo test --lib` — 28/28 passing (was 22; +6 from 4a
+  unit tests)
+- `cargo test --test terminal_smoke` — 6/6 passing (full
+  open → write → output → resize → close round-trip against
+  a real cmd.exe PTY on Windows; the `open_write_echo_round_trip`
+  test writes "echo hi-from-lipi\r\n" and asserts the
+  captured output contains "hi-from-lipi")
+- `cargo test --test git_status_smoke` — 6/6 still passing
+  (no regression in 3a/3b/3c-1/3c-2)
+- `cargo tauri dev` smoke: Tauri window opens, titlebar
+  shows `dev · phase 4a`, no console errors on first paint.
+
+## [0.0.1] — 2026-06-09
+
+### Added (Phase 0 → 1a — frontend scaffold)
+
+- Vite + React 18 + TypeScript project with strict mode.
+- Design tokens (spacing, color, type scale) as CSS variables.
+- 3-pane desktop IDE shell (file tree / editor / side panel) with titlebar
+  and status bar.
+- Mobile responsive shell with bottom tab bar.
+- `useViewport` hook for mobile vs. desktop detection.
+- Top-8 device emulator dev tool (iPhone 15 Pro, iPhone SE 3, Galaxy S24,
+  Pixel 8, OnePlus 12, iPad Air M2 11", iPad mini 6, Galaxy Tab S9).
+  CSS-frame preview only; not a runtime. DEV-only, tree-shaken in production.
+- Voice module type definitions and `WisprClient` stub interface.
+- MIT license.
+- HANDOFF.md as source of truth for state and decisions.
+
+### Known limitations
+
+- No Tauri shell yet (no Rust, no `cargo`, no native window).
+- No Monaco, file tree, terminal, git, or AI features wired up.
+- No real voice capture. `WisprClient` is a typed stub only.
+- Device emulator is a layout preview, not a runtime.

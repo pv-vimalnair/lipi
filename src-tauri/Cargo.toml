@@ -1,0 +1,138 @@
+[package]
+name = "lipi"
+version = "0.0.2"
+description = "Lipi — a voice-first, cross-platform IDE. BYO API key. No backend."
+authors = ["Lipi Contributors"]
+license = "MIT"
+repository = "https://github.com/lipi-dev/lipi"
+edition = "2021"
+rust-version = "1.82.0"  # gix 0.78's MSRV
+
+# Match the npm package version. Tauri 2 reads this; keep in sync with
+# `package.json` (no tooling to enforce yet — see docs/ENGINEERING.md).
+
+[lib]
+name = "lipi_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+thiserror = "1"
+# tokio: 5a added `rt` + `macros` + `sync` (enough for the
+# Tauri runtime + our `tokio::task::spawn_blocking` calls
+# in the FS picker). 5b-1 adds `rt-multi-thread` for the
+# `ai_chat_stream` command, which needs a real async
+# runtime to drive `reqwest`'s streaming body reader.
+# We do NOT add `full` — the `fs` feature is unused
+# (we use `std::fs`) and `signal` is unused (we use
+# ctrlc-free shutdown via Tauri).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "sync", "time"] }
+# reqwest (Phase 5b-1 — HTTPS client to LLM providers).
+# `rustls-tls` instead of `default-tls` (which uses
+# OpenSSL) because:
+#   - rustls is pure-Rust, statically linked, no system
+#     libssl dependency (matches the `keyring` `vendored`
+#     decision in 5a)
+#   - rustls plays better with `vendored` builds on
+#     Linux (no SSL_DRIVER_FOUND link errors)
+# `json` for serde_json body parsing. `stream` is
+# implicit when reading the body via `bytes_stream`,
+# so we don't need a separate `stream` feature.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# `futures-util` is required for `StreamExt` (we use
+# `bytes_stream` from reqwest and need `.next().await`).
+# `tokio-util` is required for the
+# `CancellationToken` we use to abort the reader on
+# `ai_cancel_stream`.
+futures-util = "0.3"
+tokio-util = "0.7"
+# gix (gitoxide) — pure-Rust git. Pinned to 0.78.0 because gix 0.79+
+# transitively pulls gix-hash 0.23+, which has upstream bugs against
+# rustc 1.93+ (non-exhaustive `match self` on the `Kind` enum; the
+# `compile_error!` that gates on enabling a hash feature is the
+# giveaway). 0.78's transitive gix-hash 0.22.x compiles cleanly.
+# See HANDOFF Decision #26.
+#
+# `basic` is required — it pulls `gix-hash/sha1` (a hash algo feature
+# is mandatory, per the upstream compile_error). We add `status` for
+# the porcelain status iter, and `attributes` for .gitattributes
+# support. We do NOT enable `parallel` (we want fast single-thread
+# builds for the dev loop).
+gix = { version = "=0.78.0", default-features = false, features = ["basic", "status", "attributes"] }
+# portable-pty (Phase 4a — embedded terminal pipe). 0.8 is the
+# current major; wezterm (the upstream) has been on 0.8 for a
+# while and the API is stable. We do NOT need the `serde`
+# feature — session ids are generated locally as hex strings.
+portable-pty = "0.8"
+# getrandom is already in the tree as a transitive dep (gix,
+# gix-hash, etc.). We depend on it directly for the terminal
+# session id (16 random bytes → 32-char hex string).
+getrandom = "0.2"
+# keyring (Phase 5a — AI provider API keys in the OS keychain).
+# 3.6.x is the current 3.x line. The 2.x line was sync-by-default
+# with a different error type; 3.x is the rewrite with explicit
+# platform feature selection (no defaults).
+#
+# Platform feature selection:
+#   - windows-native  : Windows Credential Manager (Win + Win WebView2)
+#   - apple-native    : macOS Keychain + iOS Keychain
+#   - sync-secret-service + crypto-rust + vendored : Linux Secret
+#     Service over D-Bus (works with GNOME Keyring, KWallet) with
+#     OpenSSL statically linked so users don't need a separate
+#     libssl install. `sync` (not `async`) because the rest of
+#     the Lipi Rust code is sync (portable-pty is sync too) and
+#     Tauri commands can call blocking code freely.
+#   - (no `mock` feature needed in 3.6 — the mock store is always
+#     compiled in. The `keyring::mock` module is available
+#     unconditionally; tests use it via `set_default_credential_builder`.)
+# Android is NOT supported by keyring 3.x. Mobile is a later
+# phase — when we get there, we'll use `tauri-plugin-stronghold`
+# or similar for Android. For 5a (desktop-only), the three
+# desktop features above cover us.
+keyring = { version = "3.6", default-features = false, features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust", "vendored"] }
+# url (Phase 5c — `http_request` IPC, the custom-tool `http` kind).
+# Re-exported by reqwest, but we depend directly so the validation
+# step in `http.rs` doesn't go through a transitive crate.
+url = "2"
+# http (Phase 5c — synthetic response builder for unit tests).
+http = "1"
+
+# Platform-specific deps are added per phase:
+# D2 (editor): notify for FS watcher
+# D3 (git):    gix
+# D4 (term):   portable-pty
+# M2-M3:       cpal + platform STT bindings
+# All gated by feature flags to keep Phase 1a build fast.
+
+[dev-dependencies]
+# serde_json is already a transitive dep (via tauri), but the git
+# integration test snapshots the JSON wire shape, so we make it
+# explicit in dev-deps for clarity. (The integration test binary
+# needs to depend on it directly.)
+serde_json = "1"
+# tempfile (Phase 5c — `lipi-tools.json` round-trip tests).
+tempfile = "3"
+
+[features]
+# Default: just the shell, no plugins. Add features as we wire them.
+# `custom-protocol` is auto-injected by `cargo tauri dev` / `cargo tauri build`
+# and toggles between the Vite dev server and a bundled asset protocol.
+# Don't declare it manually.
+default = []
+# Uncomment when we add a plugin in the next phase:
+# notify-fs = []
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

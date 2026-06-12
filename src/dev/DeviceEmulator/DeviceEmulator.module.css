@@ -1,0 +1,260 @@
+/* DeviceEmulator — Phase M1
+ *
+ * Layout (top to bottom):
+ *   - Header bar (title + subtitle, dev-only chrome)
+ *   - Horizontal scroll row of device frames
+ *     Each frame:
+ *       [bezel]
+ *         [screen (scaled MobileShell, with the device's
+ *          safe-area insets painted in)]
+ *       [caption: device label + dimensions]
+ *
+ * The frame's screen is `transform: scale()`d down to a preview size
+ * (the device's full width × PREVIEW_SCALE). The full-size
+ * `MobileShell` lives inside, so the dev sees the actual mobile UX
+ * — not a stub.
+ *
+ * Safe-area insets (M1): each frame sets `--safe-top` and
+ * `--safe-bottom` (in unscaled CSS px) on the screen element, so
+ * the `MobileShell`'s chrome (top bar / bottom tab bar) lines up
+ * with the device's notch / home indicator. The notch and home
+ * indicator are painted as decorative overlays (NOT
+ * pointer-event-affecting) on top of the screen.
+ */
+
+.strip {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--color-bg-elevated);
+  border-top: 1px solid var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+  z-index: var(--z-overlay);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.title {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+}
+
+.subtitle {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.closeButton {
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition:
+    color var(--motion-fast) var(--easing-standard),
+    border-color var(--motion-fast) var(--easing-standard);
+}
+
+.closeButton:hover,
+.closeButton:focus-visible {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-secondary);
+  outline: none;
+}
+
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  overflow-x: auto;
+  /* `overflow-scrolling: touch`
+   * lets trackpads /
+   * touchpads scroll
+   * the row smoothly on
+   * macOS. The default
+   * `auto` is OK on
+   * desktop too. */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* --- One device frame ------------------------------------------- */
+
+.frame {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.bezel {
+  background-color: #0a0c0f;
+  padding: 6px;
+  border-radius: inherit;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+/* The `screen` is the actual
+ * rendering surface for the
+ * device. It's positioned
+ * `relative` so the notch +
+ * home-indicator can be
+ * absolutely positioned
+ * over it.
+ *
+ * The screen's child is
+ * the full-size MobileShell
+ * (or rather, a wrapping
+ * div that uses
+ * `transform: scale()` to
+ * scale the full-size
+ * MobileShell down to
+ * `device.width *
+ * PREVIEW_SCALE`).
+ *
+ * The notch is drawn as a
+ * decorative overlay
+ * (`pointer-events: none`)
+ * so the user can still
+ * interact with the
+ * underlying MobileShell
+ * (clicking the tab bar
+ * inside the frame, etc.)
+ * — but for M1 the frames
+ * are a *layout preview*,
+ * not a runtime, so
+ * pointer events are
+ * suppressed at the
+ * frame level (see
+ * `.frameInteractive`
+ * off-switch below). */
+.screen {
+  position: relative;
+  background-color: var(--color-bg-base);
+  overflow: hidden;
+  border-radius: inherit;
+  font-family: var(--font-family-sans);
+}
+
+/* The scaled MobileShell
+ * lives inside this
+ * wrapper. We set the
+ * wrapper to the full
+ * (unscaled) device
+ * dimensions and
+ * `transform-origin:
+ * top left` so the
+ * `scale()` shrinks
+ * toward the top-left
+ * corner. The wrapper's
+ * `width` and `height`
+ * are set inline
+ * (matching the
+ * device's px
+ * dimensions) — CSS
+ * vars would be
+ * cleaner but the
+ * transformer /
+ * runtime math
+ * benefits from
+ * inline numbers. */
+.scaledSurface {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+  /* The width / height /
+   * transform are set
+   * inline by the
+   * component. */
+  overflow: hidden;
+}
+
+/* The notch (a
+ * decorative overlay).
+ * For an iPhone 15
+ * Pro, this is a
+ * 120×35 pill
+ * centered at the
+ * top of the screen.
+ * For a Galaxy S24,
+ * it's a tiny 8×8
+ * pin-hole (we still
+ * render a pill but
+ * the device's
+ * own notchWidth
+ * makes it look
+ * pin-sized). */
+.notch {
+  position: absolute;
+  left: 50%;
+  background-color: #000;
+  border-radius: 999px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* The home indicator
+ * (the iOS gesture
+ * pill at the bottom
+ * of the screen).
+ * Width is fixed at
+ * 100px (a
+ * reasonable proxy
+ * for the iOS
+ * 134px indicator
+ * at 3× DPR — for
+ * the other devices
+ * it's a stylistic
+ * choice). */
+.homeIndicator {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100px;
+  background-color: var(--color-text-primary);
+  border-radius: 999px;
+  opacity: 0.85;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.caption {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-align: center;
+  max-width: 140px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* When the user
+ * hovers a frame, the
+ * caption brightens
+ * — gives the
+ * dev visual
+ * feedback for
+ * "this is the one
+ * you're looking
+ * at". */
+.frame:hover .caption,
+.frame:focus-within .caption {
+  color: var(--color-text-secondary);
+}

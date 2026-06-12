@@ -1,0 +1,27 @@
+/* VoiceAnnouncer — visually hidden but
+ * accessible to the SR. The classic
+ * "sr-only" recipe: clip + absolute, but
+ * keep the element in the accessibility
+ * tree. We avoid `display: none` and
+ * `visibility: hidden` because some SRs
+ * (notably older NVDA + Firefox combos)
+ * ignore display:none subtrees.
+ *
+ * Width/height of 1px is a defensive
+ * fallback — some browsers will hide the
+ * element from layout if width: 0 is
+ * applied, which can confuse the SR's
+ * geometry tracking. 1px is the smallest
+ * value that's still rendered. */
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

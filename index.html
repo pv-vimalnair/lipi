@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="color-scheme" content="dark" />
+    <title>Lipi</title>
+    <style>
+      /*
+       * Cold-start splash. Shown for ~50-300ms while the React bundle
+       * parses and the first component mounts, then removed by main.tsx
+       * once the React tree is committed. The visual matches the app
+       * icon (gradient + L monogram + accent dot) so the user sees
+       * one consistent brand surface from app-icon to running app.
+       *
+       * Plain CSS only - no images, no JS, no spinners. The whole
+       * point is "the app is loading" without being annoying.
+       */
+      html, body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #0b0d10;
+        color: #e6e8eb;
+        font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        overflow: hidden;
+      }
+      #splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2147483647; /* above everything until React mounts */
+        background:
+          radial-gradient(ellipse at top left, rgba(79, 140, 255, 0.10), transparent 60%),
+          #0b0d10;
+        transition: opacity 200ms cubic-bezier(0.2, 0, 0, 1);
+      }
+      #splash .glyph {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+      }
+      #splash .mark {
+        width: 96px;
+        height: 96px;
+        border-radius: 22px;
+        background: linear-gradient(135deg, #4f8cff 0%, #2a3550 55%, #14171c 100%);
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+      }
+      #splash .mark::before {
+        /* The L, drawn in pure CSS so the splash has zero image deps. */
+        content: "";
+        width: 38px;
+        height: 50px;
+        position: relative;
+        background:
+          linear-gradient(180deg, #f5f7fb 0%, #d6dce7 100%);
+        clip-path: polygon(
+          0% 0%,         /* top-left of stem */
+          38% 0%,        /* top-right of stem */
+          38% 76%,       /* inner foot corner top */
+          100% 76%,      /* outer foot right */
+          100% 100%,     /* bottom-right of foot */
+          0% 100%        /* bottom-left of foot */
+        );
+      }
+      #splash .mark::after {
+        /* Accent dot, matches the app icon. */
+        content: "";
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #4f8cff;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+      }
+      #splash .word {
+        font-size: 14px;
+        font-weight: 500;
+        color: #aab1bb;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      /* Hide the splash the moment main.tsx sets this attribute. */
+      html.splash-done #splash {
+        opacity: 0;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="splash" aria-hidden="true">
+      <div class="glyph">
+        <div class="mark" aria-hidden="true"></div>
+        <div class="word">Lipi</div>
+      </div>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

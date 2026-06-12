@@ -1,0 +1,754 @@
+/* AIPanel — Phase 5b-3 styles.
+ *
+ * Layout (top to bottom):
+ *   - error banner (when in 'error' state)
+ *   - chat thread (flex 1, scrollable)
+ *   - composer (sticky bottom)
+ *
+ * All colours / spacing / radii read from
+ * the design tokens in `src/shared/styles/tokens.css`
+ * (Rule 7 — no raw hex / no hardcoded
+ * dimensions in component CSS).
+ */
+
+.root {
+  /* The Stack column is the panel body
+   * (inside PaneShell.body). Flex to
+   * let the thread take all remaining
+   * space. */
+  height: 100%;
+  min-height: 0;
+}
+
+/* --- Provider badge (header action) ------------------------------- */
+
+.badge {
+  position: relative;
+  display: inline-block;
+}
+
+.badgeButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-base);
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--easing-standard);
+}
+
+.badgeButton:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.badgeDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-warning);
+  flex-shrink: 0;
+}
+
+.badgeDot[data-configured] {
+  background: var(--color-success);
+}
+
+.badgeLabel {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.badgeChevron {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+}
+
+.badgePopover {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  min-width: 180px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-1) 0;
+  margin: 0;
+  list-style: none;
+  z-index: var(--z-overlay);
+}
+
+.badgeOption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  color: var(--color-text-primary);
+  transition: background var(--motion-fast) var(--easing-standard);
+}
+
+.badgeOption:hover {
+  background: var(--color-bg-hover);
+}
+
+.badgeOption[data-active] {
+  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+}
+
+.badgeOption[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.badgeOption[data-disabled]:hover {
+  background: transparent;
+}
+
+.badgeOptionName {
+  font-weight: var(--font-weight-medium);
+}
+
+.badgeOptionStatus {
+  font-size: var(--font-size-xs);
+  color: var(--color-warning);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.badgeOptionStatus[data-configured] {
+  color: var(--color-success);
+}
+
+/* --- Error banner ------------------------------------------------- */
+
+.errorBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  flex-shrink: 0;
+}
+
+.errorText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.errorTitle {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-tight);
+}
+
+.errorHint {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  word-break: break-word;
+}
+
+.errorDismiss {
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-lg);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  flex-shrink: 0;
+}
+
+.errorDismiss:hover {
+  color: var(--color-text-primary);
+}
+
+/* --- M4: commit-by-voice status banner ------------------------------- */
+/*
+ * The M4 voice-commit flow renders a small
+ * inline banner above the composer to show
+ * the commit lifecycle (running / success /
+ * error). The visual language mirrors the
+ * error banner (icon + text + dismiss ×) but
+ * with three semantic states:
+ *   - running: soft "info" palette, hourglass
+ *   - success: soft "success" palette, check
+ *   - error:   soft "danger" palette, cross
+ */
+
+.commitBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  flex-shrink: 0;
+}
+
+.commitBanner[data-state="running"] {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-secondary);
+}
+
+.commitBanner[data-state="success"] {
+  background: var(--color-success-soft);
+  border-color: var(--color-success);
+  color: var(--color-text-primary);
+}
+
+.commitBanner[data-state="error"] {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+  color: var(--color-text-primary);
+}
+
+.commitBannerIcon {
+  flex-shrink: 0;
+  font-size: var(--font-size-md);
+  line-height: 1;
+}
+
+.commitBannerText {
+  flex: 1;
+  min-width: 0;
+  /* Truncate very long error messages; the
+   * full text is in the store for an
+   * "expand" affordance if we add one later. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.commitBannerText code {
+  font-family: var(--font-family-mono, ui-monospace, "Cascadia Code", monospace);
+  font-size: var(--font-size-xs);
+  background: var(--color-bg-overlay);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+.commitBannerDismiss {
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 var(--space-1);
+  flex-shrink: 0;
+}
+
+.commitBannerDismiss:hover {
+  color: var(--color-text-primary);
+}
+
+/* --- Chat thread -------------------------------------------------- */
+
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  scrollbar-width: thin;
+}
+
+.threadEmpty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.threadEmptyTitle {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--space-1) 0;
+}
+
+.threadEmptyBody {
+  font-size: var(--font-size-sm);
+  margin: 0;
+  line-height: var(--line-height-relaxed);
+}
+
+.threadEmptyBody kbd {
+  display: inline-block;
+  padding: 0 var(--space-1);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+}
+
+/* --- Message row -------------------------------------------------- */
+
+.message {
+  display: flex;
+  width: 100%;
+}
+
+.message[data-role="user"] {
+  justify-content: flex-end;
+}
+
+.message[data-role="assistant"] {
+  justify-content: flex-start;
+}
+
+.message[data-role="system"] {
+  justify-content: center;
+}
+
+.messageBubble {
+  max-width: 85%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-relaxed);
+  word-break: break-word;
+  white-space: pre-wrap;
+  /* `white-space: pre-wrap` preserves the
+   * user's newlines in the rendered
+   * bubble (5b-3's user messages have
+   * trimmed newlines; 5b-4's assistant
+   * text will have streamed-in
+   * whitespace). */
+}
+
+.message[data-role="user"] .messageBubble {
+  background: var(--color-accent-soft);
+  color: var(--color-text-primary);
+  border-bottom-right-radius: var(--radius-sm);
+}
+
+.message[data-role="assistant"] .messageBubble {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.message[data-role="system"] .messageBubble {
+  background: transparent;
+  color: var(--color-text-muted);
+  font-style: italic;
+  font-size: var(--font-size-xs);
+}
+
+.cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--color-accent);
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* --- Composer ----------------------------------------------------- */
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-base);
+  flex-shrink: 0;
+}
+
+.composerInput {
+  flex: 1;
+  resize: none;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  min-height: 32px;
+  max-height: 160px;
+  overflow-y: auto;
+  transition: border-color var(--motion-fast) var(--easing-standard);
+}
+
+.composerInput:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.composerInput:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.composerInput::placeholder {
+  color: var(--color-text-muted);
+}
+
+/* --- Tool trace (5b-4) --------------------------------------------
+ *
+ * Per-message tool trace: one collapsible
+ * card per tool call the model emitted.
+ * Renders under the assistant message
+ * bubble.
+ *
+ *   ┌─ ⛏ get_weather ─────────────┐
+ *   │  input:  {"location":"SF"}  │
+ *   │  output: not executed       │
+ *   └─────────────────────────────┘
+ *
+ * The cards stack vertically with a small
+ * gap. The trace is only shown for
+ * assistant messages (the user never
+ * emits tool calls; the system
+ * message is metadata-only).
+ */
+
+.toolTraceList {
+  /* The list sits INSIDE the assistant
+   * message flex container, which is
+   * `justify-content: flex-start` —
+   * the list needs to also be at the
+   * start. We cap the width to the
+   * bubble's max-width (85%) so the
+   * card doesn't stretch to fill
+   * the full panel width. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  max-width: 85%;
+  align-self: flex-start;
+}
+
+.toolTrace {
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+}
+
+.toolTraceHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: none;
+  font: inherit;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--motion-fast) var(--easing-standard);
+}
+
+.toolTraceHeader:hover {
+  background: var(--color-bg-hover);
+}
+
+.toolTraceIcon {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+}
+
+.toolTraceName {
+  flex: 1;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+.toolTraceChevron {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+}
+
+/* 5b-6: status label after the tool
+ * name. The colour is driven by the
+ * `data-status` attribute (set by the
+ * component) — `'done'` is green,
+ * `'error'` is red, `'running'` is
+ * the accent, `'pending'` / `'skipped'`
+ * are muted. The transition is snappy
+ * (`motion-fast`) so the change is
+ * visible when a tool transitions
+ * from `'running'` to `'done'`. */
+.toolTraceStatus {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family-mono);
+  color: var(--color-text-muted);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  transition: color var(--motion-fast) var(--easing-standard);
+}
+
+.toolTraceStatus[data-status="done"] {
+  color: var(--color-success);
+}
+
+.toolTraceStatus[data-status="error"] {
+  color: var(--color-danger);
+}
+
+.toolTraceStatus[data-status="running"] {
+  color: var(--color-accent);
+}
+
+.toolTraceStatus[data-status="skipped"] {
+  color: var(--color-warning);
+}
+
+/* 5b-6: border accent for the whole
+ * card when it's in a terminal state
+ * (done / error). Pending and running
+ * use the default subtle border.
+ * The colour matches the status label
+ * so the visual signal is consistent. */
+.toolTrace[data-status="done"] {
+  border-color: var(--color-success);
+}
+
+.toolTrace[data-status="error"] {
+  border-color: var(--color-danger);
+}
+
+.toolTrace[data-status="running"] {
+  border-color: var(--color-accent);
+}
+
+.toolTraceBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-elevated);
+}
+
+.toolTraceRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.toolTraceLabel {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.toolTraceJson {
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-primary);
+  overflow-x: auto;
+  white-space: pre;
+  /* `white-space: pre` (NOT `pre-wrap`) so
+   * the JSON's indentation is preserved
+   * exactly. We let the panel scroll
+   * horizontally for very long lines. */
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.toolTraceNoResult {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+/* --- Jump-to-chat highlight (5f) ----------------------------------
+ *
+ * When the Activity Log in
+ * Settings is clicked, the AIPanel
+ * scrolls to the matching message
+ * and adds `data-jump-highlight`
+ * for 2s. The animation is a
+ * soft ring that pulses twice
+ * then settles. We use the
+ * accent token so it's on-brand
+ * (not the warning/danger
+ * colour, which would imply an
+ * error).
+ *
+ * The animation lives here
+ * (component CSS) because the
+ * AIPanel is the only place
+ * these data attributes can
+ * appear — no other screen
+ * writes them, no global
+ * stylesheet would ever need
+ * to override them. */
+
+.message[data-jump-highlight] {
+  animation: jumpHighlight 2s var(--easing-standard);
+}
+
+.toolTrace[data-jump-highlight] {
+  animation: jumpHighlightTrace 2s var(--easing-standard);
+}
+
+@keyframes jumpHighlight {
+  /* Two soft pulses, then settle.
+   * The keyframes oscillate the
+   * box-shadow ring around the
+   * message bubble. We keep the
+   * ring subtle (2px) so it
+   * doesn't distract from the
+   * content. */
+  0% {
+    box-shadow: 0 0 0 0 var(--color-accent);
+  }
+  20% {
+    box-shadow: 0 0 0 2px var(--color-accent);
+  }
+  40% {
+    box-shadow: 0 0 0 0 var(--color-accent);
+  }
+  60% {
+    box-shadow: 0 0 0 2px var(--color-accent);
+  }
+  80% {
+    box-shadow: 0 0 0 0 var(--color-accent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 var(--color-accent);
+  }
+}
+
+@keyframes jumpHighlightTrace {
+  /* Same two-pulse pattern for
+   * the tool trace card. The
+   * trace already has a border
+   * (its `data-status` colour)
+   * so we animate the
+   * `outline` (outside the
+   * border) rather than the
+   * `box-shadow` to avoid
+   * fighting the border
+   * colour. */
+  0% {
+    outline: 0 solid var(--color-accent);
+  }
+  20% {
+    outline: 2px solid var(--color-accent);
+  }
+  40% {
+    outline: 0 solid var(--color-accent);
+  }
+  60% {
+    outline: 2px solid var(--color-accent);
+  }
+  80% {
+    outline: 0 solid var(--color-accent);
+  }
+  100% {
+    outline: 0 solid var(--color-accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Respect the OS setting:
+   * no animation, no ring
+   * pulses. We still apply a
+   * single soft ring via
+   * `outline` (no animation
+   * involved) so the user gets
+   * SOME visual confirmation
+   * of the jump target. The
+   * 2-second fade-out is
+   * handled by the JS timeout
+   * that removes the
+   * attribute. */
+  .message[data-jump-highlight] {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--color-accent);
+  }
+  .toolTrace[data-jump-highlight] {
+    animation: none;
+    outline: 2px solid var(--color-accent);
+  }
+}
+
+/* --- M5: voice button + shortcut hint cluster ------------------------ */
+/*
+ * The M5 keyboard shortcut
+ * (Cmd/Ctrl+Shift+V) is a power-user feature
+ * and a screen-reader / motor-impairment
+ * fallback. We pair the on-screen
+ * `VoiceButton` with a small `KeyHint` chip
+ * so sighted users can learn the shortcut
+ * without opening Settings. The cluster
+ * uses inline-flex so the button and the
+ * chip sit on the same baseline without
+ * stretching the chip's height. The chip
+ * itself is a `KeyHint` with the standard
+ * `kbd` styling.
+ */
+
+.voiceCluster {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}

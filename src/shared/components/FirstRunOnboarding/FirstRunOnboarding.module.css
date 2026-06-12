@@ -1,0 +1,57 @@
+/* FirstRunOnboarding — first-run
+   interstitial for new users who
+   haven't added an API key yet.
+   Per Rule 4, all spacing/colors/
+   typography come from the design
+   tokens in src/shared/styles/
+   tokens.css. The accent border
+   + the slightly elevated
+   background give this enough
+   weight to be noticed without
+   feeling like an error. */
+
+.root {
+  max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 20px 24px;
+  border: 1px solid var(--color-accent, #5e6ad2);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: linear-gradient(
+    180deg,
+    rgba(94, 106, 210, 0.08),
+    rgba(94, 106, 210, 0.04)
+  );
+  color: var(--color-fg-base, #e6e6e6);
+  box-sizing: border-box;
+}
+
+.body {
+  /* Tighten the column gap
+     between the heading, the
+     explanatory paragraph, and
+     the action row. */
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--color-fg-base, #e6e6e6);
+}
+
+.message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-fg-muted, #a0a0a8);
+  max-width: 60ch;
+}
+
+.actions {
+  margin-top: 4px;
+  flex-wrap: wrap;
+}

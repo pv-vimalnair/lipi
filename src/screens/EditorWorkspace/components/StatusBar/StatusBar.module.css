@@ -1,0 +1,33 @@
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 var(--space-3);
+  background-color: var(--color-bg-elevated);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  user-select: none;
+}
+
+.section {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.item {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.dirty {
+  color: var(--color-accent);
+  font-weight: var(--font-weight-semibold);
+}
+
+.spacer {
+  flex: 1;
+}

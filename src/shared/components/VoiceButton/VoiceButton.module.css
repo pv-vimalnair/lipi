@@ -1,0 +1,137 @@
+/*
+ * VoiceButton — M2a.
+ *
+ * Single small button, 32x32 hit target (above the
+ * 24x24 visual). The four status states are
+ * distinguished by `data-status`:
+ *   - idle:        subtle, mic icon, normal cursor.
+ *   - requesting:  spinner-style pulse on the icon.
+ *   - recording:   red background, white ⏹ icon,
+ *                  a "M:SS" timer to the right of the
+ *                  icon, and a slow 1.2s breathing
+ *                  animation on the background.
+ *   - transcribing: same as requesting (the user is
+ *                  in a brief "wait" state).
+ *   - error:       danger color on the icon, a small
+ *                  ⚠ glyph instead of 🎙, hover shows
+ *                  the lastError message.
+ *
+ * The animation is purely CSS (transform + opacity,
+ * no layout reflow) so it's smooth on low-end GPUs.
+ */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  transition:
+    background-color 120ms cubic-bezier(0.2, 0, 0, 1),
+    border-color 120ms cubic-bezier(0.2, 0, 0, 1),
+    color 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.button:hover:not([data-disabled]):not(:disabled) {
+  background: var(--color-bg-hover);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.button[data-disabled],
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button[data-status='recording'] {
+  /* Red recording state. The background breathes
+     to feel "live" — a slow opacity pulse on a
+     ::before pseudo so the border / text stay
+     sharp (the icon flips from 🎙 to ⏹ so the
+     user has a clear visual stop affordance). */
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  position: relative;
+  width: auto;
+  padding: 0 10px;
+}
+
+.button[data-status='recording']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--color-danger);
+  opacity: 0;
+  pointer-events: none;
+  animation: voice-record-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes voice-record-pulse {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 0.12; }
+}
+
+.button[data-status='error'] {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+.button[data-status='requesting'],
+.button[data-status='transcribing'] {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 13px;
+  /* The icon is the only thing that should
+     move on a busy state. A gentle rotation
+     gives the "loading" signal without a
+     full spinner. */
+}
+
+.button[data-status='requesting'] .icon,
+.button[data-status='transcribing'] .icon {
+  animation: voice-busy-spin 1.2s linear infinite;
+}
+
+@keyframes voice-busy-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.duration {
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  font-weight: 500;
+  position: relative;
+  /* The duration sits inside the same
+     [data-status='recording'] block. The
+     relative position is so it's above the
+     pulsing ::before overlay. */
+  z-index: 1;
+}

@@ -1,0 +1,11 @@
+
+> lipi@0.0.2 dev
+> vite
+
+
+  VITE v5.4.21  ready in 345 ms
+
+  ➜  Local:   http://localhost:1420/
+  ➜  Network: use --host to expose
+12:01:35 pm [vite] ✨ new dependencies optimized: @tauri-apps/api/event
+12:01:35 pm [vite] ✨ optimized dependencies changed. reloading

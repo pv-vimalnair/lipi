@@ -1,0 +1,101 @@
+.tree,
+.children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  overflow: auto;
+}
+
+.tree {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-1) 0;
+}
+
+.children {
+  /* depth-based indent is applied per-row via inline padding-left,
+     so no extra padding here. */
+}
+
+.node {
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 22px;
+  padding-right: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
+  margin: 0 var(--space-1);
+}
+
+.row:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.row:focus {
+  outline: none;
+  background-color: var(--color-bg-hover);
+  box-shadow: 0 0 0 1px var(--color-accent) inset;
+}
+
+.row[data-selected] {
+  background-color: var(--color-accent-soft);
+  color: var(--color-text-primary);
+}
+
+.chevron {
+  display: inline-block;
+  width: 12px;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.icon {
+  display: inline-block;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.placeholderHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  opacity: 0.8;
+}
+
+.errorTitle {
+  color: var(--color-danger);
+  font-weight: var(--font-weight-semibold);
+}

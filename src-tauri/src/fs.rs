@@ -272,7 +272,7 @@ fn tmp_path(p: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-fn looks_like_text(bytes: &[u8]) -> bool {
+pub(crate) fn looks_like_text(bytes: &[u8]) -> bool {
     let probe = &bytes[..bytes.len().min(TEXT_PROBE_BYTES)];
     !probe.contains(&0)
 }

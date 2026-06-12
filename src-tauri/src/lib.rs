@@ -30,11 +30,13 @@ use tauri_plugin_deep_link::DeepLinkExt;
 
 mod fs;
 mod fs_watcher;
+mod workspace_search;
 use fs::{
     read_dir, read_file, write_file, create_file, delete_entry, rename_entry,
     FsEntry, FsError, FileContent,
 };
 use fs_watcher::{fs_unwatch, fs_watch};
+use workspace_search::workspace_search;
 
 mod menu;
 
@@ -1454,6 +1456,7 @@ pub fn run() {
             fs_rename_entry,
             fs_watch,
             fs_unwatch,
+            workspace_search,
             git_open,
             git_status,
             git_current_branch,

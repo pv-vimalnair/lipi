@@ -145,6 +145,12 @@ function ActiveEditor({
   const setControllerEditor = useEditorControllerStore(
     (s) => s.setEditor,
   );
+  // Phase S: apply a pending reveal request
+  // (set by the workspace-search panel) when
+  // Monaco mounts for the matching path.
+  const setPendingReveal = useEditorControllerStore(
+    (s) => s.setPendingReveal,
+  );
 
   // Push external content into Monaco (e.g. when switching tabs and
   // the new content is different from what Monaco has internally).
@@ -165,7 +171,22 @@ function ActiveEditor({
     // monaco-agnostic; consumers cast at the
     // call site.
     setControllerEditor(editor);
-  }, [setControllerEditor]);
+    // Phase S: if a `pendingReveal` is queued
+    // for this exact path, apply it now and
+    // clear the request. We compare paths
+    // exactly (the JS side uses the absolute
+    // path the search returned, which is the
+    // same one Monaco just mounted).
+    const pending = useEditorControllerStore.getState().pendingReveal;
+    if (pending && pending.path === path) {
+      const line = Math.max(1, pending.line);
+      const column = Math.max(1, pending.column);
+      editor.revealLineInCenter(line);
+      editor.setPosition({ lineNumber: line, column });
+      editor.focus();
+      setPendingReveal(null);
+    }
+  }, [path, setControllerEditor, setPendingReveal]);
 
   // 5b-5: clear the controller-store handle when
   // the active editor unmounts (tab switch,

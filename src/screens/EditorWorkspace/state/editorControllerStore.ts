@@ -32,6 +32,26 @@
 
 import { create } from 'zustand';
 
+/**
+ * A pending request for the editor pane to
+ * reveal a specific line + column in the
+ * next opened file. The search panel sets
+ * this; the editor pane reads it on mount
+ * and clears it after applying.
+ *
+ * The handoff is a store (not a custom
+ * event) so it survives React's render
+ * cycle. The pane is guaranteed to read it
+ * after the file is loaded (the openFile
+ * call triggers an active-tab change which
+ * triggers a remount).
+ */
+export interface PendingReveal {
+  path: string;
+  line: number;
+  column: number;
+}
+
 interface EditorControllerState {
   /**
    * The live Monaco editor instance, or `null`
@@ -50,11 +70,21 @@ interface EditorControllerState {
   /** Replace the editor instance. Pass `null` to
    *  clear (e.g. on tab switch). */
   setEditor: (editor: unknown | null) => void;
+
+  /** Set the next reveal request. Pass `null` to clear. */
+  setPendingReveal: (reveal: PendingReveal | null) => void;
+
+  /** Read the pending reveal (without clearing it
+   *  — the editor pane clears it via
+   *  `setPendingReveal(null)` after applying). */
+  pendingReveal: PendingReveal | null;
 }
 
 export const useEditorControllerStore = create<EditorControllerState>(
   (set) => ({
     editor: null,
     setEditor: (editor) => set({ editor }),
+    pendingReveal: null,
+    setPendingReveal: (reveal) => set({ pendingReveal: reveal }),
   }),
 );

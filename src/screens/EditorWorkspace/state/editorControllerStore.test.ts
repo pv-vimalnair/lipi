@@ -13,9 +13,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import { useEditorControllerStore } from './editorControllerStore';
 
-describe('editorControllerStore (5b-5)', () => {
+describe('editorControllerStore (5b-5 + Phase S)', () => {
   beforeEach(() => {
-    useEditorControllerStore.setState({ editor: null });
+    useEditorControllerStore.setState({
+      editor: null,
+      pendingReveal: null,
+    });
   });
 
   it('starts with editor = null', () => {
@@ -41,5 +44,30 @@ describe('editorControllerStore (5b-5)', () => {
       .setEditor({ executeEdits: () => true });
     useEditorControllerStore.getState().setEditor(null);
     expect(useEditorControllerStore.getState().editor).toBeNull();
+  });
+
+  it('starts with pendingReveal = null', () => {
+    expect(useEditorControllerStore.getState().pendingReveal).toBeNull();
+  });
+
+  it('setPendingReveal stores the request', () => {
+    useEditorControllerStore.getState().setPendingReveal({
+      path: '/a.txt',
+      line: 7,
+      column: 3,
+    });
+    expect(useEditorControllerStore.getState().pendingReveal).toEqual({
+      path: '/a.txt',
+      line: 7,
+      column: 3,
+    });
+  });
+
+  it('setPendingReveal(null) clears the request', () => {
+    useEditorControllerStore
+      .getState()
+      .setPendingReveal({ path: '/a.txt', line: 7, column: 3 });
+    useEditorControllerStore.getState().setPendingReveal(null);
+    expect(useEditorControllerStore.getState().pendingReveal).toBeNull();
   });
 });

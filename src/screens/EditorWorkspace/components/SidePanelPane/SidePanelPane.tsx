@@ -4,6 +4,7 @@ import { GitPanel } from '../GitPanel';
 import { DiffView } from '../DiffView';
 import { TerminalPanel } from '../TerminalPanel';
 import { AIPanel } from '../AIPanel';
+import { SearchPanel } from '../SearchPanel';
 import { gitSelectors, useGitStore } from '../../state/gitStore';
 import styles from './SidePanelPane.module.css';
 
@@ -31,7 +32,7 @@ import styles from './SidePanelPane.module.css';
  * each is a self-contained unit that can be reused).
  */
 
-type Tab = 'git' | 'terminal' | 'ai';
+type Tab = 'git' | 'terminal' | 'ai' | 'search';
 
 export function SidePanelPane() {
   const activeDiffPath = useGitStore(gitSelectors.activeDiffPath);
@@ -54,6 +55,11 @@ export function SidePanelPane() {
           label="Source Control"
         />
         <TabButton
+          active={tab === 'search'}
+          onClick={() => setTab('search')}
+          label="Search"
+        />
+        <TabButton
           active={tab === 'terminal'}
           onClick={() => setTab('terminal')}
           label="Terminal"
@@ -67,6 +73,8 @@ export function SidePanelPane() {
       <div className={styles.panel}>
         {tab === 'git' ? (
           <GitPanel />
+        ) : tab === 'search' ? (
+          <SearchPanel />
         ) : tab === 'terminal' ? (
           <TerminalPanel />
         ) : (

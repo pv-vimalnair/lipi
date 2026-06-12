@@ -22,3 +22,4 @@ export * from './templates';
 export * from './haptics';
 export * from './nativeDictation';
 export * from './fsWatcher';
+export * from './workspaceSearch';

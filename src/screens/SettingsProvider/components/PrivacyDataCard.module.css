@@ -1,0 +1,110 @@
+/* PrivacyDataCard — Phase S2.
+ *
+ * Mirrors the visual shape of the other
+ * SettingsProvider cards (rounded border,
+ * title at the top, lede paragraph, action
+ * row at the bottom). The privacy statement
+ * is rendered as a `<pre>` block so the
+ * multi-line string in
+ * `LIPI_STATE_V2_PRIVACY_STATEMENT` retains
+ * its line breaks and indentation. */
+
+.card {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 8px);
+  background-color: var(--color-bg-elevated);
+  padding: var(--space-4, 16px);
+  margin-block-end: var(--space-3, 12px);
+}
+
+.title {
+  margin: 0 0 var(--space-2, 8px);
+  font-size: var(--font-size-md, 14px);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-text);
+}
+
+.lede {
+  margin: 0 0 var(--space-3, 12px);
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.privacyStatement {
+  margin: 0 0 var(--space-3, 12px);
+  padding: var(--space-3, 12px);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text);
+  background-color: var(--color-bg-sunken, #161616);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2, 8px);
+  flex-wrap: wrap;
+}
+
+.importLabel {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+/* The native file input is visually hidden
+ * but NOT display:none, so it remains
+ * keyboard-accessible (matches the 5b v1
+ * `ToolSettingsBackupCard` pattern). */
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+}
+
+.importButton {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  background-color: var(--color-bg-sunken, #1a1a1a);
+  color: var(--color-text);
+  font-size: var(--font-size-sm, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  cursor: pointer;
+  user-select: none;
+}
+
+.importButton:hover {
+  background-color: var(--color-bg-elevated-hover, #222);
+}
+
+.importButton:focus-visible {
+  outline: 2px solid var(--color-accent, #6aa6ff);
+  outline-offset: 2px;
+}
+
+.notice {
+  margin: var(--space-2, 8px) 0 0;
+  color: var(--color-success-strong, #6ee7a3);
+  font-size: var(--font-size-sm, 12px);
+}
+
+.error {
+  margin: var(--space-2, 8px) 0 0;
+  color: var(--color-danger-strong, #f08785);
+  font-size: var(--font-size-sm, 12px);
+}

@@ -33,6 +33,7 @@ import { CustomToolEditor } from './CustomToolEditor';
 import { OnDeviceCard } from './components/OnDeviceCard';
 import { WebSpeechCard } from './components/WebSpeechCard';
 import { NativeDictationCard } from './components/NativeDictationCard';
+import { PrivacyDataCard } from './components/PrivacyDataCard';
 import type { LipiToolEntry } from '@/ipc';
 import styles from './SettingsProvider.module.css';
 
@@ -249,6 +250,19 @@ export function SettingsProvider() {
             same 5-second undo as the Danger Zone below.
           </p>
           <ToolSettingsBackupCard />
+          {/* Phase S2: full Lipi state export /
+              import. Sits below the per-decision
+              (5b) backup card and above the
+              per-tool (5a) danger zone. Same
+              UX shape (Export / Import buttons,
+              hidden file input, status
+              messages) but the file is a
+              schema-versioned `lipi-state` JSON
+              with three top-level payloads
+              (workspace, voicePreferences,
+              toolSettings) and a privacy
+              statement above the buttons. */}
+          <PrivacyDataCard />
           {/* 5a: danger zone — bulk-reset
               all tool settings (which
               tools are enabled, and their

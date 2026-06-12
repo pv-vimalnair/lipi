@@ -1,0 +1,147 @@
+/* WebSpeechCard — M2c mobile.
+
+   The M2c mobile "use the browser's built-in
+   speech engine" card. Mirrors the established
+   `OnDeviceCard` class vocabulary (`.card`,
+   `.cardHeader`, `.cardTitle`, `.badge`,
+   `.cardDescription`, `.toggleRow`,
+   `.toggleLabel`, `.toggleHint`,
+   `.errorCard`) so the card reads as a
+   natural sibling of OnDeviceCard. Per Rule 4,
+   all spacing / colors / typography come from
+   the design tokens in
+   `src/shared/styles/tokens.css`. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 6px);
+  transition: border-color 80ms linear;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cardTitle {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm, 2px);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  background-color: var(--color-bg-hover, rgba(255, 255, 255, 0.04));
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.badge[data-configured] {
+  background-color: var(--color-success-soft, rgba(13, 188, 121, 0.15));
+  color: var(--color-success, #0dbc79);
+  border-color: var(--color-success, #0dbc79);
+}
+
+.cardDescription {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+  max-width: 60ch;
+}
+
+.privacyCallout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background-color: var(--color-bg-base);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm, 2px);
+}
+
+.privacyCalloutLabel {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.85em;
+  color: var(--color-text-muted);
+}
+
+.privacyCalloutValue {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background-color: var(--color-bg-base);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm, 2px);
+  flex-wrap: wrap;
+}
+
+.toggleText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.toggleLabel {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.toggleHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.unavailableNotice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm, 2px);
+  background-color: var(--color-bg-base);
+}
+
+.unavailableNoticeTitle {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.unavailableNoticeDetail {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}

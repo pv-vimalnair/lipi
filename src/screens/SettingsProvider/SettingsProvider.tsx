@@ -30,6 +30,9 @@ import {
   suggestFilename,
 } from '@/shared/settingsIO';
 import { CustomToolEditor } from './CustomToolEditor';
+import { OnDeviceCard } from './components/OnDeviceCard';
+import { WebSpeechCard } from './components/WebSpeechCard';
+import { NativeDictationCard } from './components/NativeDictationCard';
 import type { LipiToolEntry } from '@/ipc';
 import styles from './SettingsProvider.module.css';
 
@@ -90,7 +93,7 @@ export function SettingsProvider() {
   return (
     <div className={styles.root} data-viewport="desktop">
       <div className={styles.desktop}>
-        <TitleBar subtitle={isDev ? 'dev · phase M2b' : undefined} showSettingsButton={false} />
+        <TitleBar subtitle={isDev ? 'dev · phase M2c mobile' : undefined} showSettingsButton={false} />
         <main className={styles.main}>
           <header className={styles.header}>
             <IconButton
@@ -138,6 +141,55 @@ export function SettingsProvider() {
             dropped from memory when you stop recording.
           </p>
           <WisprCard />
+          <h3 className={styles.subSectionHeading}>
+            Or use on-device speech-to-text
+          </h3>
+          <p className={styles.sectionLede}>
+            On-device STT runs entirely on your machine — no audio ever
+            leaves your computer. Pick a model below; the first install
+            downloads a one-time model file (~75–150 MB), and subsequent
+            recordings are 100% local and offline. Switch the active
+            provider from the Command Palette
+            (search for &ldquo;voice provider&rdquo;).
+          </p>
+          <OnDeviceCard />
+          {/* M2c mobile: the Web Speech shim.
+              Mirrors the OnDeviceCard "or use…"
+              shape — hidden behind its own
+              subsection so the privacy
+              implication ("audio leaves the
+              device") is impossible to miss.
+              The card reads the
+              `useVoiceCapabilitiesStore` for
+              availability; if the WebView
+              doesn't expose `SpeechRecognition`
+              (Linux WebKitGTK), the card shows
+              "Not available on this platform"
+              and hides the toggle. See Decision
+              #46 Q3. */}
+          <h3 className={styles.subSectionHeading}>
+            Or use the browser&rsquo;s built-in speech engine
+          </h3>
+          <p className={styles.sectionLede}>
+            The WebView&rsquo;s <code>SpeechRecognition</code> API
+            is available on Chromium-based WebViews (Windows,
+            macOS) and on WKWebView (iOS). The browser sends your
+            audio to its own server (Google on Chromium, Apple on
+            WebKit) for transcription — the audio does not stay
+            on your machine. Choose this if you don&rsquo;t want
+            to download a Whisper model.
+          </p>
+          <WebSpeechCard />
+          {/* Phase NPS: native-dictation plugin
+              contract. Sits below the WebSpeechCard
+              and above the AI Tools section so the
+              voice-stt options stack is
+              on-device → browser speech → native
+              dictation (iOS / Android only). On
+              desktop the card reads
+              `status: 'not-applicable'` and shows
+              the iOS / Android-only blurb. */}
+          <NativeDictationCard />
           <h2 className={styles.sectionHeading}>AI Tools</h2>
           <p className={styles.sectionLede}>
             The AI can use these built-in tools to help with your code.

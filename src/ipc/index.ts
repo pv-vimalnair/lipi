@@ -20,3 +20,4 @@ export * from './voicePlatform';
 export * from './deepLink';
 export * from './templates';
 export * from './haptics';
+export * from './nativeDictation';

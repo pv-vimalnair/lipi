@@ -1,5 +1,5 @@
 /**
- * pcmCapture — raw PCM audio capture for the Wispr provider (M2b).
+ * pcmCapture — raw PCM audio capture for the Wispr provider (M2b / M3).
  *
  * The M2a `MediaRecorder` path produces encoded audio (Opus / AAC
  * inside a `Blob`). Wispr Flow's WebSocket API needs raw, 16-bit
@@ -63,7 +63,18 @@
  *
  * Calling `stop()` twice is safe (idempotent — every step
  * checks "is it already stopped?" first).
+ *
+ * ## M3: errors are `VoiceSessionError`s
+ *
+ * M2b had a private `PcmCaptureError` class. M3 collapses all
+ * provider errors into the single `VoiceSessionError` type
+ * (Decision #3) — `startPcmCapture` now throws
+ * `VoiceSessionError` directly. The wispr session factory
+ * treats the rejection's `code` field as the user-facing
+ * diagnostic.
  */
+import { VoiceSessionError } from './session';
+import type { VoiceSessionErrorCode } from './session';
 
 /** The negotiated sample rate. Wispr hard-requires 16 kHz. */
 export const WISPR_SAMPLE_RATE_HZ = 16_000;
@@ -173,14 +184,22 @@ export async function startPcmCapture(
     !navigator.mediaDevices ||
     typeof navigator.mediaDevices.getUserMedia !== 'function'
   ) {
-    throw new PcmCaptureError('no-media-devices', 'Microphone is not available in this environment');
+    throw new VoiceSessionError(
+      'mic-unavailable',
+      'Microphone is not available in this environment',
+      { retryable: false },
+    );
   }
 
   const AudioContextCtor =
     options.audioContextCtor ??
     (typeof window !== 'undefined' ? window.AudioContext : undefined);
   if (typeof AudioContextCtor !== 'function') {
-    throw new PcmCaptureError('no-audio-context', 'AudioContext is not available in this environment');
+    throw new VoiceSessionError(
+      'no-audio-context',
+      'AudioContext is not available in this environment',
+      { retryable: false },
+    );
   }
 
   // Constraints: ask for mono 16kHz. The OS may not honor
@@ -199,13 +218,14 @@ export async function startPcmCapture(
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
   } catch (e) {
-    // Re-throw as a typed PcmCaptureError. The hook
-    // translates the `name` to a user-facing message,
-    // mirroring the M2a error mapping.
+    // Re-throw as a typed VoiceSessionError. The wispr
+    // session factory translates the `code` to a
+    // user-facing message via `voiceSessionErrorMessage`.
     const name = e instanceof Error ? e.name : 'Error';
-    throw new PcmCaptureError(
+    throw new VoiceSessionError(
       mapGetUserMediaErrorToCode(name),
       e instanceof Error ? e.message : String(e),
+      { cause: e, retryable: true },
     );
   }
 
@@ -217,7 +237,11 @@ export async function startPcmCapture(
   const track = stream.getAudioTracks()[0];
   if (!track) {
     for (const t of stream.getTracks()) t.stop();
-    throw new PcmCaptureError('no-track', 'No audio track in the stream');
+    throw new VoiceSessionError(
+      'no-input-device',
+      'No audio track in the stream',
+      { retryable: false },
+    );
   }
   const settings = track.getSettings();
   const actualRate = settings.sampleRate ?? WISPR_SAMPLE_RATE_HZ;
@@ -228,9 +252,10 @@ export async function startPcmCapture(
     // is rare and usually means the OS doesn't have a
     // 16kHz capture path (some virtual audio devices).
     for (const t of stream.getTracks()) t.stop();
-    throw new PcmCaptureError(
+    throw new VoiceSessionError(
       'sample-rate-mismatch',
       `Microphone delivers ${actualRate} Hz; Wispr requires ${WISPR_SAMPLE_RATE_HZ} Hz. Try a different input device.`,
+      { retryable: false },
     );
   }
 
@@ -353,69 +378,22 @@ export async function startPcmCapture(
 
 /**
  * Map a `getUserMedia` rejection name to a stable
- * `PcmCaptureErrorCode`. Mirrors the M2a
- * `errorMessageForCode` mapping; keeping the names
- * stable across the two providers means the hook can
- * use the same user-facing message for both.
+ * `VoiceSessionErrorCode`. The codes used here are part
+ * of the 24-code M3 union (see `src/voice/session.ts`).
  */
-function mapGetUserMediaErrorToCode(name: string): PcmCaptureErrorCode {
+function mapGetUserMediaErrorToCode(name: string): VoiceSessionErrorCode {
   switch (name) {
     case 'NotAllowedError':
     case 'SecurityError':
       return 'permission-denied';
     case 'NotFoundError':
     case 'OverconstrainedError':
-      return 'no-device';
+      return 'no-input-device';
     case 'NotReadableError':
-      return 'device-busy';
+      return 'mic-unavailable';
     case 'AbortError':
       return 'aborted';
     default:
       return 'unknown';
-  }
-}
-
-/** Stable error codes the hook can switch on. */
-export type PcmCaptureErrorCode =
-  | 'no-media-devices'
-  | 'no-audio-context'
-  | 'permission-denied'
-  | 'no-device'
-  | 'device-busy'
-  | 'aborted'
-  | 'no-track'
-  | 'sample-rate-mismatch'
-  | 'unknown';
-
-export class PcmCaptureError extends Error {
-  readonly code: PcmCaptureErrorCode;
-  constructor(code: PcmCaptureErrorCode, message: string) {
-    super(message);
-    this.name = 'PcmCaptureError';
-    this.code = code;
-  }
-}
-
-/** User-facing message for a PcmCaptureError. Pure for tests. */
-export function pcmCaptureErrorMessage(code: PcmCaptureErrorCode): string {
-  switch (code) {
-    case 'no-media-devices':
-    case 'no-audio-context':
-      return 'Microphone is not available in this environment';
-    case 'permission-denied':
-      return 'Microphone access was blocked. Enable it in the OS privacy settings and try again.';
-    case 'no-device':
-      return 'No microphone was found. Plug one in and try again.';
-    case 'device-busy':
-      return 'The microphone is busy. Close other apps using the mic and try again.';
-    case 'aborted':
-      return 'Recording was interrupted. Try again.';
-    case 'no-track':
-      return 'The audio stream had no tracks. Try again.';
-    case 'sample-rate-mismatch':
-      return 'Microphone sample rate is not 16 kHz. Try a different input device.';
-    case 'unknown':
-    default:
-      return 'Microphone error';
   }
 }

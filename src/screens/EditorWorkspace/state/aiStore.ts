@@ -100,6 +100,7 @@ import {
   useVoicePreferencesStore,
   setupVoicePreferencesPersistence,
 } from '@/shared/state/voicePreferencesStore';
+import { useVoiceCapabilitiesStore } from '@/shared/state/voiceCapabilitiesStore';
 import { listTools, getTool } from './toolRegistry';
 
 /**
@@ -2435,6 +2436,26 @@ setupToolDecisionLogPersistence();
 // pattern.
 useVoicePreferencesStore.getState().hydrate();
 setupVoicePreferencesPersistence();
+
+// M2c mobile: hydrate the voice capabilities
+// store. The Command Palette's `isEnabled`
+// predicates need synchronous access to the
+// platform's STT capability flags (e.g. to
+// grey-out "Use browser speech engine" on
+// Linux where WebKitGTK doesn't ship
+// `SpeechRecognition`). We fire-and-forget the
+// hydration promise — the store's `capabilities`
+// field starts as `null` and flips to populated
+// once the IPC resolves. The Command Palette's
+// predicates use `?.webSpeech` so the brief
+// `null` window is harmless (the row stays
+// disabled until hydration completes). The IPC
+// itself is one round-trip and the result is
+// process-lifetime-cached in `@/voice/capabilities`,
+// so the cost is one call at startup. See
+// Decision #46 (`docs/decisions/0046-m2c-mobile-shim.md`)
+// for the full design.
+void useVoiceCapabilitiesStore.getState().hydrate();
 
 // --- Selectors ------------------------------------------------------------
 

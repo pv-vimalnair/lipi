@@ -22,6 +22,15 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
+# Phase I: `app://lipi.open?path=...` deep-link scheme. The plugin
+# emits a `deep-link://new-url` event when the OS hands the app a URL
+# (cold start OR warm), and exposes `getCurrent()` for the launch-time
+# URL (which fires before the event in some platform paths). The JS side
+# (`src/shared/hooks/useDeepLinkRouting.ts`) subscribes to the event and
+# calls `openWorkspace(path)` after validating the path against the
+# user's home / Documents / Desktop. The scheme is registered under
+# `plugins.deep-link.desktop.schemes` in `tauri.conf.json`.
+tauri-plugin-deep-link = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -104,6 +113,37 @@ keyring = { version = "3.6", default-features = false, features = ["windows-nati
 url = "2"
 # http (Phase 5c — synthetic response builder for unit tests).
 http = "1"
+# M2c (on-device STT — whisper.cpp + cpal). See HANDOFF §9.7.
+#
+# Build strategy: in the dev / CI sandbox we don't have
+# libclang.dll available, so a real `whisper-rs-sys` build
+# script can't run (it uses bindgen to generate the C FFI
+# bindings). The full cpal + whisper-rs stack is therefore
+# gated behind the `m2c-native` Cargo feature, which is OFF
+# by default. With `m2c-native` OFF, the M2c Rust code
+# compiles to a deterministic stub (see `src-tauri/src/stt.rs`
+# and `src-tauri/src/stt_capture.rs`) — same interface, same
+# IPC commands, just no live inference. Flipping the feature
+# on a machine with libclang + cmake gives you the real path.
+#
+# This is the same pattern `keyring` uses (its
+# `mock` store is always compiled in; the production backend
+# is per-platform feature-gated). We document the trade-off
+# in HANDOFF §9.7.
+#
+# cpal is a hard dep because its types (`Stream`, `Sample`,
+# `Host`) are referenced from the stub's interface signature
+# — even when `m2c-native` is off, we want the type-level
+# shape to match what the real implementation will use.
+cpal = "0.15"
+# hound: WAV reader used in unit tests regardless of the
+# feature flag (the stub tests verify the audio path's
+# shape, not the inference).
+hound = "3"
+# whisper-rs is gated. The m2c-native feature pulls it in
+# along with the C++ build via whisper-rs-sys (which needs
+# libclang + cmake on the build machine).
+whisper-rs = { version = "0.14", default-features = false, optional = true }
 
 # Platform-specific deps are added per phase:
 # D2 (editor): notify for FS watcher
@@ -127,6 +167,24 @@ tempfile = "3"
 # and toggles between the Vite dev server and a bundled asset protocol.
 # Don't declare it manually.
 default = []
+# M2c hardware acceleration for whisper-rs. Off by default —
+# the dev build does plain CPU inference (works in CI sandboxes
+# without a GPU). Production builds opt in per target:
+#   - macOS: `cargo build --features metal`     (Apple Silicon + Intel)
+#   - Win + NVIDIA: `cargo build --features cuda`
+#   - Linux + Win: `cargo build --features vulkan`
+# We deliberately expose one feature per backend rather than
+# letting cargo auto-detect — the binary shipped to users is
+# exactly one variant, and the CI matrix builds each one in
+# isolation.
+# M2c umbrella: turn on the native whisper-rs + cpal capture
+# path. Off by default — the dev build uses the stub. To ship
+# a real on-device STT build: `cargo build --features m2c-native`
+# (or one of `metal` / `cuda` / `vulkan` for hardware-accel).
+m2c-native = ["dep:whisper-rs"]
+metal = ["m2c-native", "whisper-rs/metal"]
+cuda = ["m2c-native", "whisper-rs/cuda"]
+vulkan = ["m2c-native", "whisper-rs/vulkan"]
 # Uncomment when we add a plugin in the next phase:
 # notify-fs = []
 

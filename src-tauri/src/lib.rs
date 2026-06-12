@@ -123,6 +123,8 @@ pub use voice_platform::get_capabilities as voice_platform_get_capabilities_rs;
 // for the full design and the unit tests.
 mod templates;
 pub use templates::{apply as templates_apply, ApplyResult as TemplatesApplyResult, TemplateError as TemplatesError};
+mod native_dictation;
+pub use native_dictation::get_native_dictation_contract;
 
 #[derive(Debug, Serialize)]
 struct AppVersion {
@@ -1463,6 +1465,7 @@ pub fn run() {
             get_user_dirs,
             apply_template,
             haptic,
+            get_native_dictation_contract,
         ])
         .manage(Arc::new(TerminalState::new()))
         .menu(|app| menu::build_main_menu(app))

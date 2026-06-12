@@ -240,6 +240,23 @@
   margin: var(--space-8) 0 var(--space-3) 0;
 }
 
+/* M2c: sub-section heading for the
+   "Or use on-device speech-to-text" divider
+   inside the Voice section. Smaller than
+   `.sectionHeading` (no top-of-section
+   weight) but distinct from the card
+   title. Uses an uppercase + letter-spacing
+   treatment so it reads as a label, not a
+   title. */
+.subSectionHeading {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: var(--space-6) 0 var(--space-2) 0;
+}
+
 .sectionLede {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);

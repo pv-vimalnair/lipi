@@ -79,6 +79,7 @@ import {
   useVoicePreferencesStore,
   voicePreferencesSelectors,
 } from '@/shared/state/voicePreferencesStore';
+import type { VoiceProviderId } from '@/voice';
 import styles from './VoiceButton.module.css';
 
 /** Shape of a `useVoiceCapture()` return value that
@@ -105,12 +106,17 @@ export interface VoiceButtonProps {
    * `useVoicePreferencesStore` (which the Command
    * Palette can flip). M2b defaults to 'wispr' (the
    * headline path). M2a's 'stub' is kept as a debug
-   * fallback. 'ondevice' is reserved for M2c.
+   * fallback. 'ondevice' is the M2c desktop Whisper
+   * path (Rust cpal+whisper). 'webSpeech' is the M2c
+   * mobile shim (the WebView's
+   * `window.SpeechRecognition`). 'nativeDictation' is
+   * the iOS Swift / Android Kotlin plugin stub (M3
+   * factory exists; plugin land later).
    *
    * Ignored in controlled mode — the parent owns the
    * provider choice.
    */
-  provider?: 'stub' | 'wispr' | 'ondevice';
+  provider?: VoiceProviderId;
   /**
    * M5: when provided, the button is purely
    * presentational. It renders `controlledState.status`

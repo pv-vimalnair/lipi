@@ -5,3 +5,4 @@ export * from './useWorkspaceSync';
 export * from './useFirstRunOnboarding';
 export * from './useMenuEvents';
 export * from './useVoiceCapture';
+export * from './useDeepLinkRouting';

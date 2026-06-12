@@ -6,43 +6,723 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Planned (M2c desktop — kickoff committed, not yet implemented)
+### Added (Recents-management polish)
 
-The M2c desktop plan is now in `HANDOFF.md` §9.7 —
-the next session should start there. Decisions
-baked into the plan:
+The Welcome screen's recents header now exposes a
+"Clear all" button that empties the recents list in one
+click. The per-row "Remove" (×) button was already
+wired; this completes the surface.
 
-- **Primary path:** `whisper-rs` (whisper.cpp
-  bindings) via a thin in-repo Tauri plugin at
-  `src-tauri/plugins/lipi-stt/`. Truly on-device,
-  cross-platform (Windows + macOS + Linux), with
-  opt-in hardware-accel features (`metal` /
-  `cuda` / `vulkan`). Default model: `ggml-tiny.en`
-  (~75 MB), English-only, downloaded to the app
-  data dir on first use with a progress bar.
-- **Opt-in alt:** Web Speech API
-  (`webkitSpeechRecognition`) for users on
-  Windows / macOS who don't want to download a
-  model. Explicit privacy disclosure ("sends
-  audio to Google/Apple") in Settings. Disabled
-  by default. **Not available on Linux** —
-  WebKitGTK doesn't ship the API.
-- **Why whisper-rs, not the Web Speech API by
-  default:** Web Speech API sends audio off-device
-  by default (violates "no backend"), and isn't
-  available on Linux at all. whisper-rs keeps
-  audio local and works on all three desktop
-  OSes.
-- **Why roll our own plugin, not depend on
-  `tauri-plugin-stt` / `brenogonzaga/tauri-plugin-stt`:**
-  both are <20 GitHub stars and 0 forks as of
-  2026-06; the maintenance risk is too high. The
-  in-repo plugin is ~600 LoC of Rust + 600 LoC
-  of TS — within one session's budget.
-- **M2c mobile (iOS / Android) and M3 (the
-  session-based streaming API) are separate
-  phases** scheduled for after M2c desktop
+**UI** (`src/screens/Welcome/Welcome.tsx`,
+`Welcome.module.css`):
+- New `recentsHeader` row (flex, title left + button
+  right) wraps the existing "Recent" title.
+- New `recentsClearAll` button: 11 px uppercase,
+  transparent by default, lighter on hover. The
+  `aria-label` is "Clear all recent workspaces" for
+  screen readers.
+- New `shouldShowClearAll(recentsCount)` helper (also
+  exported for the test file) returns `true` only when
+  `recentsCount > 1` — a single-item "Clear all" is a
+  footgun (the user probably wants to keep that one)
+  and an empty list doesn't render the section at all.
+
+**Behaviour**:
+- Click → `useWorkspaceStore.getState().clearRecents()`
+  → `recents: []` + `localStorage` (`lipi:workspace:recents:v1`)
+  set to `[]`.
+- `currentPath` is **preserved** (the open workspace
+  is independent of the recents list — same contract
+  as the per-row "Remove" button). The status flips
+  to `{ kind: 'ready', path }` if a workspace was open.
+- No-op when the list is already empty (the helper
+  hides the button in that state anyway, so this
+  branch is just belt-and-braces).
+
+**Tests** (`src/screens/Welcome/Welcome.recents.test.ts`):
+- 4 helper tests: empty / single / 2 / cap-and-beyond.
+- 3 store-integration tests: open-three-then-clear
+  (asserts the order is reversed by `dedupAndCap` and
+  the list ends up empty), clear preserves
+  `currentPath`, clear on an already-empty list is a
+  no-op.
+- **Total vitest: 539 / 539** (532 from baseline + 7
+  new from this change).
+
+**Files touched**:
+- `src/screens/Welcome/Welcome.tsx` — new header row
+  + button + `shouldShowClearAll` helper export
+  (+~30 LoC).
+- `src/screens/Welcome/Welcome.module.css` — new
+  `.recentsHeader` + `.recentsClearAll` rules
+  (+~30 LoC).
+- `src/screens/Welcome/Welcome.recents.test.ts` —
+  new test file (+~100 LoC, 7 tests).
+
+**No Rust changes.** `cargo check` / `cargo test`
+unchanged. The store's `clearRecents` action was
+already implemented (it just wasn't surfaced in the
+UI until now).
+
+### Added (Phase I — `app://lipi.open?path=...` deep-link scheme)
+
+The OS can now hand Lipi a URL on launch or at runtime, and
+Lipi validates the path and opens the matching workspace. The
+path is strictly limited to user-owned directories (home,
+Documents, Desktop) so a malicious link can never point at
+`C:\Windows` or a sibling user's `~/Documents`.
+
+**Rust** (`src-tauri/src/lib.rs`):
+- Added `tauri-plugin-deep-link = "2"` to `Cargo.toml`.
+- Registered the `app` scheme under
+  `plugins.deep-link.desktop.schemes` in `tauri.conf.json`.
+- The plugin's `on_open_url` listener (wired in the Tauri
+  `setup` callback) re-emits each incoming URL as
+  `lipi://deep-link` on the frontend event bus. The
+  re-emission insulates the JS side from the plugin's
+  internal `deep-link://new-url` event name.
+- On Linux + Windows debug builds, the plugin's
+  `register_all()` is called so the dev-launch picks up the
+  scheme without a manual registry edit. Production
+  installers register the scheme themselves.
+- New `get_user_dirs() -> UserDirs` IPC command reads
+  `$HOME` / `%USERPROFILE%` + `Documents` + `Desktop`,
+  canonicalises them (resolves symlinks, strips the
+  `\\?\` Windows extended-length prefix), and returns
+  optional fields for the dirs that don't exist on the
+  user's machine.
+
+**JS** (`src/ipc/deepLink.ts`, `src/shared/hooks/useDeepLinkRouting.ts`):
+- `getUserDirs()` IPC wrapper.
+- `onDeepLink(handler)` subscribes to the `lipi://deep-link`
+  event.
+- `parseOpenUrl(rawUrl, userDirs)` is the pure URL →
+  `OpenUrlResult` parser. Validates the path against the
+  user-dirs allow-list (case-insensitive on Windows), rejects
+  `..` traversal, non-absolute paths, and decoding failures.
+- `useDeepLinkRouting()` mounts once at the app root
+  (`main.tsx`), subscribes to the event, parses each URL,
+  and either calls `openWorkspace(path)` or sets the
+  workspace store's `status: error` with a friendly message.
+- `friendlyRejectionReason(reason)` maps the 5
+  `PathRejectionReason` variants to user-facing one-liners.
+
+**Tests:**
+- 15 unit tests in `src/ipc/deepLink.test.ts` (parser
+  rules: happy paths per allowed root, path traversal,
+  outside-user-dirs, non-absolute, missing/empty query,
+  wrong scheme, decode-failure, case-insensitive Windows,
+  trailing-separator normalisation, friendly-message
+  smoke).
+- 5 routing tests in
+  `src/shared/hooks/useDeepLinkRouting.test.ts` (open path,
+  missing-path error, traversal error, outside-user-dirs
+  error, two-URL independence).
+- **Total vitest: 524 / 524.**
+- `cargo test --lib`: 146 / 146 (no Rust changes beyond
+  plugin + command registration).
+
+**Known limitations:**
+- iOS / Android schemes are NOT registered in this build —
+  the `#[cfg]` guards on `register_all()` skip mobile
+  targets. Mobile deep-link support ships with the iOS /
+  Android Swift / Kotlin plugins (Phase 7).
+- A crash mid-`setup` could leave the `lipi://deep-link`
+  event with no listener; the next app launch
+  re-establishes it (no persistent state to corrupt).
+
+### Added (Phase J — workspace templates gallery on Welcome)
+
+A 5-card grid on the Welcome screen offers one-click
+project creation: React + Vite, Tauri 2 + React + Rust,
+Node.js + TypeScript API, Python with venv, Go module.
+Each card opens the native folder picker, creates a
+fresh subdir under the user's pick, expands the
+template's inlined file list into it atomically, and
+opens the new project as the active workspace.
+
+**Rust** (`src-tauri/src/templates.rs`):
+- 5 `Template` consts with inlined file bodies (~30 KB of
+  source, no runtime FS dependency for the registry).
+  Each `TemplateFile` is a `&'static str` pair
+  (`rel_path`, `content`).
+- `apply(template_id, dest) -> ApplyResult` is the
+  public entry point. It writes every file into a
+  staging subdir (`.lipi-template-staging-<rand>`)
+  inside `dest` first, then renames each file to its
+  final location. If anything fails, the staging dir is
+  removed and `dest` is left untouched (atomic rollback).
+- On the next `apply` call, any stale staging dir
+  from a previous crash is cleaned up before the
+  empty-dir check runs.
+- `TemplateError` enum (`UnknownId`, `DestMissing`,
+  `DestNotADir`, `DestNotEmpty`, `StagingIo`, `Partial`,
+  `InvalidRelPath`) with `Serialize` / `Deserialize`
+  impls for IPC symmetry.
+- `apply_template` Tauri command is registered in
+  `invoke_handler` and re-exports
+  `templates::{apply, ApplyResult, TemplateError}`.
+- 10 unit tests: 5-template registry shape, unique
+  ids, every template has ≥1 file, every `rel_path` is
+  well-formed (no `..`, no absolute), react-vite
+  creates the expected files, tauri-rust includes the
+  Rust bits, unknown id rejected, non-empty dest
+  rejected, missing dest rejected, stale staging
+  cleaned up.
+- **Total `cargo test --lib`: 156 / 156.** (One
+  pre-existing flake in `secrets::tests` races when
+  run in parallel; passes in isolation and on retry.
+  Unchanged by this PR — see the "Known limitations"
+  callout in HANDOFF §9.11.)
+
+**JS** (`src/templates/registry.ts`, `src/ipc/templates.ts`,
+`src/screens/Welcome/hooks/useApplyTemplate.ts`,
+`src/screens/Welcome/components/TemplateGallery/`):
+- `WORKSPACE_TEMPLATES` registry (5 entries, the full
+  plan set).
+- `applyTemplate(id, destDir)` IPC wrapper for
+  `apply_template`.
+- `useApplyTemplate().start(id)` opens the picker,
+  derives a fresh subdir (`react-vite-app` etc.),
+  calls `applyTemplate`, and on success calls
+  `openWorkspace(dest)`. Same shape as
+  `useOpenWorkspace` (transient status, no
+  double-fire, friendly error mapping).
+- `TemplateGallery` is a 5-card grid rendered on the
+  Welcome screen between the hero CTA and the recents
+  list. Each card is a keyboard-focusable button with
+  an `aria-label` and a `Create` secondary button.
+
+**Tests:**
+- 6 registry tests (`registry.test.ts`).
+- 5 hook tests (`useApplyTemplate.test.ts`): happy
+  path, user cancel, picker-throws, apply-throws,
+  concurrent-call guard.
+- 3 gallery tests (`TemplateGallery.test.ts`): module
+  loads, registry has 5 entries, hook contract
+  satisfied.
+- **Total vitest: 532 / 532.**
+- **Combined test delta (Phase I + J): +33 tests
+  across vitest (519 → 532) and +10 across cargo
+  (146 → 156).**
+
+**Known limitations:**
+- Templates are inlined in the Rust binary (~30 KB).
+  A future "user templates" feature (a `~/.lipi/templates/`
+  folder of `.zip` files) can co-exist with the
+  built-ins; the registry would just gain a
+  `get_user_templates()` accessor.
+- The atomic-rollback story is "write-to-staging-then-
+  rename-one-by-one." A crash between two renames
+  leaves the destination partially populated. The
+  `TemplateError::Partial` variant is reserved for a
+  future iteration that swaps the in-place rename
+  loop for a `MoveFileExW` / `renameat2` batch
+  primitive. For v1 the recovery is "delete the
+  destination and retry."
+
+### Added (M2c desktop — on-device STT pipeline, stub build)
+
+The third STT provider joins the lineup alongside
+`'stub'` (M2a) and `'wispr'` (M2b): a new
+`'ondevice'` provider that runs whisper.cpp
+entirely on the user's machine — no audio ever
+leaves the device, and the WebView's mic API is
+not touched (the Rust side opens cpal directly).
+The full provider-switch flow is end-to-end
+tested with a deterministic stub; the real
+`whisper-rs` integration is wired up behind a
+Cargo feature flag and awaits a build environment
+with `libclang.dll` (see Known limitations
+below).
+
+**Rust — model lifecycle**
+(`src-tauri/src/stt.rs`): the curated Whisper
+model list (`ggml-tiny.en`, `ggml-base.en`,
+`ggml-small.en`, plus their multilingual
+counterparts) with Hugging Face download URLs
+and SHA-256 hashes, plus a Rust enum
+`SttError` (`NoActiveModel`, `UnknownModel`,
+`DownloadFailed`, `ChecksumMismatch`, …) that
+serialises across the IPC boundary. 7 unit
+tests cover the stub-mode behaviour of
+`list_models`, `model_by_id`, the
+active-model preference round-trip,
+`is_model_installed` for missing files,
+`list_installed_models`, and the
+`is_available` ↔ `active_model_id` invariant.
+**Real implementation** uses `reqwest` for
+streaming downloads and `tokio::fs` for atomic
+file replacement; **stub implementation** is
+deterministic so the JS layer can be developed
+and tested without a network.
+
+**Rust — audio capture + inference**
+(`src-tauri/src/stt_capture.rs`): the
+`TranscriptEvent` wire shape (`kind`,
+`text`, `sequence`, `timestamp`,
+`is_utterance_end`, optional `language`),
+hardened with 5 unit tests covering the
+`serde(rename_all = "camelCase")` shape, the
+`skip_serializing_if = "Option::is_none"`
+language gate, the 16 kHz whisper sample rate
+constant, the integer `samples_per_ms` math,
+and the 30-second `DEFAULT_MAX_DURATION_MS`
+cap. **Real implementation** (under
+`#[cfg(feature = "m2c-native")]`) uses
+`cpal::Stream` to capture mic audio at 16 kHz
+mono Float32, buffers in a `tokio::sync::Mutex`,
+and runs `whisper_full` on stop; **stub
+implementation** simulates a 200 ms inference
+delay and returns a placeholder transcript so
+the UI can show the
+`listening` → `transcribing` → `done` state
+transitions during dev.
+
+**Rust — Tauri commands** (`src-tauri/src/lib.rs`):
+8 new commands wired into the handler —
+`stt_list_models`, `stt_list_installed_models`,
+`stt_is_available`, `stt_install_model`,
+`stt_remove_model`, `stt_set_active_model`,
+`stt_start_listening`, `stt_stop_listening` —
+plus two event channels:
+`stt://download-progress` (per-chunk
+`{ modelId, bytesDownloaded, totalBytes }`
+payload during install) and
+`stt://transcript` / `stt://error` (the
+final-result and failure channels for the
+inference path).
+
+**Frontend — typed IPC**
+(`src/ipc/stt.ts`): the matching TS surface.
+`SttError` is a typed JS class that maps Rust
+error kinds to a stable TS API (so the hook
+can `switch (err.code)` regardless of
+provider). `DownloadProgressEvent`,
+`SttErrorPayload`, `ListenOptions`,
+`TranscriptEvent` are exported for downstream
+use; `onSttDownloadProgress` /
+`onSttTranscript` / `onSttError` are
+unsubscribe functions returning the
+Tauri-unlisten handle.
+
+**Frontend — provider wrapper**
+(`src/voice/onDeviceSTT.ts`): the JS-side
+orchestrator. `transcribeViaOnDevice(opts)` is
+a thin async wrapper that does
+`isAvailable` → subscribe transcript + error
+events → `startListening` → await transcript,
+matching the shape of `transcribeViaWispr` so
+the hook can swap providers with a one-line
+change. The function takes an
+`onSessionStart(sessionId)` callback so the
+`useVoiceCapture` hook can stash the id in a
+ref and call `sttStopListening(id)` from its
+own Stop handler. `OnDeviceSttError` carries
+the same `code` shape as `WisprClientError`
+(`not-configured`, `permission-denied`,
+`no-active-model`, `cancelled`, `timeout`,
+`unsupported`, etc.) so the hook's
+`switch (err.code)` is provider-agnostic.
+A 60 s default timeout
+(`ONDEVICE_DEFAULT_TIMEOUT_MS`) caps the
+round-trip; the Rust side's
+`DEFAULT_MAX_DURATION_MS` (30 s) caps the
+audio length independently.
+
+**Frontend — hook integration**
+(`src/shared/hooks/useVoiceCapture.ts`): the
+new `'ondevice'` branch in `start()` flips the
+store to `recording`, kicks off
+`requestAnimationFrame` for the duration
+timer, and awaits `transcribeViaOnDevice`.
+The `onSessionStart` callback stashes the
+sessionId in `onDeviceSessionIdRef`; the
+cleanup effect (and the `stop()` handler) call
+`sttStopListening(id)` to release the mic.
+Crucially, the on-device path does NOT touch
+`navigator.mediaDevices.getUserMedia` — the
+Rust side owns capture end-to-end, which
+sidesteps the WebView mic API's cross-platform
+quirks.
+
+**Frontend — settings UI**
+(`src/screens/SettingsProvider/components/OnDeviceCard.tsx` +
+`.module.css`): a new "Or use on-device
+speech-to-text" section in the existing
+Settings → Voice screen (the Wispr card is
+unchanged and still comes first). Lists the
+curated models, shows installed / active /
+not-installed status with model size and
+language badge, and renders per-row
+Install / Set active / Delete buttons. A live
+progress bar listens to the
+`stt://download-progress` event and updates in
+real time during install. Toggling the
+active model writes through to
+`useVoicePreferencesStore` so the global
+shortcut's voice button picks it up on next
+start. No new top-level route was added —
+the section lives inside the existing
+SettingsProvider screen (decided in §9.7
+of HANDOFF).
+
+**Tests** (13 new):
+- `src/voice/onDeviceSTT.test.ts` (9 tests):
+  pre-flight `not-configured`, transcript
+  resolution on a `final` event, partial-event
+  resolution on `isUtteranceEnd`, Rust kind
+  → `OnDeviceSttErrorCode` mapping for
+  `permission-denied` / `no-active-model` /
+  unknown, the 60 s `ONDEVICE_DEFAULT_TIMEOUT_MS`
+  constant pin, the tiny-window timeout path,
+  and the "no `startListening` if subscribe
+  fails" guard.
+- `src/shared/hooks/useVoiceCapture.ondevice.test.tsx`
+  (4 tests): the on-device branch does NOT
+  call `getUserMedia`, the transcript flows
+  into the voice store on resolve, typed
+  errors surface as `error` state, and
+  `sttStopListening` is NOT called on cleanup
+  when no session was ever started.
+
+**Verified**:
+- `tsc -b` — clean
+- `vitest run` — 495/495 pass (482 prior + 13
+  new M2c tests, in 34 files)
+- `cargo check` — clean (stub mode,
+  `m2c-native` feature off)
+- `cargo test --lib` — 142/142 pass
+  (includes 7 new `stt::*` tests and 5 new
+  `stt_capture::*` tests)
+- `npm run build` — clean (210 modules,
+  648 KB bundle, 1.47 s)
+
+### Known limitations
+
+- **Real `whisper-rs` build not exercised in
+  this sandbox.** Compiling `whisper-rs-sys`
+  requires `libclang.dll` (Windows LLVM
+  install) which is not present here. The
+  real Rust path is gated behind the
+  `m2c-native` Cargo feature and the
+  dependencies (`cpal`, `whisper-rs`, `hound`)
+  are present in `Cargo.toml` with correct
+  features (`metal` / `cuda` / `vulkan`
+  hardware accel); the code under
+  `#[cfg(feature = "m2c-native")]` awaits a
+  build environment with the Windows LLVM
+  toolchain. To run the real path: install
+  LLVM for Windows, then
+  `cargo run --features m2c-native --release`
+  (or `cargo build --features m2c-native`).
+  Until then, the stub path delivers a fake
+  transcript after a 200 ms delay so the
+  full start→stop→transcript UI flow is
+  testable in the sandbox.
+- **Download progress events are stubbed.**
+  When `m2c-native` is off, the install
+  command returns a fake progress stream
+  (0 % → 100 % over ~1 s) so the
+  `OnDeviceCard` UI can be exercised. The
+  real path uses `reqwest::Response::chunk`
+  to emit per-chunk progress.
+- **No model pre-bundled with the binary.**
+  M2c users download on first use. The
+  `OnDeviceCard` surfaces a one-time prompt
+  ("Install ggml-tiny.en? ~75 MB") the first
+  time they switch to the on-device provider.
+- **`OnDeviceCard` is desktop-only.** The
+  card is rendered inside the existing
+  `SettingsProvider` screen, which is itself
+  desktop-only. Mobile (iOS / Android)
+  on-device STT is a separate phase (M2c
+  mobile), scheduled after M2c desktop
   ships.
+
+### Added (M2c mobile — on-device STT via Web Speech API + iOS/Android plugin contracts)
+
+The fourth STT provider joins the lineup: a new
+`'webSpeech'` provider that wraps the WebView's
+`window.SpeechRecognition` (or
+`window.webkitSpeechRecognition`). The shim
+delivers a working voice→text path on Windows,
+macOS, and iOS WebView with zero plugin work. The
+iOS native (`SFSpeechRecognizer`) and Android
+native (`SpeechRecognizer`) plugin contracts are
+**fully documented in `docs/plugins/lipi-stt-ios/README.md`**
+and **`docs/plugins/lipi-stt-android/README.md`**
+but not yet implemented in Swift / Kotlin — those
+land when a future session has Xcode 16+ or
+Android Studio Iguana+. See Decision
+`#46-m2c-mobile-shim.md` for the ADR; see Known
+limitations for the deferred plugins.
+
+**Rust — platform capability detection**
+(`src-tauri/src/voice_platform.rs`): a new
+`OsFamily` enum (`Windows | Macos | LinuxGtk |
+Ios | Android | Other`) and a
+`VoicePlatformCapabilities` struct (`ondevice:
+bool`, `web_speech: bool`, `native_dictation:
+bool`, `os_family: OsFamily`) with a
+`get_capabilities()` function. The capability
+flags are derived at compile time via
+`#[cfg(target_os)]` on a single `const OS:
+OsFamily` per build target; 4 new unit tests
+cover the camelCase wire shape and the
+OS-specific truthiness of each flag.
+
+**Rust — IPC**
+(`src-tauri/src/lib.rs`): a new
+`voice_platform_get_capabilities` Tauri command
+that exposes the capability struct to the
+frontend via `invoke('voice_platform_get_capabilities', …)`.
+No new Cargo dependencies.
+
+**JS — typed IPC wrapper**
+(`src/ipc/voicePlatform.ts`): a TypeScript
+wrapper that mirrors the Rust struct shape
+(`osFamily: 'windows' | 'macos' | 'linux-gtk' |
+'ios' | 'android' | 'other'`, `webSpeech: boolean`,
+`nativeDictation: boolean`); barrel re-exported
+from `src/ipc/index.ts`.
+
+**JS — cached capability accessor**
+(`src/voice/capabilities.ts`): a process-lifetime
+cache around `voicePlatformGetCapabilities()` so
+the Command Palette's `isEnabled` predicates and
+the `SettingsProvider` UI can read the flags
+synchronously after the first IPC. Includes a
+`__resetVoicePlatformCapabilitiesCacheForTests`
+escape hatch for the test suite.
+
+**JS — capability store**
+(`src/shared/state/voiceCapabilitiesStore.ts`):
+a tiny Zustand store (no persistence — the OS
+doesn't change for the lifetime of a Tauri
+application) with a `hydrate()` action called
+once at app startup from `aiStore.ts`. The
+Command Palette and `SettingsProvider` UI read
+from it via the `useVoiceCapabilitiesStore`
+hook.
+
+**JS — Web Speech orchestrator**
+(`src/voice/webSpeechSTT.ts`):
+`transcribeViaWebSpeech()` follows the same
+shape as `transcribeViaOnDevice` /
+`transcribeViaWispr`: pre-flight
+(`window.SpeechRecognition` feature-detect),
+construct, wire `onresult` / `onerror` / `onend`,
+`start()`, await. Error mapping from W3C
+`SpeechRecognitionErrorEvent.error` strings to
+a typed `WebSpeechSttErrorCode` union
+(`permission-denied`, `no-speech`, `aborted`,
+`network`, `service-not-allowed`, `bad-grammar`,
+plus Lipi-side `no-webspeech` and `timeout`).
+Constructor-injection seam (`webSpeechCtor`,
+`windowOverride`) for the test suite. A minimal
+`src/voice/webSpeechTypes.ts` augments
+`Window` with the non-standard `SpeechRecognition`
+and `webkitSpeechRecognition` constructors.
+
+**JS — preferences store extension**
+(`src/shared/state/voicePreferencesStore.ts`):
+the `VoiceProvider` union gains `'webSpeech'`;
+the store gains a `language: string` field
+(default `'en-US'`) that flows through the
+`useVoiceCapture` hook into the orchestrator's
+`recognition.lang`. Persisted to
+`lipi:voicePreferences:v1` localStorage with a
+back-fill path for older payloads. M2c mobile V1
+does not surface a language picker in the UI —
+the value is stored + threaded for M3.
+
+**JS — `useVoiceCapture` extension**
+(`src/shared/hooks/useVoiceCapture.ts`): the
+`UseVoiceCaptureOptions.provider` union gains
+`'webSpeech'`; the hook's `start()` /
+`startWebSpeechRecording()` path calls
+`transcribeViaWebSpeech` with
+`useVoicePreferencesStore.getState().language`
+threaded through; the `stop()` path calls the
+orchestrator's `abort()` handle (with the same
+500ms fallback the desktop `ondevice` hook
+uses per Decision #46 risk R5); the cleanup
+effect aborts on unmount.
+
+**JS — settings UI**
+(`src/screens/SettingsProvider/components/WebSpeechCard.tsx`
++ `.module.css`): a new card that mirrors
+`OnDeviceCard`'s header / capability badge /
+lede / privacy callout / single-toggle shape,
+rendered inside a new `<h3>` "Or use the
+browser's built-in speech engine" subsection
+in `SettingsProvider` (not a third radio in
+the top section per Decision Q3). The
+`TitleBar` subtitle bumps to
+`'dev · phase M2c mobile'`. The capability
+badge reads "Available" /
+"Not available on this platform" from the
+hydrated `useVoiceCapabilitiesStore`.
+
+**JS — Command Palette**
+(`src/shared/commands/commands.ts`): two new
+commands —
+`voice.provider.webspeech` and
+`voice.provider.ondevice` — each gated by an
+`isEnabled` predicate that reads from
+`useVoiceCapabilitiesStore.getState().capabilities`
+synchronously. The picker row greys out on
+platforms where the capability is `false`.
+
+**iOS / Android plugin contracts** — see
+`docs/plugins/lipi-stt-ios/README.md` (Swift
+`SFSpeechRecognizer` + `SFSpeechAudioBufferRecognitionRequest`)
+and
+`docs/plugins/lipi-stt-android/README.md`
+(Kotlin `android.speech.SpeechRecognizer`).
+Both contracts are
+**markdown-only** in M2c mobile V1 — the user
+has no Xcode 16+ / Android Studio Iguana+ in
+the working environment. The Rust
+`voice_platform.rs` already reports
+`OsFamily::Ios` and `OsFamily::Android` with
+`web_speech: false, native_dictation: true` so
+the future plugins plug in without JS changes.
+
+**Decision record** — `docs/decisions/0046-m2c-mobile-shim.md`
+captures the four locked decisions (Q1 language
+field, Q2 no custom consent dialog, Q3 mirror
+On-device subsection, Q4 capability store +
+hydrated-at-startup), the R1–R10 risks, and
+the deferred Swift / Kotlin plugin note.
+
+### Verified
+
+- `tsc -b` — clean
+- `vitest run` — 544/544 pass
+  (includes 19 new `webSpeechSTT` tests, 6
+  new `voicePlatformCapabilities` tests, 6
+  new `voiceCapabilitiesStore` tests, 9 new
+  `useVoiceCapture.webspeech` tests, 9
+  extended `voicePreferencesStore` tests)
+- `cargo check` — clean
+- `cargo test --lib` — 146/146 pass
+  (includes 4 new `voice_platform::*` tests)
+- `npm run build` — clean (216 modules,
+  657 KB bundle, 1.93 s)
+
+### Known limitations
+
+- **R1 — WebKitGTK (Linux) doesn't ship
+  `SpeechRecognition` in the default build.**
+  The capability report returns
+  `web_speech: false` on Linux; the
+  `WebSpeechCard` greys out and the Command
+  Palette's `voice.provider.webspeech` entry
+  is disabled. M3 can revisit if a future
+  user asks for it (would need WebKitGTK
+  rebuilt with `SPEECH_RECOGNITION=ENABLE`).
+- **R2 — iOS Safari's `SpeechRecognition` is
+  documented as not for production use.** The
+  iOS arm of `voice_platform.rs` reports
+  `web_speech: false, native_dictation: true`,
+  gating the user onto the (future) Swift
+  `SFSpeechRecognizer` plugin. Until that
+  plugin lands, iOS users have no working STT
+  provider; this is acceptable because the M2c
+  mobile V1 is a *contract* — the iOS path
+  only completes when a future session has
+  Xcode.
+- **R3 — Android system WebView strips
+  `SpeechRecognition` in the production Google
+  Play build of Chromium.** Same shape as R2:
+  the Android arm reports
+  `web_speech: false, native_dictation: true`
+  and the future Kotlin `SpeechRecognizer`
+  plugin is the production path.
+- **R4 — Web Speech API is not in
+  `lib.dom.d.ts`.** A minimal local type
+  definition lives in
+  `src/voice/webSpeechTypes.ts` and is
+  imported by `webSpeechSTT.ts`. The
+  `window.SpeechRecognition ?? window.webkitSpeechRecognition`
+  feature-detect is the runtime check. Future
+  TypeScript versions may add these types; the
+  local types will then need to be removed
+  (and a guarded `import type { ... } from
+  'lib.dom.d.ts';` added).
+- **R5 — Web Speech has no native "stop"
+  signal.** `recognition.stop()` flushes
+  whatever is buffered, but some browsers
+  (notably older Chrome) leave the
+  recognizer in a `STARTED` state for up to
+  500 ms. The `useVoiceCapture` hook calls
+  `recognition.stop()` first, then
+  `recognition.abort()` after a 500 ms
+  timeout if `onend` has not fired (mirrors
+  the desktop `ondevice` hook's `stop()`
+  branch).
+- **R6 — No native "max duration" / "max
+  silence" cap.** The hook's existing
+  `maxDurationMs` cap (30 s default) is
+  enforced on the JS side via a `setTimeout`
+  that fires `recognition.abort()` at the
+  deadline. This is a known limitation; the
+  W3C spec doesn't have a built-in max
+  duration. The 30 s cap is generous (the
+  Web Speech API's VAD ends the session on
+  silence, so most calls resolve in a few
+  seconds).
+- **R7 — Chromium-based browsers log a
+  console warning when `SpeechRecognition` is
+  used on an insecure origin.** Tauri's dev
+  server uses `localhost` and the production
+  build is a `tauri://` origin, which the
+  WebView treats as secure. The console
+  warning is a no-op but a noisy one; we do
+  not silence it.
+- **R8 — Web Speech is single-session per
+  page.** Calling `recognition.start()` while
+  a previous `recognition.start()` is in
+  flight throws `InvalidStateError`. The
+  `useVoiceCapture` hook guards on
+  `isListening` and bails out (returns the
+  in-flight `AbortController.signal` promise,
+  unchanged).
+- **R9 — `recognition.onresult` is the only
+  signal we get for partials.** The M2c
+  mobile V1 shim does not retry on `onerror`
+  (it surfaces the typed `WebSpeechSttError`
+  to the hook's error UI). M3 may add
+  retry-on-transient.
+- **R10 — The iOS / Android native plugin
+  contracts assume the future session will
+  land on the iOS 17 / Android API 24+
+  floors.** If the floor changes, the
+  contracts are still valid; only the `setup`
+  block of each plugin needs an `#available`
+  guard. The contracts are full per §8 of
+  the architecture summary — a future session
+  can land them in a single focused PR on a
+  Mac / Linux box with Xcode 16+ / Android
+  Studio Iguana+.
+- **No language picker in V1 UI.** The
+  `voicePreferencesStore.language` field is
+  stored + threaded through the orchestrator,
+  but the `WebSpeechCard` is a single toggle
+  with no language dropdown. M3 will add the
+  picker.
+- **Capabilities are process-lifetime, not
+  persisted.** If the user updates Tauri /
+  switches Tauri-runtime between launches
+  (e.g. a future dev mode that re-invokes the
+  IPC), the capability flags are re-read on
+  the next process launch. This is the right
+  shape (the OS doesn't change for a single
+  Tauri binary) but it means a future "lipi
+  in a different webview origin" feature
+  would need a hydration trigger.
 
 ### Added (M4 — voice-driven git commit)
 
@@ -3653,6 +4333,161 @@ integration tests.
   (no regression in 3a/3b/3c-1/3c-2)
 - `cargo tauri dev` smoke: Tauri window opens, titlebar
   shows `dev · phase 4a`, no console errors on first paint.
+
+## [Unreleased — M3 — unified `VoiceSession` API across all STT providers]
+
+### Added (M3)
+
+- **Unified `VoiceSession` interface** (`src/voice/session.ts`):
+  a single, stateful object that every STT provider (`stub`,
+  `wispr`, `ondevice`, `webSpeech`, and the future
+  `nativeDictation` slot for iOS Swift / Android Kotlin)
+  conforms to. The interface exposes `onStateChange` /
+  `onTranscription` / `onError` listeners (each returning an
+  unsubscribe function) and `flush()` / `close()` methods.
+  Replaces the four M2a/b/c function-style `transcribeViaX`
+  entry points with one polymorphic surface.
+- **Single error class** (`VoiceSessionError`): one stable
+  23-code `VoiceSessionErrorCode` union (down from 39 codes
+  across the four M2a/b/c `*ErrorCode` unions). Each code has
+  a user-facing message via `voiceSessionErrorMessage(code)`.
+  Consumers switch on `err.code` and read `err.message` for
+  the user-facing string.
+- **Factory registry** (`src/voice/sessionFactory.ts`):
+  `voiceSessionFactories: Record<VoiceProviderId, VoiceSessionFactory>`
+  — the single dispatch point. The hook calls
+  `voiceSessionFactories[provider](opts)` and gets a
+  `Promise<VoiceSessionHandle>` back. Exhaustively
+  type-checked by TypeScript: adding a 6th provider is a
+  compile error if the registry arm is missing.
+- **Per-provider factory files** (`src/voice/sessions/`):
+  five self-contained files, one per provider. The Wispr
+  factory owns the PCM capture AND the WebSocket protocol
+  (the M2b `wisprClient.ts` file is gone — its wire protocol
+  moved in-house). The on-device factory owns the
+  `stt://transcript` / `stt://error` subscriptions (the
+  `onSessionStart(sessionId)` callback pattern is gone; the
+  sessionId is now an internal ref). The Web Speech factory
+  owns the `SpeechRecognition` instance. The stub factory
+  is a `setTimeout(200ms)` final-emission machine. The
+  `nativeDictation` factory is a stub that throws
+  `VoiceSessionError('not-configured')` at start time (the
+  Swift / Kotlin plugins land separately).
+- **`AbortController`-based cancellation** (Decision #4):
+  the hook creates a per-session `AbortController` and
+  passes its `signal` to the factory. The factory wires the
+  signal to its internal teardown. `handle.abort()` is the
+  external cancellation API. The existing `generationRef`
+  counter stays as a secondary React-level race guard (it
+  solves the "new session started after the old one was
+  aborted" case the abort controller doesn't).
+- **Finer-grained 7-state machine** (`VoiceSessionState`):
+  `idle | starting | listening | stopping | finalizing |
+  closed | error`. The M3 win: the `transcribing` store
+  state splits into `stopping` (the user-initiated teardown)
+  and `finalizing` (the provider's post-stop work like
+  Wispr's commit, on-device inference, Web Speech's
+  `onend`). The hook's single `onStateChange` listener
+  maps both to the store's `transcribing` state.
+- **`useVoiceCapture` refactor**: the 922-line hook is now
+  ~360 lines. The 4-branch `if/else` ladder (lines 344–356
+  of the M2a file) collapses to a single
+  `voiceSessionFactories[provider]()` dispatch. The 4
+  per-provider `startXxxRecording` callbacks and the 3
+  per-provider `stop()` branches collapse to one each. The
+  per-provider `webSpeechHandleRef` / `pcmHandleRef` /
+  `onDeviceSessionIdRef` / `streamRef` / `recorderRef` are
+  gone — the session owns them internally. The hook's
+  public return shape is unchanged.
+- **`TranscriptionEvent.sessionId`** (Rust + TS): the
+  on-device factory demuxes by `sessionId`. The Rust
+  `TranscriptEvent` struct in `src-tauri/src/stt_capture.rs`
+  gains a `pub session_id: Option<String>` field (serialised
+  as camelCase `sessionId`); the M3 wire-shape test
+  (`transcript_event_serializes_with_camel_case_keys`)
+  asserts the new field is present.
+- **New tests**: `src/voice/session.test.ts` (17 vitest
+  tests for the cross-provider `VoiceSession` contract
+  — factory dispatch, state transitions, listener wiring,
+  error propagation, abort path, double-stop guard,
+  post-close event guard, flush, `VoiceSessionError`
+  class fields, immutable `mode` / `provider` fields,
+  vi.fn integration). The four `useVoiceCapture.{stub,
+  wispr, ondevice, webspeech}.test.tsx` files were
+  rewritten to drive the new factories through their
+  constructor-injection seams.
+
+### BREAKING: `@/voice` exports changed
+
+The following exports from `@/voice` are **deleted** (no
+deprecation aliases, no `@deprecated` JSDoc, no shim
+re-exports). They were internal to this repo.
+
+- **Removed function exports**:
+  - `transcribeViaWispr` (was in `src/voice/wisprClient.ts`)
+  - `transcribeViaOnDevice` (was in `src/voice/onDeviceSTT.ts`)
+  - `transcribeViaWebSpeech` (was in `src/voice/webSpeechSTT.ts`)
+  - `transcribeStub` (was in `src/shared/hooks/useVoiceCapture.ts`)
+- **Removed error classes + their code unions + message helpers**:
+  - `WisprClientError`, `WisprClientErrorCode`, `wisprErrorMessage`
+  - `OnDeviceSttError`, `OnDeviceSttErrorCode`
+  - `WebSpeechSttError`, `WebSpeechSttErrorCode`
+  - `PcmCaptureError`, `PcmCaptureErrorCode`, `pcmCaptureErrorMessage`
+- **Removed files**:
+  - `src/voice/wisprClient.ts` (wire protocol moved into
+    `src/voice/sessions/wisprSession.ts`)
+  - `src/voice/onDeviceSTT.ts` (replaced by
+    `src/voice/sessions/onDeviceSession.ts`)
+  - `src/voice/webSpeechSTT.ts` (replaced by
+    `src/voice/sessions/webSpeechSession.ts`)
+  - `src/voice/wisprClient.test.ts` (covered by
+    `src/voice/session.test.ts` + the rewritten
+    `useVoiceCapture.wispr.test.tsx`)
+  - `src/voice/onDeviceSTT.test.ts`, `src/voice/webSpeechSTT.test.ts`
+    (same)
+- **Renamed**:
+  - The `VoiceProvider` literal union
+    (`'stub' | 'wispr' | 'ondevice' | 'webSpeech'`) is now
+    `VoiceProviderId`. Import from `@/voice` or
+    `@/voice/types`.
+  - The M2a `VoiceProvider` *interface* in
+    `src/voice/types.ts` (the abstract
+    "any voice provider" shape with `isAvailable()` /
+    `hasPermission()` / `startSession()` / `priority`) is
+    **deleted**. M3 doesn't need it — the factory registry
+    is the polymorphism point.
+
+### Added (Known limitations — M3)
+
+- The `flush()` method on the **stub** session rejects with
+  `VoiceSessionError('unsupported')` — the stub has no audio
+  buffer to flush. Wispr, on-device, and Web Speech all
+  support `flush()` (Wispr sends a `commit` frame, on-device
+  sends `stt_stop_listening`, Web Speech calls
+  `recognition.stop()`).
+- The `'nativeDictation'` Settings card and Command Palette
+  entry are deferred until the iOS Swift / Android Kotlin
+  plugins land. The factory stub exists (and the
+  `voiceSessionFactories` registry arm is wired) so
+  consumers that dispatch by `VoiceProviderId` don't need a
+  follow-up patch. The `nativeDictation` row is currently
+  NOT in `src/shared/commands/commands.ts`.
+
+### Verified (M3)
+
+- `npm run tsc -b` — 0 errors.
+- `npx vitest run` — **499 / 499 pass** (was 481 pre-M3; +17
+  new tests in `src/voice/session.test.ts` + 1 added
+  per-provider test in `useVoiceCapture.{stub,wispr,
+  ondevice,webspeech}.test.tsx`).
+- `cargo check` — 0 errors.
+- `cargo test --lib` — **146 / 146 pass** (unchanged; the
+  Rust side adds the `session_id` field to
+  `TranscriptEvent` and a new test assertion in
+  `transcript_event_serializes_with_camel_case_keys`).
+- `npm run build` — pass, 221 modules, ~660 kB bundle (the
+  +modules are the new `session.ts` / `sessionFactory.ts` /
+  five session factory files + the new test file).
 
 ## [0.0.1] — 2026-06-09
 

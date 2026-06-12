@@ -15,20 +15,33 @@
 /** What the user is speaking into. Drives where the transcription lands. */
 export type VoiceMode = 'dictation' | 'chat' | 'command';
 
-/** Lifecycle state of a single voice capture session. */
-export type VoiceSessionState =
-  | 'idle'
-  | 'requesting-permission'
-  | 'connecting'
-  | 'listening'
-  | 'processing'
-  | 'error'
-  | 'denied';
+/** M3: the literal union of provider ids. Replaces the M2a
+ *  `VoiceProvider` literal union from
+ *  `src/shared/state/voicePreferencesStore.ts:44` (renamed
+ *  to avoid the collision with the M3-era `VoiceProvider`
+ *  *interface* that was scaffolding and is now deleted — see
+ *  Decision #48 in HANDOFF.md). */
+export type VoiceProviderId =
+  | 'stub'
+  | 'wispr'
+  | 'ondevice'
+  | 'webSpeech'
+  | 'nativeDictation';
 
 /**
  * A single streaming transcription update. Providers emit `partial` events
  * as the user speaks (low confidence, fast feedback) and one `final` event
  * per utterance (high confidence, replaces all partials).
+ *
+ * M3: added `sessionId` for the iOS Swift / Android Kotlin
+ * plugin contracts (a Tauri `Channel<TranscriptEvent>` may
+ * carry events for multiple concurrent sessions; the JS-side
+ * factory demuxes by this field). The Rust side sets it on
+ * every `stt://transcript` event (5-line change in
+ * `src-tauri/src/stt_capture.rs`); the Wispr + Web Speech
+ * paths leave it undefined (their protocol is one-session-at-
+ * a-time and the JS side knows the id from the factory
+ * closure).
  */
 export interface TranscriptionEvent {
   readonly kind: 'partial' | 'final';
@@ -43,6 +56,11 @@ export interface TranscriptionEvent {
   readonly isUtteranceEnd?: boolean;
   /** Detected spoken language (BCP-47, e.g. "en-US"). Provider-dependent. */
   readonly language?: string;
+  /** The session id this event belongs to. Set by the
+   *  Rust on-device path; `undefined` for the Wispr and
+   *  Web Speech paths (their factories own the id
+   *  internally and demux on the JS side). */
+  readonly sessionId?: string;
 }
 
 /** A recognized voice command (Phase M4). The LLM does the heavy lifting. */
@@ -50,93 +68,6 @@ export interface VoiceCommand {
   readonly raw: string;
   readonly intent: string;
   readonly args: Record<string, string | number | boolean>;
-}
-
-/** Runtime error from the provider, normalized across Wispr and on-device. */
-export interface VoiceError {
-  readonly code:
-    | 'permission-denied'
-    | 'mic-unavailable'
-    | 'network'
-    | 'auth'
-    | 'provider'
-    | 'aborted'
-    | 'unknown';
-  readonly message: string;
-  /** Original provider error, if any. Useful for logging; never shown raw to users. */
-  readonly cause?: unknown;
-  /** True if the user can retry without changing anything. */
-  readonly retryable: boolean;
-}
-
-/** The contract every voice provider must implement. */
-export interface VoiceProvider {
-  /** Stable identifier for logging / settings UI. */
-  readonly id: 'wispr' | 'on-device-ios' | 'on-device-android' | 'on-device-desktop';
-
-  /** Human-readable label for the settings UI. */
-  readonly label: string;
-
-  /** Whether this provider is available on the current platform right now. */
-  isAvailable(): Promise<boolean>;
-
-  /** Whether the user has already granted microphone permission. */
-  hasPermission(): Promise<boolean>;
-
-  /**
-   * Request microphone permission. On web, this triggers the browser prompt.
-   * On native (Tauri), it dispatches to the OS permission dialog.
-   */
-  requestPermission(): Promise<boolean>;
-
-  /**
-   * Open a capture session. The returned session owns the mic stream and
-   * the network connection. The caller MUST call `session.close()` to
-   * release both — leaking a session will leave the mic indicator on.
-   */
-  startSession(opts: { mode: VoiceMode; language?: string }): Promise<VoiceSession>;
-
-  /**
-   * Suggested order for the settings UI "voice provider" picker.
-   * Lower = preferred. Wispr beats on-device on quality, but on-device
-   * is the always-works fallback.
-   */
-  readonly priority: number;
-}
-
-/** An open voice capture session. Emit-only events; one session = one mic stream. */
-export interface VoiceSession {
-  /** Current session state. Subscribe via `onStateChange`. */
-  readonly state: VoiceSessionState;
-
-  /** Active mode. Immutable for the lifetime of the session. */
-  readonly mode: VoiceMode;
-
-  /** Subscribe to state transitions. Returns an unsubscribe function. */
-  onStateChange(listener: (state: VoiceSessionState) => void): () => void;
-
-  /** Subscribe to transcription events (partials + finals). */
-  onTranscription(listener: (event: TranscriptionEvent) => void): () => void;
-
-  /**
-   * Subscribe to errors. Fires once per error; the session is then in
-   * the `error` state and the caller should call `close()` and decide
-   * whether to retry.
-   */
-  onError(listener: (err: VoiceError) => void): () => void;
-
-  /**
-   * Force the provider to emit any pending partials as a final event.
-   * Useful when the user pauses speaking; we don't want to wait for the
-   * provider's own silence threshold.
-   */
-  flush(): Promise<void>;
-
-  /**
-   * Stop capture and tear down mic + network. After `close()`, the session
-   * is unusable; call `provider.startSession()` for a new one.
-   */
-  close(): Promise<void>;
 }
 
 /**

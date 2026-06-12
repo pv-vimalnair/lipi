@@ -96,6 +96,7 @@ import { useToolDecisionLogStore } from '@/shared/state/toolDecisionLogStore';
 import { useToolSettingsStore } from '@/shared/state/toolSettingsStore';
 import { useCustomToolsStore } from '@/shared/state/customToolsStore';
 import { useVoicePreferencesStore } from '@/shared/state/voicePreferencesStore';
+import { useVoiceCapabilitiesStore } from '@/shared/state/voiceCapabilitiesStore';
 import {
   useWorkspaceStore,
   workspaceSelectors,
@@ -467,6 +468,72 @@ export const COMMANDS: readonly Command[] = [
     keywords: ['voice', 'stt', 'speech', 'stub', 'debug', 'placeholder', 'mic'],
     run: () => {
       useVoicePreferencesStore.getState().setProvider('stub');
+    },
+  },
+  // M2c desktop: the on-device Whisper
+  // provider. The `isEnabled` predicate greys
+  // the row on platforms where the Rust side
+  // reports `ondevice: false` (iOS / Android
+  // once we ship a Tauri build for them; on
+  // current desktop targets it's always
+  // true). Surfaced here for symmetry with
+  // `voice.provider.wispr` — the user can
+  // switch without leaving the Command
+  // Palette.
+  {
+    id: 'voice.provider.ondevice',
+    title: 'Use on-device (Whisper) for voice input',
+    subtitle:
+      'Switch the STT provider to the M2c on-device Whisper path. Requires a model in Settings → Voice.',
+    group: 'Voice',
+    keywords: [
+      'voice',
+      'stt',
+      'speech',
+      'ondevice',
+      'on-device',
+      'whisper',
+      'local',
+      'offline',
+      'dictation',
+      'mic',
+    ],
+    isEnabled: () =>
+      useVoiceCapabilitiesStore.getState().capabilities?.ondevice === true,
+    run: () => {
+      useVoicePreferencesStore.getState().setProvider('ondevice');
+    },
+  },
+  // M2c mobile: the Web Speech shim. The
+  // `isEnabled` predicate reads from the
+  // `useVoiceCapabilitiesStore` (hydrated at
+  // app startup); the row is briefly greyed
+  // while the IPC is in flight, then enables
+  // on platforms where the WebView exposes
+  // `window.SpeechRecognition` (Windows /
+  // macOS / iOS). The `subtitle` is a privacy
+  // callout — see Decision #46 risk R3.
+  {
+    id: 'voice.provider.webspeech',
+    title: 'Use browser speech engine for voice input',
+    subtitle:
+      "Switch the STT provider to the WebView's SpeechRecognition. Sends audio to the browser's vendor server (Google on Chromium, Apple on WebKit).",
+    group: 'Voice',
+    keywords: [
+      'voice',
+      'stt',
+      'speech',
+      'browser',
+      'webspeech',
+      'webkit',
+      'chromium',
+      'dictation',
+      'mic',
+    ],
+    isEnabled: () =>
+      useVoiceCapabilitiesStore.getState().capabilities?.webSpeech === true,
+    run: () => {
+      useVoicePreferencesStore.getState().setProvider('webSpeech');
     },
   },
 ];

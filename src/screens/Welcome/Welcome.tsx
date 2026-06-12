@@ -59,6 +59,8 @@ import {
 
 import { useOpenWorkspace } from './hooks/useOpenWorkspace';
 
+import { TemplateGallery } from './components/TemplateGallery/TemplateGallery';
+
 import styles from './Welcome.module.css';
 
 interface WelcomeProps {
@@ -190,14 +192,37 @@ export function Welcome({
         )}
       </Stack>
 
+      {/* Phase J: starter-template gallery. Lives
+          between the hero CTA and the recents list
+          so the user sees the primary action first,
+          then the discovery surface. */}
+      <TemplateGallery />
+
       {hydrated && recents.length > 0 && (
         <section
           className={styles.recentsSection}
           aria-labelledby="welcome-recents-title"
         >
-          <h2 id="welcome-recents-title" className={styles.recentsTitle}>
-            Recent
-          </h2>
+          <div className={styles.recentsHeader}>
+            <h2
+              id="welcome-recents-title"
+              className={styles.recentsTitle}
+            >
+              Recent
+            </h2>
+            {shouldShowClearAll(recents.length) && (
+              <button
+                type="button"
+                className={styles.recentsClearAll}
+                aria-label="Clear all recent workspaces"
+                onClick={() => {
+                  useWorkspaceStore.getState().clearRecents();
+                }}
+              >
+                Clear all
+              </button>
+            )}
+          </div>
           <ul className={styles.recentsList}>
             {recents.map((path) => (
               <li
@@ -260,4 +285,19 @@ export function Welcome({
       </footer>
     </main>
   );
+}
+
+/**
+ * Whether the "Clear all" button is shown above the
+ * recents list. Suppressed when there's only one
+ * entry (a single-item "Clear all" is a footgun —
+ * the user probably wants to keep that one) and
+ * when the list is empty (no section at all).
+ *
+ * Exported for the data-layer test
+ * (`Welcome.recents.test.ts`); the component
+ * imports it via the same module.
+ */
+export function shouldShowClearAll(recentsCount: number): boolean {
+  return recentsCount > 1;
 }

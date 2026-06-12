@@ -18,7 +18,6 @@ import {
   WISPR_SAMPLE_RATE_HZ,
   encodeInt16AsBase64,
   float32ToInt16,
-  pcmCaptureErrorMessage,
 } from './pcmCapture';
 
 describe('pcmCapture', () => {
@@ -112,28 +111,6 @@ describe('pcmCapture', () => {
     it('50ms chunk at 16kHz = 800 samples', () => {
       expect(PCM_CHUNK_MS).toBe(50);
       expect(PCM_CHUNK_SAMPLES).toBe(800);
-    });
-  });
-
-  describe('pcmCaptureErrorMessage', () => {
-    it('returns a permission message for permission-denied', () => {
-      expect(pcmCaptureErrorMessage('permission-denied')).toMatch(/blocked/i);
-    });
-
-    it('returns a no-device message for no-device', () => {
-      expect(pcmCaptureErrorMessage('no-device')).toMatch(/no microphone/i);
-    });
-
-    it('returns a busy message for device-busy', () => {
-      expect(pcmCaptureErrorMessage('device-busy')).toMatch(/busy/i);
-    });
-
-    it('returns a rate message for sample-rate-mismatch', () => {
-      expect(pcmCaptureErrorMessage('sample-rate-mismatch')).toMatch(/16 ?k?Hz|kHz/i);
-    });
-
-    it('returns a fallback for unknown', () => {
-      expect(pcmCaptureErrorMessage('unknown')).toMatch(/error/i);
     });
   });
 });

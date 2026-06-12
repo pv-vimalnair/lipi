@@ -1,0 +1,93 @@
+/* Phase J — TemplateGallery styles. */
+
+.gallery {
+  width: min(960px, 100%);
+  margin: 32px auto 0;
+  padding: 0 24px;
+  box-sizing: border-box;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  color: var(--lipi-fg, #e6e6e6);
+}
+
+.subtitle {
+  font-size: 13px;
+  font-weight: 400;
+  margin: 0 0 16px;
+  color: var(--lipi-fg-muted, #9aa0a6);
+}
+
+.grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.cardItem {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.card {
+  appearance: none;
+  background: var(--lipi-bg-elevated, #1f1f1f);
+  border: 1px solid var(--lipi-border, #2c2c2c);
+  border-radius: 8px;
+  padding: 14px;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.card:hover,
+.card:focus-visible {
+  border-color: var(--lipi-accent, #6aa0ff);
+  background: var(--lipi-bg-elevated-hover, #262626);
+  outline: none;
+}
+
+.card:focus-visible {
+  box-shadow: 0 0 0 2px var(--lipi-accent, #6aa0ff);
+}
+
+.cardBody {
+  min-height: 96px;
+}
+
+.cardName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--lipi-fg, #e6e6e6);
+}
+
+.cardDescription {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--lipi-fg-muted, #9aa0a6);
+  /* clamp to 2 lines so the cards stay uniform */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cardMeta {
+  font-size: 11px;
+  color: var(--lipi-fg-faint, #6a6a6a);
+  margin-top: auto;
+}
+
+.cardCta {
+  margin-top: 8px;
+  width: 100%;
+}

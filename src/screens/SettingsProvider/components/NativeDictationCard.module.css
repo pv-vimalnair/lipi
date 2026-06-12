@@ -1,0 +1,186 @@
+/* NativeDictationCard — Phase NPS.
+ *
+ * Mirrors the visual shape of WebSpeechCard /
+ * OnDeviceCard (Phase M2c): a single rounded
+ * "card" with a title bar, a one-paragraph lede,
+ * and a collapsible <details> for the long-form
+ * contract. The status badge in the header is
+ * colour-coded by `data-status` (active = green,
+ * inert = amber, not-applicable = grey) so the
+ * user can read the platform-readiness at a
+ * glance. */
+
+.card {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 8px);
+  background-color: var(--color-bg-elevated);
+  padding: var(--space-4, 16px);
+  margin-block-end: var(--space-3, 12px);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3, 12px);
+  margin-block-end: var(--space-2, 8px);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-md, 14px);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-text);
+  flex: 1;
+}
+
+.statusBadge {
+  font-size: 11px;
+  font-weight: var(--font-weight-medium, 500);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-subtle);
+  background-color: var(--color-bg-sunken, transparent);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.statusBadge[data-status='active'] {
+  background-color: var(--color-success-soft, #143d24);
+  color: var(--color-success-strong, #6ee7a3);
+  border-color: var(--color-success-strong, #2f9e57);
+}
+
+.statusBadge[data-status='inert'] {
+  background-color: var(--color-warning-soft, #3a2a13);
+  color: var(--color-warning-strong, #f5c97a);
+  border-color: var(--color-warning-strong, #b08a3a);
+}
+
+.statusBadge[data-status='not-applicable'] {
+  background-color: var(--color-bg-sunken, #1a1a1a);
+  color: var(--color-text-muted, #8a8a8a);
+}
+
+.lede {
+  margin: 0 0 var(--space-3, 12px);
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.muted {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm, 12px);
+}
+
+.errorText {
+  margin: 0;
+  color: var(--color-danger-strong, #f08785);
+  font-size: var(--font-size-sm, 12px);
+}
+
+.contract {
+  border-top: 1px solid var(--color-border-subtle);
+  padding-block-start: var(--space-3, 12px);
+}
+
+.contractSummary {
+  cursor: pointer;
+  font-size: var(--font-size-sm, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text);
+  user-select: none;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1, 4px);
+}
+
+.contractSummary::-webkit-details-marker {
+  display: none;
+}
+
+.contractSummary::before {
+  content: '▸';
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.contract[open] .contractSummary::before {
+  transform: rotate(90deg);
+}
+
+.subheading {
+  margin: var(--space-3, 12px) 0 var(--space-2, 8px);
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold, 600);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.methodList,
+.errorKindList,
+.eventList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+}
+
+.methodItem,
+.errorKindItem,
+.eventItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2, 8px);
+  border-radius: 4px;
+  background-color: var(--color-bg-sunken, #161616);
+}
+
+.methodName,
+.methodSignature,
+.errorKindCode,
+.eventName {
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--color-text);
+}
+
+.methodName {
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-accent, #6aa6ff);
+}
+
+.methodPurpose,
+.errorKindMessage,
+.eventPurpose {
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.methodSignature {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--color-text-muted);
+}
+
+.foot {
+  margin: var(--space-3, 12px) 0 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.foot code {
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  background-color: var(--color-bg-sunken, #161616);
+  padding: 1px 4px;
+  border-radius: 3px;
+}

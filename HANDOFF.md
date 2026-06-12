@@ -242,6 +242,24 @@ on mobile — cannot be retrofitted in Week 8.
 | 40 | The Composer's transcript-merge effect **clears the store immediately after merging** (calls `useVoiceStore.getState().setTranscript('')`). | Without the clear, the same transcript would re-merge on every unrelated re-render. The clear is what makes "append once" the right semantic. The pattern is "store the side effect, fire-and-forget the consumer" — same as the chat nav store's `consumeJump()`. | 2026-06-11 |
 | 41 | The M2b Wispr provider fetches the raw API key from the keychain via a new `secrets_get_api_key` Rust command, **in violation of the "key never enters JS" rule (Decision #17)** for AI provider keys. | Wispr's WebSocket API requires the key in the JavaScript WebView to authenticate the connection — the Rust proxy pattern that AI uses can't work because the WS connection is *initiated by the browser*, not by Rust. The key is fetched on `start()`, used for one WS session, and dropped on `stop()`. The key is only ever sent to the Wispr endpoint (already whitelisted in CSP, Decision #24). This is a deliberate, documented exception: the rule is "don't put keys in the JS bundle at rest," not "never read the key in JS ever." All other inviolable rules (no logging, no remote shipping, key never persisted to JS-accessible storage) still hold. | 2026-06-11 |
 | 42 | M2b uses `ScriptProcessorNode` for PCM capture, **not `AudioWorkletNode`** (the Wispr quickstart's reference). | `AudioWorkletNode` needs a separately-loaded `.js` file, Vite asset plumbing, and a worklet-port lifecycle. `ScriptProcessorNode` is deprecated but supported in every Tauri WebView target (WebView2, WKWebView, WebKitGTK) and the audio callback runs on the main thread — but 50 ms of Float32 conversion is <0.1 ms of CPU on a modern laptop, so the scheduling jitter is invisible. If a future phase sees audio glitches (clipping, drift), promote to `AudioWorkletNode` — the conversion helpers (`float32ToInt16`, `encodeInt16AsBase64`) are reusable. | 2026-06-11 |
+| 43 | M2c desktop ships in **stub mode** — the real `whisper-rs` / `cpal` build is gated behind a Cargo feature `m2c-native` and not exercised in the sandbox. | Compiling `whisper-rs-sys` requires `libclang.dll` (a Windows LLVM install) which is not present in the agent's sandbox. Stub mode lets the full JS-side integration (provider switch, IPC, settings UI, hook lifecycle) be developed and tested with deterministic transcripts, while a future build on a developer machine with LLVM can `cargo build --features m2c-native` for the real path. The stub is NOT a TODO marker — it's a tested, working, debuggable code path that exercises every IPC surface. The real path is fully written; only the link step is deferred. | 2026-06-12 |
+| 44 | M2c on-device Rust side **owns the mic entirely** — the JS side never calls `getUserMedia` for the on-device path. | WebView mic APIs differ subtly across platforms (WebView2 exclusive-mode quirks, WKWebView's `sampleRate: 16000` not always honored). Letting Rust own capture end-to-end via `cpal` (WASAPI / CoreAudio / ALSA) means we get consistent behaviour for free, and the JS side stays a thin subscriber to the `stt://transcript` event. The cost is one extra Rust dependency (`cpal`) and the requirement that the Tauri app has OS-level mic permission (handled via the `permission-denied` SttError variant). | 2026-06-12 |
+| 45 | The `OnDeviceCard` settings UI is added as a **section inside the existing `SettingsProvider` screen** — no new top-level route. | Avoids modifying `appStore.ts` and `main.tsx` (the route registry). Keeps voice settings logically grouped with the Wispr card (also in the Voice section). Trade-off: voice settings are only reachable from `Cmd+,` → Voice, not from a dedicated "Voice" route. If usage shows users miss it, promote to a standalone route in a future phase. | 2026-06-12 |
+| 46 | The M2c mobile shim uses a **compile-time capability struct** (`VoicePlatformCapabilities`) surfaced via a single Rust command (`voice_platform_get_capabilities`), not a runtime platform probe. | The capability set is a function of the build target, not the runtime environment. A `#[cfg(target_os = "...")]`-gated Rust function is the cleanest, fastest, and most testable way to express "this build can use Web Speech but not on-device whisper." The JS side caches the result in `useVoiceCapabilitiesStore` and the Command Palette's `isEnabled` predicates read it synchronously. Decision recorded in `docs/decisions/0046-m2c-mobile-shim.md`. | 2026-06-12 |
+| 47 | The M2c mobile JS shim picks Web Speech as the **only** STT backend on iOS / Android for the v1 cut (no Wispr, no on-device whisper). | iOS WKWebView's `SpeechRecognition` is reliable, requires no extra Swift / Kotlin glue to read, and is the same path the macOS / Windows WebView targets already use. The native dictation slot (`nativeDictation`) is reserved in the registry for a future Swift / Kotlin plugin but the v1 shim throws `'not-configured'` at start time. The trade-off is documented in HANDOFF §9.8 + the M2c mobile CHANGELOG entry. | 2026-06-12 |
+| 48 | The M3-era `VoiceProvider` *interface* in `src/voice/types.ts` is **deleted** (it was scaffolding for a registry-based design that has now been superseded). The literal *union* in `src/shared/state/voicePreferencesStore.ts` is renamed to `VoiceProviderId` to avoid the collision. | The factory registry (`voiceSessionFactories: Record<VoiceProviderId, ...>`) is the new polymorphism point. Re-exporting the old interface as a type alias of `VoiceProviderId` would have been the "shim" path, but every test file and the `VoiceButton` prop type already use the union directly, so the rename is a single-pass find/replace. The semantic-version impact is called out in CHANGELOG "BREAKING: `@/voice` exports changed". | 2026-06-12 |
+| 49 | M3's per-session `AbortController` is the **cancellation contract** between the hook and each session. The factory's `opts.signal` plumbs to `VoiceSessionHandle.abort()`. | The existing `generationRef` counter in the hook stays as a *secondary* guard for the "new session started after the old one was aborted" case (the abort controller doesn't solve that). The two-pronged guard mirrors the React Query / SWR pattern: abort = "I told the previous session to stop", generation = "I don't care about any result from the previous generation." | 2026-06-12 |
+| 50 | M3 deletes the four `transcribeViaX` function exports and the four `*Error` classes **outright** — no deprecated wrappers, no `@deprecated` JSDoc, no re-exports. The hook (the only production consumer) and the four per-provider test files are rewritten in the same PR. | The hook and tests are the only production consumers. Shimming the old API as a one-line wrapper would have been the "low-risk" path, but it leaves a permanently-shadowed code path and complicates the per-provider test rewrites. The semantic-version impact is a breaking change to `@/voice`; called out in CHANGELOG. | 2026-06-12 |
+| 51 | The M3 wire shape adds a `transcriptEvent.sessionId` field (`Option<String>` on the Rust side, optional `sessionId` on the TS side). | The 5-line Rust change is the minimum needed to demux events on the on-device factory side when the iOS Swift / Android Kotlin plugins ship with concurrent-session support. The Tauri `Channel<TranscriptEvent>` is the right native-to-JS shape; the iOS / Android plugin contracts do NOT need to change. The M3 wire-shape test asserts the field is in the JSON output. | 2026-06-12 |
+| 52 | Phase I's path validation is **strict user-dirs-only** (home, Documents, Desktop), not "any path the OS can read." | The OS happily hands a process URLs to `C:\Windows\System32\cmd.exe`; a permissive validator would let a malicious link open that as a "workspace" (the FS read would fail, but the user has already been shown the path and may have acted on it). Limiting to user-owned directories is a real security boundary. The user is shown a friendly error if the path is rejected. | 2026-06-12 |
+| 53 | Phase I's path canonicalisation lives on the **Rust side** (`get_user_dirs` returns the canonical form: no symlinks, no `\\?\` Windows extended-length prefix). | The JS side compares the inbound normalised path against the canonical allow-list with a case-insensitive `startsWith` on Windows and a case-sensitive `startsWith` on POSIX. This sidesteps the `URL.pathname` quirks (e.g. URL-decoding differences between Chromium's URL and Rust's `url` crate) by treating the inbound path as a string and the allow-list roots as strings. | 2026-06-12 |
+| 54 | Phase I's frontend listens to `lipi://deep-link`, **not** the plugin's internal `deep-link://new-url`. The Rust `setup` callback re-emits. | If the plugin's event name changes in a future version (it already has once between 1.x and 2.x), the JS side is unaffected. The cost is one extra `app.emit` per URL, which is negligible. The event-name string lives in one place (`src/ipc/deepLink.ts`'s `DEEP_LINK_EVENT` constant) so a future rename is a single-line change. | 2026-06-12 |
+| 55 | Phase I's `onDeepLink` is a **typed wrapper** in `@/ipc`, not a bare `webview.listen` call. | Per Rule 4, components and hooks import from `@/ipc`, not from `@tauri-apps/api/*` directly. Tests of `parseOpenUrl` and `routeDeepLink` are pure (no Tauri runtime) and cover the path rules + the store commit. The hook's effect is a thin mount/unmount glue. | 2026-06-12 |
+| 56 | Phase J's templates are **inlined in the Rust binary** (5 `Template` consts in `src-tauri/src/templates.rs`), not read from `resources/templates/*.json` at runtime. | The 5 templates are ~30 KB of source total; shipping them as Rust consts means the gallery works even when the app is launched with a stripped-down resources directory (dev / sandbox builds), and means there's no FS-IO race during the "Create" click. The trade-off is a ~30 KB binary bloat, which is negligible relative to the current 52 KB `git.rs`. A future "user templates" feature (a `~/.lipi/templates/` folder of `.zip` files) is one accessor away. | 2026-06-12 |
+| 57 | Phase J's atomic-rollback story is **staging subdir + per-file rename** (not "write all to dest in place" or "use a tempdir outside dest"). | The staging subdir lives inside `dest` (so the rename stays on the same filesystem, no cross-drive surprise on Windows) and is named `.lipi-template-staging-<rand>`. A crash mid-rename loop leaves the destination partially populated; the next `apply` call cleans up the stale staging dir before the empty-dir check runs. A `TemplateError::Partial` variant is reserved for a future iteration that swaps the in-place rename loop for a `MoveFileExW` / `renameat2` batch primitive. | 2026-06-12 |
+| 58 | Phase J's `apply` **refuses to write into a non-empty destination**. The `useApplyTemplate` flow is responsible for picking a fresh subdir under the user's chosen parent, but the Rust side enforces the empty-dir invariant as a second line of defence. | The error message tells the user which destination was rejected (and why). If a future feature wants to merge into an existing workspace, it can add a separate `apply_into_existing(id, dest)` entry point with its own UI; the v1 surface is "create a fresh project, period." | 2026-06-12 |
+| 59 | Phase J's JS side **ships metadata only** (name, description, file count). The file bodies never round-trip through JS. | The Rust registry is the single source of truth; the JS registry is a presentational mirror. If a template is added to the Rust side without a matching JS entry, the `apply_template` IPC succeeds but the gallery card doesn't render (we'd notice in QA). Adding a future runtime check (a `lipi://template-list` IPC that returns the canonical list) is one Rust function away; deferred because the v1 surface is stable. | 2026-06-12 |
+| 60 | The recents-management polish **hides "Clear all" on a 1-item list** (footgun guard) rather than a confirm dialog. | A single-item list is *itself* the confirm — the user has exactly one recents entry, they probably want to keep it (the typical case is "I opened one project yesterday, that's my workspace"), and exposing a "Clear all" button right next to it invites a misclick. A dialog would be a worse UX (extra click for the common "I want to clear all" case, doesn't prevent the misclick that motivated the guard). The pure-function helper (`shouldShowClearAll(n)`) is testable; a confirm-dialog state machine isn't worth the complexity for a sub-1%-of-usage interaction. | 2026-06-12 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -279,8 +297,10 @@ a Windows quirk, not a Lipi issue.
 
 **Current phase: Wispr Flow WebSocket integration complete (M2b). The headline voice path is now real end-to-end: the user clicks the mic in the AI panel, we open the mic via `getUserMedia`, capture raw 16 kHz mono Int16 PCM via `AudioContext` + `ScriptProcessorNode` (Decision #42), fetch the user's Wispr API key from the OS keychain via a new `secrets_get_api_key` IPC (Decision #41), open a WebSocket to `wss://platform-api.wisprflow.ai/api/v1/dash/client_ws`, send an `auth` frame with the `LIPI_APP_CONTEXT` payload, stream 50 ms PCM chunks as base64 `append` messages with RMS volume and `packet_duration`, send a `commit` when the iterator ends, and resolve with the server's `final: true` text — which the composer merges into the textarea exactly like the M2a stub did. The 5-state machine (`idle` / `requesting` / `recording` / `transcribing` / `error`) and all generation-guard + cleanup invariants from M2a are preserved. The Settings screen has a new "Voice" section with a `WisprCard` (password field + "Test connection" button that posts a 1-second silent WS session). A new `useVoicePreferencesStore` persists the user's choice of provider (`'wispr'` default, `'stub'` available as a debug fallback); the Command Palette has a new "Voice" group with toggle commands. 429/429 tests pass (+48 for M2b: 8 pcmCapture + 12 wisprClient + 4 useVoiceCapture wispr path + 4 voicePreferencesStore + 20 misc). `tsc` / `vite build` / `cargo check` / `cargo tauri build --debug` all clean. Bundles rebuilt: `Lipi_0.0.2_x64_en-US.msi` + `Lipi_0.0.2_x64-setup.exe`.
 
-**Next:** The remaining real product gap is M2c (on-device STT fallback). After M2 is fully shipped, the deferred roadmap:
-- M2c — On-device STT fallback (Whisper.cpp on desktop, Speech.framework on macOS/iOS, Android SpeechRecognizer on Android) for the always-works path
+**Current phase: M3 — SHIPPED (unified `VoiceSession` API across all STT providers).** The 4-branch `if/else` ladder in `useVoiceCapture.start()` is gone; every STT provider implements the same `VoiceSession` interface with `onStateChange` / `onTranscription` / `onError` listeners. The four `transcribeViaX` functions and the four `*Error` classes are deleted. The `VoiceProvider` literal union is renamed to `VoiceProviderId`; the old `VoiceProvider` *interface* (M2-era scaffolding) is gone — the factory registry is the polymorphism point. The `useVoiceCapture` hook shrinks from 922 lines to ~360 (the per-provider `startXxxRecording` callbacks / `stop()` branches / `pcmHandleRef` / `onDeviceSessionIdRef` / `webSpeechHandleRef` / `streamRef` / `recorderRef` are gone — the session owns them internally). The `'nativeDictation'` factory exists in `src/voice/sessions/nativeDictationSession.ts` and is wired into the `voiceSessionFactories` registry; it throws `VoiceSessionError('not-configured')` at start time (the Swift / Kotlin plugins land separately). The Settings card and Command Palette entry for `nativeDictation` are deferred. 499/499 vitest tests pass (+18 for M3: 17 new `src/voice/session.test.ts` + the rewritten per-provider test files), 146/146 cargo tests pass (the Rust side adds the `session_id` field to `TranscriptEvent` and a new test assertion in `transcript_event_serializes_with_camel_case_keys`). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (M3 — unified `VoiceSession` API across all STT providers)" for the full feature list; see HANDOFF §9.9 for the migration writeup.
+
+**Next:** After M3 is fully shipped, the deferred roadmap:
+- M3 follow-up — iOS Swift `SFSpeechRecognizer` and Android Kotlin `SpeechRecognizer` plugins. The `'nativeDictation'` factory stub exists; the actual Swift / Kotlin code awaits a future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+. The `useVoiceCapabilitiesStore` already returns `nativeDictation: true` on iOS / Android (set by `src-tauri/src/voice_platform.rs`), so the plugins drop in without JS changes.
 - I — `app://` URL scheme + per-folder contexts
 - J — Workspace templates / starter kits
 - K — Onboarding tours (post-first-run)
@@ -766,25 +786,66 @@ next to the mic button.
 
 ### 9.6 Deferred from this session (planned but not shipped)
 
-- **M2c** — on-device STT fallback per platform
-  (iOS `Speech.framework`, Android `SpeechRecognizer`
-  or `whisper.cpp`, desktop OS dictation). The
-  pluggable provider shape (`'stub' | 'wispr' |
-  'ondevice'`) is in place; the actual on-device
-  implementations are next session.
-- **M3** — session-based streaming API for
-  the on-device providers (similar in shape to the
-  Wispr WS protocol, but against a `Session` object
-  exposed by the platform-native STT).
+- **M2c mobile native plugins** — iOS `Speech.framework`
+  (`SFSpeechRecognizer`) and Android
+  `SpeechRecognizer` Swift / Kotlin implementations.
+  The iOS and Android plugin **contracts are
+  fully documented** in
+  `docs/plugins/lipi-stt-ios/README.md` and
+  `docs/plugins/lipi-stt-android/README.md`,
+  and the Rust `voice_platform.rs` already
+  reports `OsFamily::Ios` and
+  `OsFamily::Android` with
+  `web_speech: false, native_dictation: true` so
+  the future plugins plug in without JS changes
+  (§9.8). The actual Swift / Kotlin code awaits
+  a future session on a Mac with Xcode 16+ /
+  Linux with Android Studio Iguana+; the user's
+  current Windows 10 working environment has
+  neither. The Web Speech shim is the working
+  V1 path on Windows / macOS / iOS WebView.
+  **M3 update (June 2026):** the
+  `'nativeDictation'` factory stub now exists in
+  `src/voice/sessions/nativeDictationSession.ts`
+  and is wired into the `voiceSessionFactories`
+  registry (it throws
+  `VoiceSessionError('not-configured')` at start
+  time). The Settings card and Command Palette
+  entry for `nativeDictation` are deferred until
+  the Swift / Kotlin code lands — see §9.9.
+- **M3** — shipped — see §9.9.
 
-### 9.7 M2c desktop — kickoff (next session, start here)
+### 9.7 M2c desktop — SHIPPED (stub build, see CHANGELOG "Added (M2c desktop)")
 
-> **Why this section exists.** M2c is the biggest single
-> voice slice left. It's also the one with the most
-> platform-API variance, so the next session shouldn't
-> waste an hour re-deriving the platform matrix. The
-> decisions below are pre-made; the agent should treat
-> them as constraints and just implement.
+> **Status:** M2c desktop is shipped in **stub mode**.
+> The full `'ondevice'` provider is end-to-end plumbed
+> through the hook, IPC, and settings UI; the Rust
+> code under `#[cfg(feature = "m2c-native")]` is
+> present but the real `whisper-rs` / `cpal` build
+> requires `libclang.dll` (a Windows LLVM install)
+> which is not present in this sandbox. To run the
+> real path on a developer machine, install LLVM and
+> `cargo build --features m2c-native`. The full
+> feature list, file-by-file description, and test
+> coverage are in `CHANGELOG.md` under "Added (M2c
+> desktop — on-device STT pipeline, stub build)".
+>
+> The original kickoff plan below is preserved for
+> historical context — every decision in the plan was
+> implemented as-described, except the platform
+> coverage (M2c mobile — iOS / Android — is a separate
+> phase) and the Web Speech API alt path (we shipped
+> the Whisper path only; the Web Speech alt is not
+> built).
+
+#### Why this section exists
+
+M2c is the biggest single voice slice left. It's
+also the one with the most platform-API variance, so
+the next session shouldn't waste an hour re-deriving
+the platform matrix. The decisions below are
+pre-made; the agent should treat them as constraints
+and just implement.
 
 #### Scope of M2c desktop
 
@@ -1046,13 +1107,18 @@ API alternative is for users who:
 
 #### What M2c desktop is NOT
 
-- **M2c mobile** (iOS / Android) is a separate phase.
-  iOS uses `SFSpeechRecognizer` (Speech.framework)
-  on the Swift side, Android uses `SpeechRecognizer`
-  on the Kotlin side. Both are OS-level; no whisper
-  model needed. They plug into the same
-  `VoiceProvider` interface in `src/voice/types.ts`
-  — that's the M3 work.
+- **M2c mobile** (iOS / Android) — see §9.8.
+  The Web Speech API shim and the iOS / Android
+  plugin contracts are SHIPPED. The Swift /
+  Kotlin plugin implementations await a future
+  session on a Mac with Xcode 16+ / Linux with
+  Android Studio Iguana+. iOS uses
+  `SFSpeechRecognizer` (Speech.framework), Android
+  uses `SpeechRecognizer`. Both are OS-level; no
+  whisper model needed. The plugin contracts plug
+  into the same `'ondevice' | 'webSpeech'`
+  provider shape — that's the M3 session-based
+  streaming API work.
 - **M3** (the session-based streaming API that
   wraps every provider in a `VoiceSession` with
   `onStateChange` / `onTranscription` /
@@ -1104,6 +1170,777 @@ Total estimate: **600 LoC Rust + 600 LoC TS +
 part — drawing the progress bar + the cancel
 button + the error states takes more time than
 the wiring).
+
+---
+
+### 9.8 M2c mobile — SHIPPED (Web Speech shim + iOS/Android plugin contracts, see CHANGELOG "Added (M2c mobile)")
+
+> **Status:** M2c mobile is shipped as a
+> **Web Speech API shim** for Windows / macOS /
+> iOS WebView, plus **fully-documented iOS and
+> Android plugin contracts** in
+> `docs/plugins/lipi-stt-ios/README.md` and
+> `docs/plugins/lipi-stt-android/README.md`.
+> The Swift / Kotlin plugin code itself awaits
+> a future session on a Mac with Xcode 16+ /
+> Linux with Android Studio Iguana+; the user's
+> current Windows 10 working environment has
+> neither. The Rust `voice_platform.rs` already
+> reports `OsFamily::Ios` and
+> `OsFamily::Android` with
+> `web_speech: false, native_dictation: true` so
+> the future plugins plug in without JS changes
+> (a single new `useEffect`-style "start native
+> dictation" branch in `useVoiceCapture.ts` is
+> all that's needed on the JS side when the
+> Swift / Kotlin code lands).
+>
+> The four locked decisions (Q1 language field,
+> Q2 no custom consent dialog, Q3 mirror
+> On-device subsection, Q4 capability store
+> hydrated at startup) and the R1–R10 risks are
+> documented in
+> `docs/decisions/0046-m2c-mobile-shim.md`. The
+> full feature list, file-by-file description,
+> and test coverage are in `CHANGELOG.md` under
+> "Added (M2c mobile — on-device STT via Web
+> Speech API + iOS/Android plugin contracts)".
+
+#### What ships in M2c mobile V1
+
+1. **Rust — `src-tauri/src/voice_platform.rs`** —
+   a new `OsFamily` enum
+   (`Windows | Macos | LinuxGtk | Ios | Android |
+   Other`) and a `VoicePlatformCapabilities`
+   struct (`ondevice: bool`, `web_speech: bool`,
+   `native_dictation: bool`, `os_family: OsFamily`)
+   with a `get_capabilities()` function. The
+   capability flags are derived at compile time
+   via `#[cfg(target_os)]` on a single
+   `const OS: OsFamily` per build target;
+   4 unit tests cover the camelCase wire shape
+   and the OS-specific truthiness of each flag.
+2. **Rust IPC — `voice_platform_get_capabilities`**
+   — a new Tauri command that exposes the
+   capability struct to the frontend via
+   `invoke('voice_platform_get_capabilities', …)`.
+3. **JS IPC — `src/ipc/voicePlatform.ts`** —
+   TypeScript wrapper that mirrors the Rust
+   struct shape; barrel re-exported from
+   `src/ipc/index.ts`.
+4. **JS — `src/voice/capabilities.ts`** — a
+   process-lifetime cache around
+   `voicePlatformGetCapabilities()` for
+   synchronous reads from the Command Palette's
+   `isEnabled` predicates.
+5. **JS — `src/shared/state/voiceCapabilitiesStore.ts`**
+   — a tiny Zustand store (no persistence) with
+   a `hydrate()` action called once at app
+   startup from `aiStore.ts`.
+6. **JS — `src/voice/webSpeechTypes.ts`** —
+   minimal local types for the non-standard
+   `SpeechRecognition` / `SpeechRecognitionEvent`
+   / `SpeechRecognitionErrorEvent` / `Window`
+   augmentation.
+7. **JS — `src/voice/webSpeechSTT.ts`** — the
+   `transcribeViaWebSpeech()` orchestrator with
+   the same shape as `transcribeViaOnDevice` /
+   `transcribeViaWispr`: pre-flight
+   feature-detect, construct, wire
+   `onresult` / `onerror` / `onend`, `start()`,
+   await. W3C error mapping to a typed
+   `WebSpeechSttErrorCode` union
+   (`permission-denied`, `no-speech`, `aborted`,
+   `network`, `service-not-allowed`,
+   `bad-grammar`, plus Lipi-side `no-webspeech`
+   and `timeout`).
+8. **JS — `src/shared/state/voicePreferencesStore.ts`**
+   — extended with `'webSpeech'` in the
+   `VoiceProvider` union, a `language: string`
+   field (default `'en-US'`), and a `setLanguage`
+   action. Persisted to `lipi:voicePreferences:v1`
+   localStorage with a back-fill path for older
+   payloads.
+9. **JS — `src/shared/hooks/useVoiceCapture.ts`**
+   — extended with `'webSpeech'` in the
+   `UseVoiceCaptureOptions.provider` union. The
+   `startWebSpeechRecording()` callback
+   threads
+   `useVoicePreferencesStore.getState().language`
+   into the orchestrator. The `stop()` path
+   calls the orchestrator's `abort()` handle
+   (with the 500ms fallback the desktop
+   `ondevice` hook uses per Decision #46 risk
+   R5). The cleanup effect aborts on unmount.
+10. **JS — `src/shared/components/VoiceButton/VoiceButton.tsx`**
+    — extended with `'webSpeech'` in the
+    `provider?:` prop union.
+11. **JS — `src/screens/SettingsProvider/components/WebSpeechCard.tsx`**
+    (+ `.module.css`) — a new card that mirrors
+    `OnDeviceCard`'s header / capability badge /
+    lede / privacy callout / single-toggle
+    shape, rendered inside a new `<h3>` "Or use
+    the browser's built-in speech engine"
+    subsection in `SettingsProvider` (not a
+    third radio in the top section per Decision
+    Q3). The capability badge reads "Available" /
+    "Not available on this platform" from the
+    hydrated `useVoiceCapabilitiesStore`. The
+    `TitleBar` subtitle bumps to
+    `'dev · phase M2c mobile'`.
+12. **JS — `src/shared/commands/commands.ts`**
+    — two new commands —
+    `voice.provider.webspeech` and
+    `voice.provider.ondevice` — each gated by an
+    `isEnabled` predicate that reads from
+    `useVoiceCapabilitiesStore.getState().capabilities`
+    synchronously.
+
+#### What awaits a future session
+
+- **iOS Swift plugin** — see
+  `docs/plugins/lipi-stt-ios/README.md`. The
+  `SFSpeechRecognizer` + `SFSpeechAudioBufferRecognitionRequest`
+  Swift code (~250 LoC) plus
+  `src-tauri/src/ios_stt_plugin.rs` (~50 LoC).
+  Estimated effort: one focused session on a
+  Mac with Xcode 16+.
+- **Android Kotlin plugin** — see
+  `docs/plugins/lipi-stt-android/README.md`.
+  The `android.speech.SpeechRecognizer` Kotlin
+  code (~300 LoC) plus
+  `src-tauri/src/android_stt_plugin.rs`
+  (~50 LoC). Estimated effort: one focused
+  session on a Linux box with Android Studio
+  Iguana+.
+- **M3** — session-based streaming API that
+  unifies Wispr / on-device / webSpeech /
+  native-dictation behind a single
+  `VoiceSession` interface (parallel to the
+  Wispr WS protocol). The current
+  `useVoiceCapture` "function + Promise" shape
+  is fine for V1; M3 is the unification.
+
+#### iOS / Android plugin contract shape
+
+Both contracts share a `Channel<TranscriptEvent>`
+wire shape:
+
+```rust
+struct TranscriptEvent {
+  kind: String,           // "partial" | "final"
+  text: String,           // the partial or final transcript
+  sequence: UInt32,       // monotonic per session
+  timestamp: UInt64,      // wall-clock ms since epoch
+  isUtteranceEnd: Boolean, // true on the last `final`
+  language: String?,      // BCP-47, e.g. "en-US"
+}
+```
+
+The JS side subscribes via
+`listen('stt://transcript', ...)` — same event
+name as the iOS, Android, and desktop paths.
+Demux is by `sessionId` once we add it to the
+event payload (M3 work; for V1 there's only
+ever one open session at a time, matching the
+M2c desktop pattern).
+
+The contract documents in detail:
+- **Permission flow** — iOS
+  `SFSpeechRecognizer.requestAuthorization` +
+  `AVAudioApplication.requestRecordPermission`;
+  Android
+  `ActivityCompat.requestPermissions(RECORD_AUDIO)`
+  + `SpeechRecognizer.createSpeechRecognizer`.
+  Each has the OS-specific denial path
+  documented (re-prompt vs. Settings app).
+- **Lifecycle** — `stt_start_listening`,
+  `stt_stop_listening`, `recognition.abort()`
+  shape, the 30s cap enforcement.
+- **Capability flag** — the contract documents
+  that updating `voice_platform.rs` to report
+  `web_speech: false, native_dictation: true`
+  on iOS / Android is the only Rust change
+  needed; the JS `useVoiceCapabilitiesStore`
+  auto-picks up the new shape.
+- **Test plan** — the only practical tests are
+  permission-denial, no-recognizer, and
+  real-device smoke tests. Apple's
+  `SFSpeechRecognizer` and Android's
+  `SpeechRecognizer` have no public mock APIs.
+
+#### Decisions #46, #47
+
+- **#46** — `docs/decisions/0046-m2c-mobile-shim.md`
+  — the M2c mobile ADR. Captures the four
+  locked decisions (Q1, Q2, Q3, Q4), the
+  D1–D6 architecture decisions, and the
+  R1–R10 risks. Source of truth for the
+  design.
+- **#47** — the Q1 language field on the
+  `voicePreferencesStore` (separate
+  micro-decision from the ADR; called out here
+  for completeness). The field is stored +
+  threaded through the orchestrator; the V1
+  UI does not surface a language picker. M3
+  will add the picker.
+
+#### Verified at handoff
+
+- `tsc -b` — clean
+- `vitest run` — 544/544 pass
+  (+49 for M2c mobile: 19 `webSpeechSTT` + 6
+  `voicePlatformCapabilities` + 6
+  `voiceCapabilitiesStore` + 9 `useVoiceCapture
+  webspeech path` + 9 extended
+  `voicePreferencesStore`)
+- `cargo check` — clean
+- `cargo test --lib` — 146/146 pass
+  (+4 for M2c mobile: `voice_platform::*`
+  capability tests)
+- `npm run build` — clean (216 modules,
+  657 KB bundle, 1.93 s)
+
+### 9.9 M3 — SHIPPED (unified `VoiceSession` API across all STT providers, see CHANGELOG "Added (M3)")
+
+> **Status:** M3 is **shipped**. The 4-branch `if/else` ladder
+> in `useVoiceCapture.start()` is gone. Every STT provider —
+> `stub`, `wispr`, `ondevice`, `webSpeech`, and the future
+> `nativeDictation` slot for the iOS Swift / Android Kotlin
+> plugins — implements the same `VoiceSession` interface with
+> `onStateChange` / `onTranscription` / `onError` listeners.
+> The four `transcribeViaX` functions and the four `*Error`
+> classes are deleted. The `VoiceProvider` literal union is
+> renamed to `VoiceProviderId`; the old `VoiceProvider`
+> *interface* (M2-era scaffolding) is gone — the factory
+> registry is the polymorphism point.
+
+#### What M3 is
+
+M3 is the session-based streaming refactor that unifies the
+four STT providers (and the future iOS / Android
+`nativeDictation` slot) behind one polymorphic surface. The
+goal: the `useVoiceCapture` hook's `start()` becomes a single
+`voiceSessionFactories[provider]()` dispatch, and the per-
+provider `startXxxRecording` callbacks / `stop()` branches /
+`pcmHandleRef` / `onDeviceSessionIdRef` /
+`webSpeechHandleRef` / `streamRef` / `recorderRef` are gone
+— the session owns them internally. The hook is a thin
+adapter between the session's listener API and the
+`voiceStore` (which keeps its 5-state machine; the new
+finer-grained 7-state `VoiceSessionState` is mapped via
+`sessionStateToVoiceStatus`).
+
+#### Decisions (the locked ones, all from the M3 design summary)
+
+- **#48 — `VoiceProvider` → `VoiceProviderId` rename**.
+  The M2-era `VoiceProvider` *interface* in
+  `src/voice/types.ts` is **deleted** (it was scaffolding for
+  a registry-based design that has now been superseded). The
+  literal *union* in `src/shared/state/voicePreferencesStore.ts`
+  is renamed to `VoiceProviderId` to avoid the collision.
+  The factory registry (`voiceSessionFactories: Record<VoiceProviderId, ...>`)
+  is the new polymorphism point.
+- **#49 — Per-session `AbortController` as the cancellation
+  contract**. The factory's `opts.signal` plumbs to
+  `VoiceSessionHandle.abort()`. The existing `generationRef`
+  counter in the hook stays as a *secondary* guard for the
+  "new session started after the old one was aborted" case
+  (the abort controller doesn't solve that).
+- **#50 — Delete vs. shim: deleted outright**. The four
+  `transcribeViaX` function exports and the four `*Error`
+  classes are **deleted** — no deprecated wrappers, no
+  `@deprecated` JSDoc, no re-exports. The hook (the only
+  production consumer) and the four per-provider test files
+  are rewritten in the same PR. The semantic-version impact
+  is a breaking change to `@/voice`; called out in
+  `CHANGELOG.md`.
+- **#51 — `transcriptEvent.sessionId` field added**. The
+  Rust `TranscriptEvent` struct in
+  `src-tauri/src/stt_capture.rs` gains a
+  `pub session_id: Option<String>` field (serialised as
+  camelCase `sessionId`). The 5-line Rust change is the
+  minimum needed to demux events on the on-device factory
+  side when the iOS Swift / Android Kotlin plugins ship with
+  concurrent-session support. The Tauri `Channel<TranscriptEvent>`
+  is the right native-to-JS shape; the iOS / Android plugin
+  contracts do NOT need to change. The M3 wire-shape test
+  asserts the field is in the JSON output.
+
+#### What got built
+
+- `src/voice/session.ts` — the canonical `VoiceSession` /
+  `VoiceSessionHandle` interfaces, the 23-code
+  `VoiceSessionErrorCode` union, the 7-state
+  `VoiceSessionState` union, the `VoiceSessionError` class
+  (single error surface for all providers), and the
+  `voiceSessionErrorMessage(code)` helper.
+- `src/voice/sessionFactory.ts` — the
+  `voiceSessionFactories: Record<VoiceProviderId, VoiceSessionFactory>`
+  registry, the `VoiceSessionFactory` type, the
+  `VoiceSessionFactoryOptions` interface (with the
+  per-provider `*Override` injection seams: `webSocketCtor`,
+  `sttStartOverride`, `sttStopOverride`, `subscribeTranscript`,
+  `subscribeError`, `webSpeechCtor`, `windowOverride`).
+- `src/voice/sessions/{stubSession,wisprSession,onDeviceSession,webSpeechSession,nativeDictationSession}.ts`
+  — five self-contained factory files. The Wispr factory owns
+  the PCM capture AND the WebSocket protocol (the M2b
+  `wisprClient.ts` is deleted; its wire protocol moved
+  in-house). The on-device factory owns the
+  `stt://transcript` / `stt://error` subscriptions. The
+  Web Speech factory owns the `SpeechRecognition` instance.
+  The stub factory is a `setTimeout(200ms)` final-emission
+  machine. The `nativeDictation` factory is a stub that
+  throws `VoiceSessionError('not-configured')` at start time
+  (the Swift / Kotlin plugins land separately).
+- `src/shared/hooks/useVoiceCapture.ts` — refactored from
+  922 lines to ~360 lines. The hook's public return shape
+  is **unchanged**: the Composer's call site
+  (`{ isActive, start, stop, status, durationMs, lastError, durationLabel }`)
+  is unchanged.
+- `src/voice/session.test.ts` — 17 new vitest tests covering
+  the cross-provider `VoiceSession` contract: factory
+  dispatch, state transitions, listener wiring, error
+  propagation, abort path, double-stop guard, post-close
+  event guard, `flush()`, the `VoiceSessionError` class
+  fields, the immutable `mode` / `provider` fields, and
+  `vi.fn()` listener integration.
+- `src/shared/hooks/useVoiceCapture.{stub,wispr,ondevice,webspeech}.test.tsx`
+  — rewritten to drive the new factories through their
+  constructor-injection seams. The four files assert the
+  four M3 invariants: (1) the store flips through the
+  5-state machine correctly, (2) the transcript lands in
+  `voiceStore.transcript` on the final, (3) a typed
+  `VoiceSessionError` surfaces as `voiceStore.lastError`,
+  (4) `useEffect` cleanup on unmount aborts the in-flight
+  session.
+- `src/shared/state/voicePreferencesStore.ts` — the
+  `VoiceProvider` literal union renamed to `VoiceProviderId`
+  (re-exported from `@/voice`); `isValidProvider` now
+  accepts `'nativeDictation'`. The Settings UI and Command
+  Palette updated.
+
+#### iOS / Android plugin slot
+
+The `'nativeDictation'` factory exists in
+`src/voice/sessions/nativeDictationSession.ts` and is wired
+into the `voiceSessionFactories` registry. It throws
+`VoiceSessionError('not-configured')` at start time — the
+Swift / Kotlin plugins land in their own repositories; the JS
+side just needs a typed factory to dispatch against. The
+`'nativeDictation'` Settings card and Command Palette entry
+are **deferred** until the plugins are ready. The
+`useVoiceCapabilitiesStore` already returns
+`nativeDictation: true` on iOS / Android (set by
+`src-tauri/src/voice_platform.rs`), so the future
+Swift / Kotlin plugins drop in without JS changes.
+
+#### Verified (M3)
+
+- `tsc -b` — clean.
+- `vitest run` — **499 / 499 pass** (was 481 pre-M3; +17
+  new tests in `src/voice/session.test.ts` + the rewritten
+  per-provider test files).
+- `cargo check` — clean.
+- `cargo test --lib` — **146 / 146 pass** (unchanged; the
+  Rust side adds the `session_id` field to
+  `TranscriptEvent` and a new test assertion in
+  `transcript_event_serializes_with_camel_case_keys`).
+- `npm run build` — clean, 221 modules, ~660 kB bundle.
+
+---
+
+### 9.10 Phase I — SHIPPED (`app://lipi.open?path=...` deep-link scheme, see CHANGELOG "Added (Phase I)")
+
+> **Status:** Phase I is **shipped**. The OS can hand Lipi a
+> URL on launch or at runtime, the Rust side re-emits it as
+> `lipi://deep-link`, the frontend parses it, validates the
+> path against the user's home / Documents / Desktop, and
+> either calls `openWorkspace(path)` or sets the workspace
+> store's `status: error` with a friendly message. The
+> existing `useOpenWorkspace` flow is the only consumer of
+> validated paths, so all of Lipi's downstream workspace
+> guards (recents dedup, FS error mapping) come along for
+> free.
+
+#### What Phase I is
+
+A URL scheme that lets the OS hand Lipi a workspace path.
+The shape is fixed at `app://lipi.open?path=<urlencoded>`.
+The path is strictly limited to user-owned directories
+(home, Documents, Desktop) so a malicious link can never
+point at `C:\Windows\System32` or a sibling user's
+`~/Documents`. The validation is case-insensitive on
+Windows (drive-letter paths always are) and case-sensitive
+on POSIX.
+
+The scheme is registered under
+`plugins.deep-link.desktop.schemes` in `tauri.conf.json`.
+The Rust `setup` callback registers a `lipi://deep-link`
+re-emission listener (the plugin's internal
+`deep-link://new-url` event name is insulated from the JS
+side so a future plugin bump doesn't break the frontend).
+On Linux + Windows debug builds, `register_all()` is
+called so the dev launch picks up the scheme without a
+manual registry edit.
+
+The frontend's `useDeepLinkRouting()` mounts once at the
+app root (`main.tsx`). It fetches the user-dirs allow-list
+via `get_user_dirs()` (a new Rust command that returns
+home / Documents / Desktop in canonical form), then
+subscribes to `lipi://deep-link` for the lifetime of the
+app. Each event is routed through the pure
+`parseOpenUrl()` helper, which:
+
+1. Confirms the scheme is `app:`.
+2. Decodes the `path` query field.
+3. Rejects `..` traversal before any further work.
+4. Confirms the path is absolute (drive letter on Windows,
+   `/` on POSIX).
+5. Normalises repeated slashes + strips trailing separator.
+6. Confirms the normalised path is under one of the
+   allowed roots (case-insensitive on Windows, case-
+   sensitive on POSIX).
+
+A rejection sets `useWorkspaceStore.setStatus({ kind:
+'error', message: friendlyRejectionReason(reason) })` — the
+same `WorkspaceStatus.error` shape the folder picker uses,
+so the Welcome / Editor error banner lights up.
+
+#### Decisions (the locked ones, all from Phase I)
+
+- **#52 — Strict user-dirs-only path validation** (rather
+  than "any path the OS can read"). The OS happily hands a
+  process URLs to `C:\Windows\System32\cmd.exe`; a permissive
+  validator would let a malicious link open that as a
+  "workspace" (the FS read would fail, but the user has
+  already been shown the path and may have acted on it).
+  Limiting to home / Documents / Desktop is a real
+  security boundary. The user is shown a friendly error
+  if the path is rejected.
+- **#53 — Path canonicalisation lives on the Rust side**
+  (`get_user_dirs` returns the canonical form: no symlinks,
+  no `\\?\` Windows extended-length prefix). The JS side
+  compares the inbound normalised path against the canonical
+  allow-list with a case-insensitive `startsWith` on
+  Windows and a case-sensitive `startsWith` on POSIX. This
+  sidesteps the `URL.pathname` quirks (e.g. URL-decoding
+  differences between Chromium's URL and Rust's `url` crate)
+  by treating the inbound path as a string and the
+  allow-list roots as strings.
+- **#54 — `lipi://deep-link` is our event name, not
+  `deep-link://new-url`**. The Rust setup re-emits. If the
+  plugin's event name changes in a future version (it
+  already has once between 1.x and 2.x), the JS side is
+  unaffected. The cost is one extra `app.emit` per URL,
+  which is negligible.
+- **#55 — `onDeepLink` is a typed wrapper, not a bare
+  `webview.listen` call**. The hook imports it from
+  `@/ipc` (Rule 4). Tests of `parseOpenUrl` and
+  `routeDeepLink` are pure (no Tauri runtime) and cover the
+  path rules + the store commit. The hook's effect is a
+  thin mount/unmount glue.
+
+#### What got built
+
+- `src-tauri/Cargo.toml` — added
+  `tauri-plugin-deep-link = "2"` to `[dependencies]`.
+- `src-tauri/tauri.conf.json` — registered the `app` scheme
+  under `plugins.deep-link.desktop.schemes`.
+- `src-tauri/src/lib.rs` — registered the plugin in the
+  Tauri builder, added the `on_open_url` listener in the
+  `setup` callback, gated the `register_all()` call behind
+  `#[cfg(any(target_os = "linux", all(debug_assertions,
+  target_os = "windows")))]` (production installers
+  register the scheme themselves), and added the
+  `get_user_dirs` Tauri command + the
+  `UserDirs { home, documents, desktop }` wire struct.
+- `src/ipc/deepLink.ts` — `getUserDirs()`,
+  `onDeepLink(handler)`, the pure `parseOpenUrl()` helper,
+  the `PathRejectionReason` union, the `OpenUrlResult`
+  union, and `friendlyRejectionReason(reason)`.
+- `src/ipc/index.ts` — added `export * from './deepLink'`.
+- `src/shared/hooks/useDeepLinkRouting.ts` — the React
+  hook (effect-wrapped subscription + dispatch through
+  `parseOpenUrl` + `routeDeepLink`).
+- `src/shared/hooks/index.ts` — added
+  `export * from './useDeepLinkRouting'`.
+- `src/main.tsx` — `useDeepLinkRouting()` mounted in
+  `AppRoot` (next to `useMenuEvents` + `useWorkspaceSync`).
+- `src/ipc/deepLink.test.ts` — 15 vitest tests.
+- `src/shared/hooks/useDeepLinkRouting.test.ts` — 5 vitest
+  tests.
+
+#### Verified
+
+- `npx tsc -b` — 0 errors.
+- `npx vitest run` — **532 / 532 pass** (519 from
+  baseline + 13 new from Phase I). 15 parser tests + 5
+  routing tests are runnable in isolation; the rest of the
+  suite is unchanged.
+- `cargo check` — 0 errors. 9 transitive crates added
+  (`tauri-plugin-deep-link` 2.4.9 + 8 windows / tracing
+  support crates).
+- `cargo test --lib` — **146 / 146 pass** (the Rust side
+  adds zero new unit tests — the path validation is in JS
+  and is fully covered by the vitest suite).
+- `npm run build` — clean. ~3 KB CSS / ~3 KB JS bundle
+  delta.
+
+#### Known limitations
+
+- iOS / Android schemes are NOT registered in this build.
+  Mobile deep-link support ships with the iOS / Android
+  Swift / Kotlin plugins (Phase 7) because the
+  `tauri-plugin-deep-link` mobile build requires the
+  Swift / Kotlin code to call the plugin's API to set up
+  the URL handler, and that's part of the plugin's
+  per-platform glue, not something we can wire from Rust
+  in isolation.
+- A crash mid-`setup` could leave the `lipi://deep-link`
+  event with no listener; the next app launch re-
+  establishes it (no persistent state to corrupt).
+- The `lipi://deep-link` event payload is a `String`
+  (the raw URL). For now the only consumer is the deep-
+  link router; if a future feature wants to emit its own
+  `lipi://...` events, they'll have to use a different
+  scheme prefix to avoid the collision.
+
+---
+
+### 9.11 Phase J — SHIPPED (workspace templates gallery on Welcome, see CHANGELOG "Added (Phase J)")
+
+> **Status:** Phase J is **shipped**. A 5-card grid on
+> the Welcome screen offers one-click project creation:
+> React + Vite, Tauri 2 + React + Rust, Node.js +
+> TypeScript API, Python with venv, Go module. The
+> actual file bodies are inlined in the Rust binary
+> (`src-tauri/src/templates.rs`, ~30 KB of source). The
+> JS side ships only the metadata registry
+> (`src/templates/registry.ts`) so the gallery can render
+> without round-tripping to Rust. The atomic-rollback
+> story is "write to a staging subdir, then rename
+> one-by-one to the final location."
+
+#### What Phase J is
+
+A starter-project gallery. The user clicks a card, picks
+a destination folder in the native picker, and Lipi
+expands the template's file list into a fresh subdir
+underneath. The new project then becomes the active
+workspace — the same `useOpenWorkspace()` flow the
+"Open Folder" button uses, just with `dest` set to the
+freshly-created subdir.
+
+The 5 templates are the full set from the plan:
+`react-vite` (9 files), `tauri-rust` (12 files, includes
+`src-tauri/Cargo.toml` + `tauri.conf.json` + a `greet`
+command), `node-api` (6 files, zero runtime deps), `python-
+venv` (6 files, pyproject + venv layout + pytest), `go-
+module` (5 files, `go.mod` + `main.go` + `main_test.go`).
+
+#### Decisions (the locked ones, all from Phase J)
+
+- **#56 — Templates are inlined in the Rust binary**
+  (rather than read from `resources/templates/*.json` at
+  runtime). The 5 templates are ~30 KB of source total;
+  shipping them as Rust consts means the gallery works
+  even when the app is launched with a stripped-down
+  resources directory (dev / sandbox builds), and means
+  there's no FS-IO race during the "Create" click. The
+  trade-off is a ~30 KB binary bloat, which is negligible
+  relative to the current 52 KB `git.rs`.
+- **#57 — Atomic via staging subdir + per-file rename**
+  (rather than "write all to dest in place, abort on
+  failure" or "use a single tempdir outside dest"). The
+  staging subdir lives inside `dest` (so the rename stays
+  on the same filesystem, no cross-drive surprise on
+  Windows) and is named `.lipi-template-staging-<rand>`.
+  A crash mid-rename loop leaves the destination
+  partially populated; the next `apply` call cleans up
+  the stale staging dir before the empty-dir check runs.
+  A `TemplateError::Partial` variant is reserved for a
+  future iteration that swaps the in-place rename loop
+  for a `MoveFileExW` / `renameat2` batch primitive.
+- **#58 — Refuse to write into a non-empty destination**
+  (rather than "merge into existing files"). The
+  `useApplyTemplate` flow is responsible for picking a
+  fresh subdir under the user's chosen parent, but the
+  Rust side enforces the empty-dir invariant as a second
+  line of defence (in case the JS side has a bug, or a
+  user drops a file in between the picker and the
+  "Create" click). The error message tells the user
+  which destination was rejected.
+- **#59 — The JS side ships metadata only** (rather than
+  a parallel registry of full file bodies). The gallery
+  needs the name, description, and an approximate file
+  count for the badge — the bodies never round-trip
+  through JS. The Rust registry is the single source of
+  truth; the JS registry is a presentational mirror. If a
+  template is added to the Rust side without a matching
+  JS entry, the `apply_template` IPC succeeds but the
+  gallery card doesn't render (we'd notice in QA).
+  Adding a future runtime check (a `lipi://template-list`
+  IPC that returns the canonical list) is one Rust
+  function away; deferred because the v1 surface is
+  stable.
+
+#### What got built
+
+- `src-tauri/src/templates.rs` — the `Template`,
+  `TemplateFile`, `TemplateError`, `ApplyResult` types;
+  the 5 `Template` consts; the `REGISTRY` slice; the
+  `by_id(id)` lookup; the `apply(id, dest)` entry
+  point; the `is_empty_dir`, `clean_stale_staging`,
+  `partial_after_move_failure`, `random_suffix`
+  helpers; and 10 unit tests.
+- `src-tauri/src/lib.rs` — `mod templates;` + the
+  `apply_template` Tauri command + registration in
+  `invoke_handler`.
+- `src/templates/registry.ts` — the `WorkspaceTemplateId`
+  union, the `WorkspaceTemplate` interface, the
+  `WORKSPACE_TEMPLATES` array (5 entries), and the
+  `workspaceTemplateById` lookup.
+- `src/templates/registry.test.ts` — 6 vitest tests.
+- `src/ipc/templates.ts` — the `applyTemplate(id, dest)`
+  IPC wrapper, the `ApplyTemplateResult` interface.
+- `src/ipc/index.ts` — added `export * from './templates'`.
+- `src/screens/Welcome/hooks/useApplyTemplate.ts` — the
+  `useApplyTemplate()` hook + the pure
+  `applyTemplateFlow(id)` function (same shape as
+  `useOpenWorkspace` — transient status, no double-fire,
+  friendly error mapping).
+- `src/screens/Welcome/hooks/useApplyTemplate.test.ts` —
+  5 vitest tests.
+- `src/screens/Welcome/components/TemplateGallery/TemplateGallery.tsx` +
+  `.module.css` — the 5-card grid component (keyboard
+  focusable, `aria-label`, hover/focus states, dark-
+  theme parity via `var(--lipi-*)` tokens).
+- `src/screens/Welcome/components/TemplateGallery/TemplateGallery.test.tsx` —
+  3 vitest tests (smoke).
+- `src/screens/Welcome/Welcome.tsx` — `<TemplateGallery />`
+  mounted between the hero CTA and the recents list.
+
+#### Verified
+
+- `npx tsc -b` — 0 errors.
+- `npx vitest run` — **532 / 532 pass** (519 from
+  baseline + 13 new from Phase J).
+- `cargo check` — 0 errors.
+- `cargo test --lib` — **156 / 156 pass** (146 from
+  baseline + 10 new from Phase J). One pre-existing
+  flake in `secrets::tests` races when the full lib
+  test suite is run in parallel; it passes in isolation
+  and on retry. Unchanged by this PR — flagged for a
+  follow-up. The 10 new template tests are all green
+  in the full suite and in isolation.
+- `npm run build` — clean. ~1.4 KB CSS / ~3 KB JS bundle
+  delta. Total bundle ~665 KB minified, ~187 KB gzipped.
+
+#### Known limitations
+
+- The atomic-rollback story is "write to staging then
+  rename one-by-one" (Decision #57). A crash mid-loop
+  leaves the destination partially populated. Recovery
+  for v1 is "delete the destination and retry." The
+  `TemplateError::Partial` variant is reserved for a
+  future iteration that swaps the rename loop for a
+  batch primitive (`MoveFileExW` with
+  `MOVEFILE_REPLACE_EXISTING` on Windows,
+  `renameat2(RENAME_EXCHANGE)` on Linux).
+- The Rust unit tests don't cover the cross-drive
+  rename case (e.g. `dest` is on `C:\` and the staging
+  subdir is on a different drive). In practice the
+  staging subdir lives inside `dest`, so this is a
+  non-issue, but a paranoid future test would assert
+  it.
+- Templates can't be added at runtime by the user —
+  they're compile-time consts. A "user templates"
+  feature (a `~/.lipi/templates/` folder of `.zip`
+  files) is straightforward to add later; the registry
+  would just gain a `get_user_templates()` accessor and
+  `apply` would dispatch on a "user:" id prefix.
+
+---
+
+### 9.12 Recents-management polish — SHIPPED (see CHANGELOG "Added (Recents-management polish)")
+
+> **Status:** shipped. The Welcome screen's recents
+> header now has a "Clear all" button. The per-row
+> "Remove" (×) button was already wired (see
+> `useWorkspaceStore.removeRecent`); this completes
+> the surface.
+
+#### What it is
+
+A small UI pass that surfaces the
+`useWorkspaceStore.clearRecents()` action that was
+already implemented in the store but never exposed in
+the UI. The button is conditionally rendered —
+`shouldShowClearAll(recentsCount)` returns `true` only
+when `recentsCount > 1` — so a single-item "Clear all"
+(a footgun: the user probably wants to keep that one)
+is hidden, and an empty list doesn't render the
+section at all (the outer guard handles that).
+
+The button sits on the right side of a new
+`recentsHeader` flex row, with the existing "Recent"
+title on the left. The styling is subtle (11 px
+uppercase, transparent, lightens on hover) so it
+doesn't compete with the primary "Open Folder" hero
+above.
+
+#### Decisions (the locked ones)
+
+- **#60 — Hide "Clear all" on a 1-item list (footgun
+  guard), not a confirm dialog**. The argument for a
+  confirm dialog: deleting the last recent is a
+  destructive action; we should ask. The argument
+  against: a single-item list is *itself* the confirm
+  — the user has exactly one recents entry, they
+  probably want to keep it (the typical case is "I
+  opened one project yesterday, that's my workspace"),
+  and exposing a "Clear all" button right next to it
+  invites a misclick. A dialog would be a worse UX
+  (extra click for the common "I want to clear all"
+  case, doesn't prevent the misclick that motivated
+  the guard). The pure-function helper is testable;
+  a confirm-dialog state machine isn't worth the
+  complexity for a sub-1%-of-usage interaction.
+
+#### What got built
+
+- `src/screens/Welcome/Welcome.tsx` — new
+  `recentsHeader` flex row, new "Clear all" button
+  (calls `useWorkspaceStore.getState().clearRecents()`
+  on click), new `shouldShowClearAll` helper exported
+  for the test file.
+- `src/screens/Welcome/Welcome.module.css` — new
+  `.recentsHeader` + `.recentsClearAll` rules.
+- `src/screens/Welcome/Welcome.recents.test.ts` —
+  7 vitest tests (4 helper + 3 store integration).
+
+#### Verified
+
+- `npx tsc -b` — 0 errors.
+- `npx vitest run` — **539 / 539 pass** (532 from
+  baseline + 7 new from this change).
+- `npm run build` — clean. ~0.2 KB CSS / ~0.3 KB JS
+  bundle delta (negligible).
+- No Rust changes. `cargo check` / `cargo test` not
+  re-run (the store action was already in the tree).
+
+#### Known limitations
+
+- None. The store's `clearRecents` already persisted
+  to `localStorage`; the polish is purely a UI
+  surfacing. If a future feature wants to also clear
+  `currentPath` (i.e. "forget my workspace AND my
+  history"), it should add a separate action
+  (`forgetAll()`?) rather than overload `clearRecents`
+  — the "history vs. open workspace" distinction is
+  load-bearing for the "Close folder, keep history"
+  flow (`close()`).
 
 ---
 

@@ -19,6 +19,7 @@ import {
 } from '@/shared/components';
 import {
   useCommandPaletteShortcut,
+  useDeepLinkRouting,
   useFirstRunOnboarding,
   useMenuEvents,
   useOpenFolderShortcut,
@@ -169,6 +170,11 @@ function AppRoot() {
   useOpenFolderShortcut();
   useMenuEvents();
   useWorkspaceSync();
+  // Phase I: subscribe to `app://lipi.open?path=...` URLs the OS
+  // hands the app. Mounted here (not inside ScreenRoot) so the
+  // listener is alive for the full app lifetime, including the
+  // hydration window before the workspace store has been read.
+  useDeepLinkRouting();
   const aboutOpen = useAboutStore(aboutSelectors.isOpen);
   const hideAbout = useAboutStore(aboutSelectors.hide);
   useEffect(() => {

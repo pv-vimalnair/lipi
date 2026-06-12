@@ -442,6 +442,8 @@ const getFileContentsHandler: ToolHandler = async (args) => {
           return `Error: '${path}' is a directory, not a file.`;
         case 'NotADirectory':
           return `Error: a parent of '${path}' is not a directory.`;
+        case 'AlreadyExists':
+          return `Error: '${path}' already exists.`;
         case 'Io':
           return `Error reading '${path}': ${e.payload.detail}`;
         default: {

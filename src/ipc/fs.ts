@@ -36,6 +36,7 @@ export interface FsErrorPayload {
     | 'NotADirectory'
     | 'NotAFile'
     | 'TooLarge'
+    | 'AlreadyExists'
     | 'Io';
   detail: string;
 }
@@ -93,6 +94,53 @@ export async function writeFile(path: string, content: string): Promise<void> {
 export async function pickFolder(): Promise<string | null> {
   try {
     return await invoke<string | null>('fs_pick_folder');
+  } catch (err) {
+    throw asFsError(err);
+  }
+}
+
+/**
+ * Create an empty file at `path`. Refuses if a
+ * file already exists at that path — the JS
+ * call site is expected to pick a fresh name
+ * (we do not auto-suffix `-1` etc., that's the
+ * UI's job — the FileTreePane's "new file"
+ * affordance should generate a unique name).
+ */
+export async function createFile(path: string): Promise<void> {
+  try {
+    await invoke<void>('fs_create_file', { path });
+  } catch (err) {
+    throw asFsError(err);
+  }
+}
+
+/**
+ * Delete a file or directory. Directories are
+ * deleted recursively (matches `rm -rf`). Refuses
+ * if the path doesn't exist — a stale UI button
+ * shouldn't silently succeed and mask a deeper
+ * problem.
+ */
+export async function deleteEntry(path: string): Promise<void> {
+  try {
+    await invoke<void>('fs_delete_entry', { path });
+  } catch (err) {
+    throw asFsError(err);
+  }
+}
+
+/**
+ * Rename (move) a file or directory within the
+ * same filesystem. Refuses if the source doesn't
+ * exist or the destination already exists. We
+ * intentionally do NOT do a copy+delete fallback
+ * across volumes — the UI's rename flow is
+ * intra-workspace only.
+ */
+export async function renameEntry(from: string, to: string): Promise<void> {
+  try {
+    await invoke<void>('fs_rename_entry', { from, to });
   } catch (err) {
     throw asFsError(err);
   }

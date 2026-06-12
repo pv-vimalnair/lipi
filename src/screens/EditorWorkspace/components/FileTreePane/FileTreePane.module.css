@@ -99,3 +99,13 @@
   color: var(--color-danger);
   font-weight: var(--font-weight-semibold);
 }
+
+.rowError {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  padding: var(--space-1) var(--space-2) var(--space-1) calc(var(--space-5) + 8px);
+  background-color: var(--color-danger-soft, transparent);
+  border-radius: var(--radius-sm);
+  margin: 0 var(--space-1) var(--space-1) var(--space-1);
+  word-break: break-word;
+}

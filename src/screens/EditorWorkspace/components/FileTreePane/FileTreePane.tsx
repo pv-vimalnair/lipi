@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
-import type { KeyboardEvent } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent, MouseEvent } from 'react';
 
 import { Button } from '@/shared/components/Button';
 import type { FsEntry } from '@/ipc';
+import { FsError } from '@/ipc';
 import { PaneShell } from '../PaneShell';
 
 import {
@@ -20,7 +21,14 @@ const INDENT_PX = 12; // matches --space-3
  *   - "Open folder" header action calls the native picker.
  *   - Selected root is read into the store and rendered recursively.
  *   - Directories lazy-load their children on first expand.
- *   - Click a file: log the path. (Phase 2c will open it in the editor.)
+ *   - Click a file: log the path.
+ *   - Right-click a row: opens a context menu with
+ *     New File / Rename / Delete. The v1 menus use
+ *     `window.prompt` for the name input and
+ *     `window.confirm` for the destructive confirm —
+ *     a real inline editor / modal confirm is a
+ *     follow-up polish phase, not part of this
+ *     feature.
  */
 export function FileTreePane() {
   const status = useFileTreeStore(fileTreeSelectors.status);
@@ -46,56 +54,30 @@ export function FileTreePane() {
             variant="ghost"
             size="sm"
             onClick={openFolder}
-            loading={status.kind === 'opening'}
             aria-label="Open folder"
           >
-            Open
+            Open…
           </Button>
         )
       }
     >
-      <TreeBody />
+      {status.kind === 'idle' || status.kind === 'opening' ? (
+        <div className={styles.placeholder}>
+          <p>No folder open.</p>
+          <Button variant="primary" size="sm" onClick={openFolder}>
+            Open folder…
+          </Button>
+        </div>
+      ) : status.kind === 'error' ? (
+        <div className={styles.placeholder} role="alert">
+          <p>Couldn't read folder:</p>
+          <code>{status.message}</code>
+        </div>
+      ) : (
+        <TreeRoot rootPath={status.rootPath ?? rootPath ?? ''} />
+      )}
     </PaneShell>
   );
-}
-
-function TreeBody() {
-  const status = useFileTreeStore(fileTreeSelectors.status);
-
-  switch (status.kind) {
-    case 'idle':
-      return (
-        <div className={styles.placeholder}>
-          <span>No folder opened</span>
-          <span className={styles.placeholderHint}>
-            Click <strong>Open</strong> to choose one.
-          </span>
-        </div>
-      );
-    case 'opening':
-      return (
-        <div className={styles.placeholder}>
-          <span>Choose a folder…</span>
-        </div>
-      );
-    case 'loading':
-      return (
-        <div className={styles.placeholder}>
-          <span>Loading…</span>
-        </div>
-      );
-    case 'error':
-      return (
-        <div className={styles.placeholder} role="alert">
-          <span className={styles.errorTitle}>Couldn’t read this folder</span>
-          <span className={styles.placeholderHint}>{status.message}</span>
-        </div>
-      );
-    case 'ready': {
-      const rootPath = status.rootPath;
-      return <TreeRoot rootPath={rootPath} />;
-    }
-  }
 }
 
 interface TreeRootProps {
@@ -153,12 +135,18 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
   const isExpanded = useFileTreeStore(fileTreeSelectors.isExpanded(entry.path));
   const children = useFileTreeStore(fileTreeSelectors.entriesFor(entry.path));
   const selectedPath = useFileTreeStore(fileTreeSelectors.selectedPath);
-  const { toggle, select } = useFileTree();
+  const { toggle, select, create, delete: deleteOp, rename } = useFileTree();
+  // Local error string — kept here so the error
+  // surfaces next to the row that caused it. A
+  // full toast/notification system is out of
+  // scope for this feature.
+  const [rowError, setRowError] = useState<string | null>(null);
 
   const isSelected = selectedPath === entry.path;
   const isDir = entry.isDir;
 
   const handleClick = () => {
+    setRowError(null);
     if (isDir) {
       void toggle(entry.path);
     } else {
@@ -179,6 +167,66 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
     }
   };
 
+  const handleContextMenu = (e: MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setRowError(null);
+    select(entry.path);
+    const target = isDir ? entry.path : parentOf(entry.path);
+    if (!target) return;
+    // Pick the action via a confirm-style prompt.
+    // v1 uses native `window.prompt` / `confirm` —
+    // see the file's header comment. The label
+    // tells the user what kind of entity they're
+    // creating the new item inside.
+    const choice = window.prompt(
+      isDir
+        ? `Action for "${entry.name}" (folder):\n  1. New File in this folder\n  2. Rename\n  3. Delete\n\nEnter 1, 2, or 3 (Cancel = no-op).`
+        : `Action for "${entry.name}" (file):\n  1. Rename\n  2. Delete\n\nEnter 1 or 2 (Cancel = no-op).`,
+      '',
+    );
+    if (choice === null) return;
+    const c = choice.trim();
+    if (isDir) {
+      if (c === '1') {
+        const name = window.prompt('New file name:', 'untitled.txt');
+        if (!name) return;
+        const newPath = joinPath(target, name);
+        void runMutation(() => create(newPath));
+      } else if (c === '2') {
+        const newName = window.prompt('Rename to:', entry.name);
+        if (!newName || newName === entry.name) return;
+        const newPath = joinPath(parentOf(entry.path) ?? '', newName);
+        void runMutation(() => rename(entry.path, newPath));
+      } else if (c === '3') {
+        if (!window.confirm(`Delete folder "${entry.name}" and all its contents? This cannot be undone.`)) return;
+        void runMutation(() => deleteOp(entry.path));
+      }
+    } else {
+      if (c === '1') {
+        const newName = window.prompt('Rename to:', entry.name);
+        if (!newName || newName === entry.name) return;
+        const newPath = joinPath(target, newName);
+        void runMutation(() => rename(entry.path, newPath));
+      } else if (c === '2') {
+        if (!window.confirm(`Delete "${entry.name}"? This cannot be undone.`)) return;
+        void runMutation(() => deleteOp(entry.path));
+      }
+    }
+  };
+
+  const runMutation = async (fn: () => Promise<void>) => {
+    try {
+      await fn();
+      setRowError(null);
+    } catch (err) {
+      const msg =
+        err instanceof FsError
+          ? `${err.payload.kind}: ${err.payload.detail}`
+          : String(err);
+      setRowError(msg);
+    }
+  };
+
   return (
     <li role="none" className={styles.node}>
       <div
@@ -193,6 +241,7 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
         style={{ paddingLeft: `${depth * INDENT_PX + 8}px` }}
         onClick={handleClick}
         onKeyDown={handleKey}
+        onContextMenu={handleContextMenu}
       >
         <span className={styles.chevron} aria-hidden="true">
           {isDir ? (isExpanded ? '▾' : '▸') : ''}
@@ -202,6 +251,15 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
         </span>
         <span className={styles.name}>{entry.name}</span>
       </div>
+      {rowError && (
+        <div
+          className={styles.rowError}
+          role="alert"
+          data-testid="file-tree-row-error"
+        >
+          {rowError}
+        </div>
+      )}
       {isDir && isExpanded && children && (
         <ul role="group" className={styles.children}>
           {children.map((child) => (
@@ -216,6 +274,33 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
       )}
     </li>
   );
+}
+
+/**
+ * Return the parent directory of a file path, or
+ * the empty string if the path has no parent
+ * (which the menu treats as "no parent to act in"
+ * — shouldn't happen in practice for tree rows).
+ */
+function parentOf(path: string): string {
+  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  if (idx <= 0) return '';
+  return path.slice(0, idx);
+}
+
+/**
+ * Join a parent directory and a child name with
+ * the platform separator. The Rust side
+ * normalises the result, so we just need a
+ * sensible join — we pick `\` on Windows-likely
+ * inputs (any path containing a `\`) and `/`
+ * otherwise.
+ */
+function joinPath(parent: string, child: string): string {
+  if (!parent) return child;
+  const sep = parent.includes('\\') ? '\\' : '/';
+  const trimmed = parent.endsWith(sep) ? parent.slice(0, -1) : parent;
+  return `${trimmed}${sep}${child}`;
 }
 
 // Re-export the discriminated union shape so consumers can pattern-match.

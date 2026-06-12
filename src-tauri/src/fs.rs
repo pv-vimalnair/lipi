@@ -44,6 +44,8 @@ pub enum FsError {
     NotAFile(String),
     #[error("file too large: {0} bytes (max {MAX_READ_BYTES} bytes)")]
     TooLarge(u64),
+    #[error("path already exists: {0}")]
+    AlreadyExists(String),
     #[error("io error: {0}")]
     Io(String),
 }
@@ -185,6 +187,85 @@ pub fn write_file(path: &Path, content: &str) -> Result<(), FsError> {
     Ok(())
 }
 
+/// Create a new file at `path` (refuses if it already
+/// exists — the UI's "new file" affordance should
+/// pick a fresh name; we don't auto-overwrite).
+/// Creates parent dirs as needed. The new file is
+/// created empty; the JS side follows up with
+/// `write_file` to populate it, or with
+/// `monaco-editor` to open and type into it.
+pub fn create_file(path: &Path) -> Result<(), FsError> {
+    if path.exists() {
+        return Err(FsError::AlreadyExists(path.display().to_string()));
+    }
+    if let Some(parent) = path.parent() {
+        // create_dir_all is a no-op if parent already
+        // exists, which is the common case. We do
+        // not refuse if parent doesn't exist —
+        // `write_file` creates missing parents too,
+        // and the "new file in subfolder" flow
+        // (right-click on a folder → new file) needs
+        // this to work.
+        fs::create_dir_all(parent)?;
+    }
+    // `OpenOptions::create_new` is the Rust idiomatic
+    // "fail if exists" — same semantics as our
+    // explicit check above, but cheaper (single
+    // syscall).
+    use std::io::Write as _;
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    // Touch the file so its mtime is current. A
+    // zero-byte file is fine; the JS side will
+    // either open it in the editor (empty buffer)
+    // or write content via `write_file`.
+    f.write_all(b"")?;
+    f.sync_all()?;
+    Ok(())
+}
+
+/// Delete a file or directory at `path`. For
+/// directories, deletes recursively (matches the
+/// `rm -rf` semantics VS Code's "Delete" uses on
+/// the file tree). Refuses to delete paths that
+/// don't exist — a stale UI button shouldn't
+/// silently succeed.
+pub fn delete_entry(path: &Path) -> Result<(), FsError> {
+    let meta = fs::metadata(path).map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => FsError::NotFound(path.display().to_string()),
+        _ => FsError::Io(err.to_string()),
+    })?;
+    if meta.is_dir() {
+        fs::remove_dir_all(path)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+/// Rename a file or directory at `from` to `to`.
+/// Both paths must be on the same filesystem (we
+/// don't fall back to copy+delete across drives —
+/// the UI's "rename" affordance is intra-workspace
+/// only and the validator at the call site should
+/// catch cross-volume attempts). Refuses if `from`
+/// doesn't exist or `to` already exists.
+pub fn rename_entry(from: &Path, to: &Path) -> Result<(), FsError> {
+    if !from.exists() {
+        return Err(FsError::NotFound(from.display().to_string()));
+    }
+    if to.exists() {
+        return Err(FsError::AlreadyExists(to.display().to_string()));
+    }
+    if let Some(parent) = to.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(from, to)?;
+    Ok(())
+}
+
 fn tmp_path(p: &Path) -> PathBuf {
     let mut s = p.as_os_str().to_owned();
     s.push(".tmp");
@@ -281,6 +362,119 @@ mod tests {
         let file = dir.join("a/b/c.txt");
         write_file(&file, "deep").unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "deep");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn create_file_makes_empty_file() {
+        let dir = unique_tmpdir("create");
+        let file = dir.join("new.txt");
+        create_file(&file).unwrap();
+        assert!(file.exists());
+        assert!(file.is_file());
+        assert_eq!(fs::metadata(&file).unwrap().len(), 0);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn create_file_creates_missing_parent_dirs() {
+        let dir = unique_tmpdir("create-nested");
+        let file = dir.join("a/b/new.txt");
+        create_file(&file).unwrap();
+        assert!(file.exists());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn create_file_refuses_to_overwrite_existing() {
+        let dir = unique_tmpdir("create-conflict");
+        let file = dir.join("exists.txt");
+        fs::write(&file, "preexisting").unwrap();
+        let err = create_file(&file).unwrap_err();
+        assert!(matches!(err, FsError::AlreadyExists(_)));
+        // The pre-existing content must be untouched.
+        assert_eq!(fs::read_to_string(&file).unwrap(), "preexisting");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn delete_entry_removes_file() {
+        let dir = unique_tmpdir("del-file");
+        let file = dir.join("doomed.txt");
+        fs::write(&file, "x").unwrap();
+        delete_entry(&file).unwrap();
+        assert!(!file.exists());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn delete_entry_recursively_removes_dir() {
+        let dir = unique_tmpdir("del-dir");
+        let sub = dir.join("sub/inner");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("leaf.txt"), "x").unwrap();
+        delete_entry(&dir.join("sub")).unwrap();
+        assert!(!dir.join("sub").exists());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn delete_entry_refuses_missing_path() {
+        let dir = unique_tmpdir("del-missing");
+        let err = delete_entry(&dir.join("nope.txt")).unwrap_err();
+        assert!(matches!(err, FsError::NotFound(_)));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn rename_entry_moves_file() {
+        let dir = unique_tmpdir("rename");
+        let from = dir.join("old.txt");
+        let to = dir.join("new.txt");
+        fs::write(&from, "content").unwrap();
+        rename_entry(&from, &to).unwrap();
+        assert!(!from.exists());
+        assert!(to.exists());
+        assert_eq!(fs::read_to_string(&to).unwrap(), "content");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn rename_entry_moves_directory() {
+        let dir = unique_tmpdir("rename-dir");
+        let from = dir.join("old");
+        let to = dir.join("new");
+        fs::create_dir(&from).unwrap();
+        fs::write(from.join("inside.txt"), "x").unwrap();
+        rename_entry(&from, &to).unwrap();
+        assert!(!from.exists());
+        assert!(to.exists());
+        assert!(to.join("inside.txt").exists());
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn rename_entry_refuses_missing_source() {
+        let dir = unique_tmpdir("rename-missing");
+        let err = rename_entry(&dir.join("nope"), &dir.join("dest")).unwrap_err();
+        assert!(matches!(err, FsError::NotFound(_)));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn rename_entry_refuses_existing_destination() {
+        let dir = unique_tmpdir("rename-conflict");
+        let from = dir.join("a.txt");
+        let to = dir.join("b.txt");
+        fs::write(&from, "x").unwrap();
+        fs::write(&to, "y").unwrap();
+        let err = rename_entry(&from, &to).unwrap_err();
+        assert!(matches!(err, FsError::AlreadyExists(_)));
+        // Both files must be untouched after the
+        // refused rename (a silent overwrite
+        // would be data loss).
+        assert_eq!(fs::read_to_string(&from).unwrap(), "x");
+        assert_eq!(fs::read_to_string(&to).unwrap(), "y");
         fs::remove_dir_all(dir).ok();
     }
 }

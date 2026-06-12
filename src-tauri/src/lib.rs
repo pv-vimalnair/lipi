@@ -29,7 +29,10 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 
 mod fs;
-use fs::{read_dir, read_file, write_file, FsEntry, FsError, FileContent};
+use fs::{
+    read_dir, read_file, write_file, create_file, delete_entry, rename_entry,
+    FsEntry, FsError, FileContent,
+};
 
 mod menu;
 
@@ -330,6 +333,21 @@ fn fs_read_file(path: String) -> Result<FileContent, FsError> {
 #[tauri::command]
 fn fs_write_file(path: String, content: String) -> Result<(), FsError> {
     write_file(std::path::Path::new(&path), &content)
+}
+
+#[tauri::command]
+fn fs_create_file(path: String) -> Result<(), FsError> {
+    create_file(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn fs_delete_entry(path: String) -> Result<(), FsError> {
+    delete_entry(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn fs_rename_entry(from: String, to: String) -> Result<(), FsError> {
+    rename_entry(std::path::Path::new(&from), std::path::Path::new(&to))
 }
 
 // --- Phase 5c: custom tool shell executor ---------------------------------
@@ -1429,6 +1447,9 @@ pub fn run() {
             fs_read_file,
             fs_write_file,
             fs_pick_folder,
+            fs_create_file,
+            fs_delete_entry,
+            fs_rename_entry,
             git_open,
             git_status,
             git_current_branch,

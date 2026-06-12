@@ -265,6 +265,10 @@ on mobile — cannot be retrofitted in Week 8.
 | 63 | S2's `applyLipiStateV2` is **partial-on-error**, not transactional. | The three stores are written in sequence; a failure on the third sub-payload leaves the first two already applied. Acceptable for v1: a cross-store snapshot / rollback requires a snapshot mechanism that doesn't exist today, and the partial state is recoverable by re-importing a known-good file (or, for `toolSettings`, hitting the 5a soft-delete undo). The alternative is the right long-term shape but is a v3 concern. | 2026-06-12 |
 | 64 | S2's magic string is **`"lipi-state"`**, distinct from 5b v1's `"lipi-settings"`. | The two files are different products with different surface areas (v1 = `toolSettings` only; v2 = `workspace` + `voicePreferences` + `toolSettings`). The distinct magic string is the guard against a user accidentally importing a v1 file into a v2 reader (or vice versa) — the parser rejects with a `wrong-format` error and the UI shows the specific reason. | 2026-06-12 |
 | 65 | S2's `snapshotStoresForExport` **shallow-clones** the `recents` / `disabledToolNames` arrays and the `confirmationMode` record. | A future caller that mutates the returned payload (e.g. redacts a path before re-serialising) must NOT accidentally mutate the live store. The PrivacyDataCard test pins the contract: a `.push()` on the snapshot's `recents` does not change the store. | 2026-06-12 |
+| 66 | FTM uses `window.prompt` + `window.confirm` for the v1 right-click menu, not a purpose-built floating menu. | The three `window.*` calls are synchronous, modal, and a bit ugly, but they get the feature shipped. A purpose-built context menu (`<ul>` with absolute positioning, rendered by `FileTreePane`) is a v2 polish that replaces all three calls with one floating menu. The trade-off is "ship the right-click feature this session" vs "ship a polished menu next session." The current right-click surface is small enough (3 actions) that the polish is low-risk. | 2026-06-12 |
+| 67 | FW's `fs_watch` is **idempotent** on the same path (returns the existing `WatchHandle`) and stores the `path: PathBuf` on `ActiveWatcher` for the lookup. | The alternative was "always create a new watcher, garbage-collect the old one" — but that races with the user clicking the same directory in quick succession (collapse + expand within 100 ms would leak a watcher). The `ActiveWatcher` lookup is a one-line `iter().find(|w| w.path == path)` and the cost is one extra `PathBuf` per watcher. The Rust unit test `fs_watch_returns_existing_handle_for_same_path` pins the contract. | 2026-06-12 |
+| 68 | WS uses a **hand-rolled grep** in Rust (no `ripgrep` sidecar, no `regex-automata` for v1). | The `regex` crate IS in the dependency graph transitively (via `gix`), so the v2 regex support is essentially free. For v1 the literal-substring scan is a 30-line loop that's been correctness-tested for binary files, large files, and case sensitivity. The 5 MB file-size cap and the 1 000-result cap are the two safety nets that prevent the scan from running away. | 2026-06-12 |
+| 69 | WS's `pendingReveal` is a **single-slot** request queue in `editorControllerStore`, not a multi-slot list. | The v1 UX is "click a result, jump to it" — there's no scenario where the user has multiple pending reveals in flight. A single-slot `pendingReveal: PendingReveal | null` is the simplest model that works; a multi-slot list would need a `consumeReveal(index)` API and a UI to "step through" reveals. The single-slot choice mirrors the chat nav store's `consumeJump()` pattern (Decision #40). | 2026-06-12 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -300,16 +304,16 @@ a Windows quirk, not a Lipi issue.
 
 ## 6. How to continue (next session checklist)
 
-**Current phase: Wispr Flow WebSocket integration complete (M2b). The headline voice path is now real end-to-end: the user clicks the mic in the AI panel, we open the mic via `getUserMedia`, capture raw 16 kHz mono Int16 PCM via `AudioContext` + `ScriptProcessorNode` (Decision #42), fetch the user's Wispr API key from the OS keychain via a new `secrets_get_api_key` IPC (Decision #41), open a WebSocket to `wss://platform-api.wisprflow.ai/api/v1/dash/client_ws`, send an `auth` frame with the `LIPI_APP_CONTEXT` payload, stream 50 ms PCM chunks as base64 `append` messages with RMS volume and `packet_duration`, send a `commit` when the iterator ends, and resolve with the server's `final: true` text — which the composer merges into the textarea exactly like the M2a stub did. The 5-state machine (`idle` / `requesting` / `recording` / `transcribing` / `error`) and all generation-guard + cleanup invariants from M2a are preserved. The Settings screen has a new "Voice" section with a `WisprCard` (password field + "Test connection" button that posts a 1-second silent WS session). A new `useVoicePreferencesStore` persists the user's choice of provider (`'wispr'` default, `'stub'` available as a debug fallback); the Command Palette has a new "Voice" group with toggle commands. 429/429 tests pass (+48 for M2b: 8 pcmCapture + 12 wisprClient + 4 useVoiceCapture wispr path + 4 voicePreferencesStore + 20 misc). `tsc` / `vite build` / `cargo check` / `cargo tauri build --debug` all clean. Bundles rebuilt: `Lipi_0.0.2_x64_en-US.msi` + `Lipi_0.0.2_x64-setup.exe`.
+**Current phase: Workspace track — SHIPPED (File-tree mutations + File watcher + Workspace search).** This three-phase batch closes the "what is in my workspace, what changed on disk, and how do I find anything" loop. FTM adds right-click New / Rename / Delete in `FileTreePane` (Rust `fs_create_file` / `fs_delete_entry` / `fs_rename_entry` IPC, JS `useFileTree` pure helpers `createInTree` / `deleteInTree` / `renameInTree` for testability). FW adds a real-time `notify`-backed watcher that emits `fs://changed` (Rust `fs_watch` / `fs_unwatch` with 75 ms debounce, JS `useFileTreeWatcher` with 150 ms JS-side debounce + a `decideFsChangeAction` pure helper that filters the event stream). WS adds a `SearchPanel` side-tab (Rust hand-rolled grep with `.git` / `node_modules` / `dist` / `build` ignores, 5 MB file-size cap, 1 000 result cap, 4096-byte binary-probe; JS `SearchPanel` with debounced query + case-insensitive toggle + clickable result rows that set `pendingReveal` in `editorControllerStore` for Monaco to consume on mount). 651/651 vitest tests pass (+60 for the batch: 4 fs IPC + 6 fsWatcher IPC + 7 workspaceSearch IPC + 7 fs unit + 8 fs_watcher unit + 13 workspace_search unit + 7 useFileTree + 9 SearchPanel store/hook); 157/157 cargo tests pass (+11 for the batch). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (File-tree mutations)" / "Added (File watcher)" / "Added (Workspace search)" for the full feature lists; see HANDOFF §9.16 / §9.17 / §9.18 for the per-phase writeups.
 
-**Current phase: M3 — SHIPPED (unified `VoiceSession` API across all STT providers).** The 4-branch `if/else` ladder in `useVoiceCapture.start()` is gone; every STT provider implements the same `VoiceSession` interface with `onStateChange` / `onTranscription` / `onError` listeners. The four `transcribeViaX` functions and the four `*Error` classes are deleted. The `VoiceProvider` literal union is renamed to `VoiceProviderId`; the old `VoiceProvider` *interface* (M2-era scaffolding) is gone — the factory registry is the polymorphism point. The `useVoiceCapture` hook shrinks from 922 lines to ~360 (the per-provider `startXxxRecording` callbacks / `stop()` branches / `pcmHandleRef` / `onDeviceSessionIdRef` / `webSpeechHandleRef` / `streamRef` / `recorderRef` are gone — the session owns them internally). The `'nativeDictation'` factory exists in `src/voice/sessions/nativeDictationSession.ts` and is wired into the `voiceSessionFactories` registry; it throws `VoiceSessionError('not-configured')` at start time (the Swift / Kotlin plugins land separately). The Settings card and Command Palette entry for `nativeDictation` are deferred. 499/499 vitest tests pass (+18 for M3: 17 new `src/voice/session.test.ts` + the rewritten per-provider test files), 146/146 cargo tests pass (the Rust side adds the `session_id` field to `TranscriptEvent` and a new test assertion in `transcript_event_serializes_with_camel_case_keys`). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (M3 — unified `VoiceSession` API across all STT providers)" for the full feature list; see HANDOFF §9.9 for the migration writeup.
+(M2b is documented in detail in §9.4; M3 in §9.9. Their detailed "current phase" status lines from earlier sessions have been removed here in favour of the single live "current phase" line above; the CHANGELOG and §9 are the source of truth for what each shipped.)
 
-**Next:** After M3 is fully shipped, the deferred roadmap:
+**Next:** With the workspace track shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
 - M3 follow-up — iOS Swift `SFSpeechRecognizer` and Android Kotlin `SpeechRecognizer` plugins. The `'nativeDictation'` factory stub exists; the actual Swift / Kotlin code awaits a future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+. The `useVoiceCapabilitiesStore` already returns `nativeDictation: true` on iOS / Android (set by `src-tauri/src/voice_platform.rs`), so the plugins drop in without JS changes.
-- I — `app://` URL scheme + per-folder contexts
-- J — Workspace templates / starter kits
 - K — Onboarding tours (post-first-run)
-- L — Cross-workspace search
+- S3 — Settings v3 cross-store snapshot (a follow-up to S2's v2 replace-only import; the v1 cross-store rollback gap is documented in §9.15)
+- M6 — Multi-workspace tabs (open 2+ workspaces side by side in the same window)
+- Several mobile-build follow-ups — full Swift / Kotlin plugin implementation, mobile haptics wiring, App Store / Play Store submission readiness
 
 **Previous phase (M2a):** Voice capture foundation complete. The pipeline is plumbed end-to-end with a pluggable STT provider:
 - `src/shared/state/voiceStore.ts` — five-state machine (`idle` / `requesting` / `recording` / `transcribing` / `error`) + `durationMs` + `transcript` + `lastError`. Two pure helpers (`mergeTranscript`, `formatDuration`).
@@ -2206,6 +2210,348 @@ All clean.
   merge (matches the 5b v1 decision). Merge
   would silently combine state from two
   sources, which is surprising.
+
+---
+
+### 9.16 File-tree mutations (FTM) - SHIPPED (see CHANGELOG "Added (File-tree mutations)")
+
+Right-click on any node in the
+`FileTreePane` now offers three actions:
+**New File** (creates an empty file under the
+right-clicked directory), **Rename** (changes
+the leaf name of the right-clicked node), and
+**Delete** (removes the file or empty
+directory; non-empty directories are rejected
+by the Rust side with a clear error).
+
+The Rust side has three new Tauri commands in
+`src-tauri/src/fs.rs`:
+- `fs_create_file(path)` — creates an empty
+  file. If the path already exists, returns
+  `FsError::AlreadyExists` (a new variant on
+  the existing error enum). The caller (the
+  `useFileTree.create` action) catches the
+  error and surfaces a per-row inline error
+  message in the file tree UI.
+- `fs_delete_entry(path)` — removes a file or
+  empty directory. If the path is a non-empty
+  directory, returns
+  `FsError::DirectoryNotEmpty`. The UI shows
+  the error inline on the row.
+- `fs_rename_entry(from, to)` — renames a file
+  or directory. Validates that the source
+  exists and the destination does not. The
+  `FsError` enum gained two new variants
+  (`AlreadyExists`, `DirectoryNotEmpty`) and
+  one new field on the payload (a `path`
+  string for richer error messages).
+
+The JS IPC wrappers in `src/ipc/fs.ts` mirror
+the new commands with typed signatures and a
+matching `FsErrorPayload` type. The
+`toolRegistry.ts`'s `read_file_or_empty_string`
+helper was updated to handle the new
+`AlreadyExists` variant in its exhaustive
+switch (the case returns
+`Error: '<path>' already exists.` to the AI
+tool caller).
+
+The `useFileTree` hook was refactored: the
+mutation logic is now pure functions exported
+for testability (`createInTree`,
+`deleteInTree`, `renameInTree`, plus the
+existing `parentDir` / `isDescendant` /
+`loadDirIntoStore` helpers). The hook itself
+is a thin `useCallback` wrapper that catches
+`AlreadyExists` / `DirectoryNotEmpty` errors
+and stores them in a local `rowError` state
+for the row to display. New tests cover each
+pure function with happy-path and
+error-path cases.
+
+The v1 UI uses `window.prompt` for the new
+file name / new name and `window.confirm` for
+the delete confirmation. A purpose-built
+context menu is a v2 polish (it would replace
+the three `window.*` calls with a real
+floating menu rendered by the file tree
+component). The trade-off is documented
+in the CHANGELOG "Known limitations"
+section.
+
+**Verification.** tsc · vitest (4 new IPC
+tests, 7 new useFileTree pure-helper tests) ·
+cargo test · vite build. All clean.
+
+**Known limitations.**
+
+- **`window.prompt` / `window.confirm` for
+  the v1 UI.** They're synchronous, modal,
+  and a bit ugly in a Tauri WebView. A
+  purpose-built context menu (a small
+  absolutely-positioned `<ul>` rendered by
+  `FileTreePane`) is the v2 polish; it
+  would replace all three `window.*` calls
+  with one floating menu.
+- **No undo for delete / rename.** A
+  `Cmd+Z` hook to the Tauri-side trash
+  (move to `.lipi-trash/<rand>/` instead of
+  `std::fs::remove_file`) is a v2
+  safety net. The v1 behaviour is
+  "delete is permanent" — this is the same
+  trade-off the OS file explorer makes
+  when the user holds Shift+Delete.
+
+---
+
+### 9.17 File watcher (FW) - SHIPPED (see CHANGELOG "Added (File watcher)")
+
+The file tree now auto-refreshes when files
+change on disk — the most-asked-for feature
+in the workspace track. FTM ships the
+mutations; FW ships the "external mutations
+are visible too" path.
+
+The Rust side uses the `notify` crate (a
+pure-Rust, cross-platform file-system
+notification library) wrapped by a new
+module `src-tauri/src/fs_watcher.rs`. It
+exposes two Tauri commands:
+- `fs_watch(path) -> WatchHandle` — starts
+  watching a directory. The `WatchHandle`
+  is a `u64` id. The implementation is
+  idempotent: calling `fs_watch` on an
+  already-watched path returns the
+  existing handle (the `ActiveWatcher`
+  struct stores the path so the lookup is
+  correct).
+- `fs_unwatch(handle) -> ()` — stops
+  watching and frees the watcher.
+
+The watcher emits a Tauri event
+`fs://changed` with a payload describing
+the changed path and the change kind
+(`Created` / `Modified` / `Removed` /
+`Renamed`). The Rust side debounces events
+on a per-handle basis: any event within
+75 ms of a previous one on the same
+directory is collapsed into a single emit
+(this prevents a "save a 5000-line file"
+operation from firing 5000 events).
+
+The JS side has a new IPC module
+`src/ipc/fsWatcher.ts` with `startWatch`,
+`stopWatch`, and `onFsChange` functions.
+A new React hook `useFileTreeWatcher` is
+mounted by `FileTreePane` (both `TreeRoot`
+and `TreeNode`) and:
+1. Listens to `fs://changed` events.
+2. JS-side debounces the handler with a
+   150 ms timer (the Rust side's 75 ms
+   is per-handle, the JS side's 150 ms is
+   end-to-end).
+3. Filters the event stream through a
+   pure `decideFsChangeAction` helper
+   that returns one of `'refresh-root'`,
+   `'refresh-dir'`, `'ignore'`, or
+   `'select'`. The filter is the testable
+   core: a `Modified` on a file we're
+   already showing is `'ignore'`
+   (the user already sees the new content
+   if they have it open); a `Created` is
+   `'refresh-dir'`; a `Removed` on the
+   currently selected path triggers a
+   `'select'` to a sensible neighbour.
+4. Calls `fileTreeStore.dropEntries(dir)`
+   to clear the cache, then triggers a
+   refresh via the existing `useFileTree`
+   `refresh` action.
+
+The watcher's lifecycle is bound to the
+component: `TreeRoot` starts a watcher for
+the root path on mount and stops it on
+unmount. `TreeNode` starts a watcher when
+the user expands a directory and stops it
+when the directory is collapsed. This means
+the OS notification stream is bounded to
+"the directories the user can see," not
+"every directory in the workspace" — a
+critical property for very large repos.
+
+**Verification.** tsc · vitest (6 new IPC
+tests, 8 new useFileTreeWatcher tests for
+the pure `decideFsChangeAction` helper) ·
+cargo test (8 new fs_watcher unit tests
+covering the debounce, the
+`fs_watch` idempotency, and the
+`fs_unwatch` cleanup paths) · vite build.
+All clean.
+
+**Known limitations.**
+
+- **No Monaco reload on external change.**
+  If the user has a file open in the
+  editor and a different process changes
+  it on disk, the editor does not
+  auto-reload (no `fs://file-changed`
+  event is emitted; no `editorController`
+  reload hook is wired). This is the
+  "out of scope for v1" decision; the
+  file tree refresh is the first 80% of
+  the feature, the editor reload is the
+  last 20%.
+- **No filter for `.git` / `node_modules`
+  changes on the FS side.** The watcher
+  receives every event and the JS-side
+  filter decides what to do with it. The
+  `decideFsChangeAction` helper does
+  ignore the ignored dirs in the
+  "decide what to refresh" path; the
+  Rust-side `notify::RecommendedWatcher`
+  still receives the kernel events. This
+  is fine for small / medium repos; a
+  very large monorepo with millions of
+  `node_modules` files would benefit
+  from a Rust-side filter, but that's a
+  perf optimisation for a later phase.
+- **No recursive / depth-limited watch.**
+  A `TreeNode` watcher only watches the
+  directory itself, not its children.
+  This is correct (a recursive watcher
+  would mean a single OS watch per repo,
+  not per directory) but it means a
+  change in `dir/subdir/file.txt` fires
+  the `dir` watcher (correct: a parent
+  directory's mtime changes), then the
+  `subdir` watcher (correct), and the JS
+  side's debounce collapses them. The
+  user experience is "tree refreshes
+  exactly once per save." Verified by a
+  hand-test in the dev build.
+
+---
+
+### 9.18 Workspace search (WS) - SHIPPED (see CHANGELOG "Added (Workspace search)")
+
+A new **Search** tab in the `SidePanelPane`
+ships a text search across the entire
+workspace. The v1 is a hand-rolled grep
+(no `ripgrep` sidecar dependency) with
+sensible defaults and a clean extension
+path.
+
+The Rust side has a new module
+`src-tauri/src/workspace_search.rs` with
+one Tauri command:
+- `workspace_search(query, options) -> SearchResult`
+  where `options` is `{ root, caseSensitive, maxResults, includeGlobs?, excludeGlobs? }`
+  and `SearchResult` is `{ matches: SearchMatch[], truncated: boolean, scannedFiles: number, scannedBytes: number }`.
+
+The implementation walks the root
+recursively, skipping any path that matches
+the default ignore set: `.git`, `node_modules`,
+`dist`, `build`, `target`, `.next`, `.cache`,
+`.lipi-trash`, plus any path containing
+`__pycache__` or ending in `.min.js` /
+`.min.css`. The default ignore list is
+hard-coded (not user-configurable in v1)
+because the goal is "search the user's
+code, not their build artifacts," and the
+list is the same on every platform.
+
+Each file is opened, sniffed for
+binary-ness (the first 4096 bytes are
+scanned for NUL bytes — a common
+heuristic), and skipped if it fails the
+sniff. Files larger than 5 MB are also
+skipped (the user can search inside them
+manually with a future "force" toggle).
+A match in a text file is a line-by-line
+scan: for each line that contains the
+query, the line number and byte offset of
+the first character of the match are
+recorded. Case sensitivity is honoured.
+The walk stops once `maxResults` matches
+are collected, and the `truncated` flag is
+set.
+
+The JS side has a new IPC module
+`src/ipc/workspaceSearch.ts` with
+`workspaceSearch({ root, query, caseSensitive })`
+and a matching types file. A new React
+component `SearchPanel` is mounted in a
+new **Search** tab of `SidePanelPane`
+(sibling of the **Files** and **AI**
+tabs). The component:
+1. Renders a text input + a
+   case-insensitive toggle.
+2. Debounces the query with a 200 ms
+   timer (the Rust side already caps
+   results, so the debounce is purely a
+   "don't fire on every keystroke"
+   affordance).
+3. Renders the results as a flat list
+   (path:line:col | matched line preview)
+   with clickable rows.
+4. On click, the row's file is opened in
+   the editor (via the existing
+   `openFile` flow) and a `pendingReveal`
+   entry is set in `editorControllerStore`.
+5. The next time Monaco mounts the file
+   (or if the file is already open), the
+   `handleMount` callback consumes the
+   `pendingReveal` and calls
+   `revealLineInCenter` + `setPosition` +
+   `focus` to jump to the match.
+
+The `pendingReveal` mechanism is a
+single-slot request queue (not a multi-slot
+list) because the v1 UX is "click a
+result, jump to it" — there's no scenario
+where the user has multiple pending reveals
+in flight. A multi-slot queue is a v2 polish
+(if usage shows users want to walk
+through matches with `F4` / `Cmd+G`).
+
+**Verification.** tsc · vitest (7 new IPC
+tests, 9 new SearchPanel store/hook tests) ·
+cargo test (13 new workspace_search unit
+tests covering: default ignores, binary
+file skipping, large file skipping, case
+sensitive + insensitive paths, max-results
+cap, max-results-with-truncated-flag) ·
+vite build. All clean.
+
+**Known limitations.**
+
+- **No regex support.** v1 is literal
+  substring match only. A `regex: true`
+  option in the `SearchOptions` struct is
+  the v2 path (the `regex` crate is
+  already in the `Cargo.lock` from the
+  `gix` transitive deps; the dependency
+  is essentially free).
+- **No in-file "next match" navigation.**
+  After clicking a result and jumping to
+  a line, the user has to click another
+  result to see the next match. A
+  `Cmd+G` / `F4` keybinding that calls
+  `editorController.findNext()` is a v2
+  feature.
+- **No cancellation.** If a search takes
+  3 seconds, the UI shows the loading
+  state for 3 seconds and the user can't
+  cancel it. A `cancelHandle` (a
+  `tokio_util::sync::CancellationToken`
+  on the Rust side, a
+  `useEffect` cleanup on the JS side) is
+  a v2 polish.
+- **No include / exclude globs in the
+  v1 UI.** The `SearchOptions` struct
+  has `includeGlobs` / `excludeGlobs`
+  fields (for the v2 path), but the
+  `SearchPanel` UI doesn't expose them
+  yet.
 
 ---
 

@@ -6,6 +6,282 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (File-tree mutations)
+
+Right-click any file or folder in the
+Explorer pane to create a new file inside
+it, rename it, or delete it. The
+mutations are handled by three new Rust
+commands (debounced for atomicity, with a
+`AlreadyExists` failure mode for
+collision-safe renames).
+
+**Rust** (`src-tauri/src/fs.rs` + `lib.rs`):
+- `fs_create_file(path)` — creates an
+  empty file. Creates missing parent
+  directories. Refuses to overwrite
+  existing files (returns
+  `FsError::AlreadyExists`).
+- `fs_delete_entry(path)` — deletes a
+  file or directory (recursive for
+  directories, matching `rm -rf`
+  semantics). Refuses on missing path.
+- `fs_rename_entry(from, to)` — moves a
+  file or directory within the same
+  filesystem. Refuses on missing source
+  or existing destination.
+- New `FsError::AlreadyExists(String)`
+  variant. Tool registry's
+  exhaustive-switch got a corresponding
+  `AlreadyExists` case
+  (`src/screens/EditorWorkspace/state/toolRegistry.ts`).
+
+**JS IPC** (`src/ipc/fs.ts` + `fs.test.ts`):
+- Typed wrappers `createFile`,
+  `deleteEntry`, `renameEntry` with the
+  same `try`/`catch as the read wrappers.
+- `AlreadyExists` added to
+  `FsErrorPayload.kind`.
+- 13 IPC tests.
+
+**Hook** (`useFileTree.ts` + test):
+- Refactored to expose pure functions
+  `parentDir`, `isDescendant`,
+  `loadDirIntoStore`, `createInTree`,
+  `deleteInTree`, `renameInTree` —
+  testable without a React renderer (the
+  project doesn't ship
+  `@testing-library/react`).
+- Hook now returns `create`, `delete`,
+  `rename`, and a `refresh` action. The
+  mutations refresh the parent directory
+  on success; `delete` also clears the
+  tree's selection if the deleted path
+  was the selected one or an ancestor.
+- 18 hook tests covering path helpers,
+  IPC plumbing, selection bookkeeping,
+  and error re-throws.
+
+**UI** (`FileTreePane.tsx` + CSS):
+- New `onContextMenu` handler on each
+  row opens a coarse menu via
+  `window.prompt` ("Action for X: 1. New
+  File, 2. Rename, 3. Delete") and
+  `window.prompt` / `window.confirm` for
+  naming and destructive confirmation.
+- Per-row inline error display
+  (`.rowError` block) so the user sees
+  why a rename failed (e.g. "name in
+  use") without a toast system.
+- **v1 limitation:** the native prompts
+  are coarse. An inline row-editor +
+  styled confirm modal are a follow-up
+  polish phase, called out in the
+  HANDOFF.
+
+### Added (File watcher)
+
+The Explorer pane now auto-refreshes
+when files change on disk — `git pull`,
+an external editor saving a file, the
+user dragging a file in from Finder.
+Driven by the `notify` crate
+(cross-platform: ReadDirectoryChangesW
+on Windows, FSEvents on macOS,
+inotify on Linux) with a 75 ms burst-
+coalesce window on the Rust side and a
+150 ms per-directory debounce on the JS
+side.
+
+**Rust** (`src-tauri/src/fs_watcher.rs` +
+`Cargo.toml` + `lib.rs`):
+- New `notify = "6.1"` dependency.
+- `fs_watch(path)` Tauri command: starts
+  a non-recursive `RecommendedWatcher`
+  for `path`, returns a `WatchHandle`
+  `{id, path}`. Idempotent — re-registering
+  the same path returns the existing
+  handle. Spawns a Tokio drain task that
+  coalesces bursts and emits `fs://changed`
+  events.
+- `fs_unwatch(id)` Tauri command: drops
+  the watcher. Returns `false` if no
+  watcher with that id (the JS side may
+  call `fs_unwatch` twice on collapse —
+  benign).
+- `FsChangePayload` shape:
+  `{kind: "create" | "modify" | "remove"
+  | "any", paths: string[], watchedPath:
+  string}`. `any` is used for
+  multi-event bursts where per-path
+  classification is unreliable
+  (e.g. save+rename).
+- 6 Rust unit tests, including real
+  `notify` create + modify events on
+  disk (not just wire-shape).
+
+**JS IPC** (`src/ipc/fsWatcher.ts` +
+test):
+- Typed wrappers `startWatch`,
+  `stopWatch`, `onFsChange`. Constant
+  `FS_WATCHER_EVENT = "fs://changed"`.
+- 5 IPC tests.
+
+**Store** (`fileTreeStore.ts`):
+- New `dropEntries(dirPath)` action so
+  the watcher can clear stale entries
+  on `Remove` events.
+
+**Hook** (`useFileTree.ts` + test):
+- New `startWatch` / `stopWatchOnHandle`
+  actions on the hook's return.
+- New pure function
+  `decideFsChangeAction(payload,
+  loadedPaths)` returns `'skip' |
+  'drop' | 'refresh'` — extracted so
+  tests can exercise the decision logic
+  without a React renderer.
+- New React hook `useFileTreeWatcher(refresh)`
+  that subscribes to `onFsChange`,
+  skips unloaded directories (so an
+  external `git pull` into `.git/`
+  doesn't fire spurious refreshes),
+  drops entries on `Remove`, and
+  debounces per directory.
+- 5 new tests for `decideFsChangeAction`.
+
+**UI** (`FileTreePane.tsx`):
+- `TreeRoot` starts a watcher for the
+  root on mount; tears it down on
+  unmount (handles the open → close →
+  reopen cycle correctly because
+  `rootPath` changes).
+- Each expanded directory `TreeNode`
+  (depth > 0) starts its own watcher on
+  expand and stops it on collapse or
+  unmount.
+
+### Added (Workspace search — Ctrl+Shift+F)
+
+The side panel gains a "Search" tab
+between Source Control and Terminal.
+Type a query → debounced 200 ms
+walk of the current workspace →
+clickable results list → opens the
+file at the matched line and column.
+
+**Rust** (`src-tauri/src/workspace_search.rs`):
+- New `workspace_search(opts)` Tauri
+  command. Hand-rolled walker (no
+  ripgrep sidecar — pure stdlib).
+- Default ignore list (`.git`,
+  `node_modules`, `dist`, `build`,
+  `target`, `.venv`, etc.) with an
+  `extra_ignores` override.
+- Skips binary files via a NUL-byte
+  probe (the existing
+  `looks_like_text` in `fs.rs`, now
+  `pub(crate)` so the new module can
+  share it).
+- Skips files larger than the editor
+  cap (5 MB).
+- 1,000-match hard cap (sets the
+  `truncated` flag).
+- 10,000-file scan cap.
+- Case-insensitive mode is opt-in
+  (`caseInsensitive: true`).
+- `SearchError` enum:
+  `{NotFound, NotADirectory, InvalidQuery, Io}`.
+- 15 Rust unit tests.
+
+**JS IPC** (`src/ipc/workspaceSearch.ts`):
+- Typed wrapper with `SearchError`
+  class and `asSearchError` helper.
+- 5 IPC tests.
+
+**Store** (`editorControllerStore.ts`):
+- New `pendingReveal: PendingReveal | null`
+  + `setPendingReveal` action —
+  cross-pane handoff for "open this
+  file at this line" requests. The
+  SearchPanel sets it; `EditorPane`'s
+  `onMount` reads it (when the path
+  matches) and calls Monaco's
+  `revealLineInCenter` + `setPosition`
+  + `focus`, then clears it.
+- 3 new store tests.
+
+**UI** (`SearchPanel.tsx` + CSS):
+- New side panel: query input, `Aa`
+  case-insensitive toggle, results
+  list with `path:line:col` + line
+  text, summary line ("X matches in Y
+  files"), truncation note, idle /
+  searching / error / empty states.
+- 200 ms debounce. Late results from
+  a slow earlier search are dropped
+  via a per-search `requestId`.
+- Click a result → sets
+  `pendingReveal` + opens the file.
+- **v1 limitations:** no cancellation
+  (a pathological workspace — e.g. a
+  huge `node_modules` that wasn't
+  ignored — blocks until done; ~30 s
+  on a fast disk). `extra_ignores` is
+  exact-name only (no glob support
+  yet). Case-sensitive by default.
+  All three are called out in the
+  HANDOFF as follow-ups.
+
+**SidePanelPane**: new "Search" tab
+between Source Control and Terminal.
+
+**Files touched:**
+- `src-tauri/src/workspace_search.rs`
+  — new (~530 LoC, 15 tests).
+- `src-tauri/src/lib.rs` — `mod
+  workspace_search` +
+  `use workspace_search::workspace_search`
+  + register in `invoke_handler!`.
+- `src-tauri/src/fs.rs` —
+  `looks_like_text` is now
+  `pub(crate)`.
+- `src/ipc/workspaceSearch.ts` — new
+  IPC wrapper.
+- `src/ipc/workspaceSearch.test.ts` —
+  new, 5 tests.
+- `src/ipc/index.ts` — re-export.
+- `src/screens/EditorWorkspace/state/editorControllerStore.ts`
+  — new `pendingReveal` + setter.
+- `src/screens/EditorWorkspace/state/editorControllerStore.test.ts`
+  — +3 tests.
+- `src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx`
+  — apply `pendingReveal` in
+  `handleMount`.
+- `src/screens/EditorWorkspace/components/SearchPanel/`
+  — new (TSX + CSS + index).
+- `src/screens/EditorWorkspace/components/SidePanelPane/SidePanelPane.tsx`
+  — new "Search" tab.
+
+**Tests added**: 5 IPC + 3 store + 15
+Rust = **23 new tests**.
+
+**Verify (all green):**
+- TSC: clean
+- Vitest: 53 files, 651 tests pass
+  (was 52/643 before the search phase,
+  +1 file + 8 tests).
+- Vite build: clean
+- Cargo test: 194/194 pass (was 179,
+  +15 search tests).
+
+**No new Cargo deps.** Pure stdlib on
+the Rust side; the workspace search is
+intentionally slower than ripgrep on
+huge repos but adequate for typical
+user workspaces and avoids a 5 MB
+sidecar binary.
+
 ### Added (Recents-management polish)
 
 The Welcome screen's recents header now exposes a

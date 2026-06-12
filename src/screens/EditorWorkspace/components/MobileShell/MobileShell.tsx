@@ -1,4 +1,8 @@
 import { useState } from 'react';
+
+import { useHaptics } from '@/shared/hooks/useHaptics';
+import { useVirtualKeyboard } from '@/shared/hooks/useVirtualKeyboard';
+
 import { MobileTopBar } from './MobileTopBar';
 import styles from './MobileShell.module.css';
 
@@ -67,6 +71,11 @@ const TABS: ReadonlyArray<{ id: MobileTab; label: string; icon: string }> = [
  */
 export function MobileShell() {
   const [tab, setTab] = useState<MobileTab>('edit');
+  // M5: write `--keyboard-height` to
+  // `documentElement` when the on-screen keyboard
+  // opens, and fire a light haptic on tab switch.
+  useVirtualKeyboard();
+  const haptics = useHaptics();
 
   return (
     <div className={styles.shell}>
@@ -107,7 +116,10 @@ export function MobileShell() {
             key={t.id}
             type="button"
             className={`${styles.tab} ${tab === t.id ? styles.tabActive : ''}`}
-            onClick={() => setTab(t.id)}
+            onClick={() => {
+              if (tab !== t.id) haptics.light();
+              setTab(t.id);
+            }}
             aria-current={tab === t.id ? 'page' : undefined}
           >
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">

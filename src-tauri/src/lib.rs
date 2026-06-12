@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_deep_link::DeepLinkExt;
 
 mod fs;
 use fs::{read_dir, read_file, write_file, FsEntry, FsError, FileContent};
@@ -76,6 +77,53 @@ pub use lipi_tools::{
 
 mod cancel;
 
+// M2c (on-device STT). See HANDOFF §9.7. The model
+// lifecycle (list / install / remove / set_active /
+// is_available) is in `stt.rs`; the mic capture + whisper
+// inference is in `stt_capture.rs`. Both modules are
+// compiled in both the stub and the real (`m2c-native`)
+// builds — the feature flag only swaps the implementation
+// of `install_model` / `remove_model` / `set_active_model`
+// and the `start_listening` / `stop_listening` capture
+// loop.
+mod stt;
+pub use stt::{
+    is_available as stt_is_available_rs, is_model_installed as stt_is_model_installed_rs,
+    list_installed_models as stt_list_installed_models_rs, list_models as stt_list_models_rs,
+    model_by_id as stt_model_by_id_rs, read_active_model_id as stt_read_active_model_id_rs,
+    write_active_model_id as stt_write_active_model_id_rs, install_model as stt_install_model_rs,
+    remove_model as stt_remove_model_rs, set_active_model as stt_set_active_model_rs,
+    SttError, SttModelDescriptor, STT_EVENT_DOWNLOAD_PROGRESS, STT_EVENT_ERROR,
+    STT_EVENT_TRANSCRIPT,
+};
+
+mod stt_capture;
+pub use stt_capture::{
+    start_listening as stt_start_listening_rs, stop_listening as stt_stop_listening_rs,
+    ListenOptions, TranscriptEvent, WHISPER_SAMPLE_RATE_HZ, WHISPER_SAMPLES_PER_MS,
+};
+
+// M2c mobile: a tiny compile-time capability
+// surface. Reports which STT providers the current
+// build's OS can support. The JS side reads the
+// payload once at startup and the Command Palette's
+// `isEnabled` predicates use it synchronously to
+// show / grey-out the "Use browser speech engine"
+// command. See `voice_platform.rs` for the full
+// design and `docs/decisions/0046-m2c-mobile-shim.md`
+// for the ADR.
+mod voice_platform;
+pub use voice_platform::get_capabilities as voice_platform_get_capabilities_rs;
+
+// Phase J: workspace starter templates. The Welcome
+// screen's "Template gallery" hands this module a
+// `template_id` and a destination dir; we expand
+// the template's inlined files into that dir
+// atomically (staging + rename). See `templates.rs`
+// for the full design and the unit tests.
+mod templates;
+pub use templates::{apply as templates_apply, ApplyResult as TemplatesApplyResult, TemplateError as TemplatesError};
+
 #[derive(Debug, Serialize)]
 struct AppVersion {
     product_name: &'static str,
@@ -110,6 +158,159 @@ fn get_app_version() -> AppVersion {
 fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
     window.open_devtools();
     Ok(())
+}
+
+// --- Phase J: workspace templates -----------------------------------------
+//
+// The Welcome screen's "Template gallery" hands us a
+// template id and a destination directory. The Rust side
+// expands the template's inlined file list into `dest`
+// atomically. See `templates.rs` for the full design,
+// the per-template file lists, and the unit tests.
+//
+// The destination must be an empty directory — we
+// refuse to write into a non-empty one (avoids
+// clobbering existing files). The JS `useApplyTemplate`
+// flow is responsible for creating a fresh subdir
+// before calling this.
+
+#[tauri::command]
+fn apply_template(
+    template_id: String,
+    dest_dir: String,
+) -> Result<TemplatesApplyResult, TemplatesError> {
+    templates_apply(&template_id, std::path::Path::new(&dest_dir))
+}
+
+// --- Phase M5: haptics ----------------------------------------------------
+//
+// The JS-side `useHaptics` hook calls this command
+// with one of three intensities. On desktop the
+// command is a no-op (desktops don't have a haptic
+// engine, and emitting a console warning per call
+// would spam the dev console). On mobile (iOS /
+// Android) the real implementation lands with the
+// iOS Swift / Android Kotlin plugins — see
+// HANDOFF §9.13. The `#[cfg(mobile)]` split means
+// the desktop binary stays the same and the mobile
+// binary has the placeholder for the future
+// Swift / Kotlin bridge.
+
+/// The three haptic intensities the UI calls. Mirrors
+/// the iOS `UIImpactFeedbackGenerator` / Android
+/// `HapticFeedbackConstants` scale.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum HapticIntensity {
+    Light,
+    Medium,
+    Heavy,
+}
+
+#[tauri::command]
+fn haptic(intensity: HapticIntensity) -> Result<(), String> {
+    // Mobile: defer to the Swift / Kotlin plugin
+    // (deferred — see HANDOFF §9.13).
+    //
+    // Desktop: explicit no-op. We intentionally do
+    // NOT log here — `useHaptics` is called on every
+    // tab switch, voice start, and undo, and a log
+    // per call would be unbearable.
+    #[cfg(mobile)]
+    {
+        let _ = intensity;
+        // Future: forward to the plugin's mobile
+        // bridge. Until the Swift / Kotlin plugins
+        // land, mobile is also a no-op (and a no-op
+        // on mobile isn't great UX, but it's no
+        // worse than the current state — the v1
+        // build doesn't even support the mobile
+        // targets).
+    }
+    #[cfg(not(mobile))]
+    {
+        let _ = intensity;
+    }
+    Ok(())
+}
+
+/// Phase I: the user's home, Documents, and Desktop
+/// directories. Returned as strings (display form on each
+/// platform) so the JS-side deep-link path validator can
+/// check that an incoming `app://lipi.open?path=...` URL
+/// points at a user-owned location. We expand `~` /
+/// `%USERPROFILE%` to the absolute, canonical paths
+/// (resolving symlinks where the platform can) so a
+/// comparison like `path.startsWith(home)` is reliable.
+/// If a dir is missing (e.g. a Linux user with no
+/// `~/Desktop`), its field is `None` — the JS side
+/// treats that as "this root is unavailable" and falls
+/// back to the home-only rule.
+#[derive(Debug, Serialize)]
+struct UserDirs {
+    home: String,
+    documents: Option<String>,
+    desktop: Option<String>,
+}
+
+/// Expand `~` and resolve symlinks. Uses
+/// `std::fs::canonicalize` to follow symlinks and return
+/// the platform-canonical absolute path (with `\\?\`
+/// prefix on Windows stripped, so the path looks like
+/// `C:\Users\foo` and not `\\?\C:\Users\foo`).
+fn expand_dir(p: &std::path::Path) -> Option<String> {
+    let canonical = std::fs::canonicalize(p).ok()?;
+    let s = canonical.to_string_lossy().to_string();
+    // Strip the Windows extended-length prefix.
+    let stripped = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    Some(stripped.to_string())
+}
+
+#[tauri::command]
+fn get_user_dirs() -> UserDirs {
+    // `$HOME` on Unix, `%USERPROFILE%` on Windows. We
+    // prefer the env var so we don't depend on `dirs`
+    // crate (it would add a dep for one constant).
+    let home_raw = if cfg!(target_os = "windows") {
+        std::env::var_os("USERPROFILE")
+    } else {
+        std::env::var_os("HOME")
+    };
+    let home_path = home_raw
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
+    let home = expand_dir(&home_path).unwrap_or_default();
+
+    // Documents / Desktop: platform-specific well-known
+    // names. We try the canonical names first, then fall
+    // back to the locale variants on Windows
+    // (`Documents` vs `My Documents`).
+    let documents_candidates: &[&str] = if cfg!(target_os = "windows") {
+        &["Documents"]
+    } else {
+        &["Documents"]
+    };
+    let desktop_candidates: &[&str] = if cfg!(target_os = "windows") {
+        &["Desktop"]
+    } else {
+        &["Desktop"]
+    };
+
+    let documents = documents_candidates
+        .iter()
+        .map(|name| home_path.join(name))
+        .find_map(|p| expand_dir(&p));
+    let desktop = desktop_candidates
+        .iter()
+        .map(|name| home_path.join(name))
+        .find_map(|p| expand_dir(&p));
+
+    UserDirs {
+        home,
+        documents,
+        desktop,
+    }
 }
 
 // --- Phase 2a: virtual filesystem commands ---------------------------------
@@ -305,6 +506,191 @@ fn git_commit(repo_id: String, message: String) -> Result<CommitResult, GitError
     validate_commit_message(&message)?;
     let handle = RepoHandle { workdir: repo_id };
     commit(&handle, &message)
+}
+
+// --- Phase M2c desktop: on-device STT (model lifecycle) ----
+
+/// The M2c IPC surface. We expose eight commands
+/// covering the model lifecycle and the start/stop of
+/// a capture session. The commands are deliberately
+/// thin: each one delegates to the relevant function in
+/// `stt.rs` or `stt_capture.rs` after resolving the
+/// `AppHandle`'s data dir. The commands themselves
+/// contain no business logic.
+///
+/// Naming convention: the JS wrapper in
+/// `src/ipc/stt.ts` calls them via `invoke('stt_…', …)`.
+/// The Rust side uses `snake_case` per Tauri convention;
+/// serde's `#[serde(rename_all = "camelCase")]` is NOT
+/// needed because these are command names, not struct
+/// fields.
+///
+/// Event names (`stt://download-progress`,
+/// `stt://transcript`, `stt://error`) are re-exported
+/// from `stt.rs` and used both by the capture module
+/// and by the IPC layer for subscription.
+
+/// Return the curated list of STT models. The JS
+/// settings panel renders a card per model. No state.
+/// No async. No I/O.
+#[tauri::command]
+fn stt_list_models() -> Vec<SttModelDescriptor> {
+    stt_list_models_rs()
+}
+
+/// Return the ids of models that are currently
+/// installed on disk. With `m2c-native` off (the dev
+/// build), this is the full curated list (the stub
+/// reports every model as installed); with the
+/// feature on, this is the subset of the curated list
+/// for which a non-empty file exists at the expected
+/// path.
+#[tauri::command]
+fn stt_list_installed_models(app: AppHandle) -> Result<Vec<String>, SttError> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    Ok(stt_list_installed_models_rs(&data_dir))
+}
+
+/// Returns `true` if the user has a model configured
+/// as active. The JS `useVoiceCapture` short-circuits
+/// the `'ondevice'` branch to "provider not configured"
+/// if this returns `false`.
+#[tauri::command]
+fn stt_is_available(app: AppHandle) -> Result<bool, SttError> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    Ok(stt_is_available_rs(&data_dir))
+}
+
+/// Install (download) a model by id. Emits
+/// `stt://download-progress` events with throttled
+/// frequency (4 Hz). The JS side shows a progress
+/// bar; the model becomes selectable as "active" on
+/// completion. With `m2c-native` off, this is a
+/// no-op that emits a single `done: true` event
+/// (the JS side updates the UI as if the download
+/// completed).
+#[tauri::command]
+async fn stt_install_model(app: AppHandle, id: String) -> Result<(), SttError> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    stt_install_model_rs(&app, &data_dir, &id).await
+}
+
+/// Remove a model by id. Idempotent. If the removed
+/// model was the active one, the active preference
+/// is cleared. The JS settings panel calls this
+/// from the model card's "Delete" button.
+#[tauri::command]
+async fn stt_remove_model(app: AppHandle, id: String) -> Result<(), SttError> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    stt_remove_model_rs(&app, &data_dir, &id).await
+}
+
+/// Set the active model by id. Validates that the id
+/// is in the curated list AND (with `m2c-native` on)
+/// that the file is on disk. The JS settings panel
+/// calls this from the radio-button click.
+#[tauri::command]
+async fn stt_set_active_model(app: AppHandle, id: String) -> Result<(), SttError> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    stt_set_active_model_rs(&app, &data_dir, &id).await
+}
+
+/// Start a capture session. Returns the `sessionId`.
+/// The JS side subscribes to `stt://transcript` /
+/// `stt://error` events BEFORE calling this (the
+/// transcript is emitted within milliseconds of
+/// `stop_listening` in the real path; the stub
+/// emits a fake one 200 ms after `start_listening`).
+///
+/// `opts` is optional in the JS IPC layer (we use
+/// `Option<ListenArgs>` and unwrap to defaults).
+#[tauri::command]
+async fn stt_start_listening(
+    app: AppHandle,
+    opts: Option<stt_listen_args_js::ListenArgs>,
+) -> Result<String, SttError> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    let listen_opts = opts
+        .map(|o| ListenOptions {
+            language: o.language,
+            max_duration_ms: o.max_duration_ms,
+        })
+        .unwrap_or_default();
+    stt_start_listening_rs(app, &data_dir, listen_opts).await
+}
+
+/// Stop a capture session. The `sessionId` is the
+/// value returned by `stt_start_listening`. Idempotent
+/// (calling stop on an unknown session returns `Ok(())`).
+/// After this call, the next `stt://transcript` event
+/// for this session will be the last (if any).
+#[tauri::command]
+async fn stt_stop_listening(
+    app: AppHandle,
+    session_id: String,
+) -> Result<(), SttError> {
+    stt_stop_listening_rs(&app, &session_id).await
+}
+
+/// M2c mobile: report which STT backends the
+/// current build can support, so the JS side can
+/// show / grey-out the "Use browser speech engine"
+/// Command Palette command on Linux (where WebKitGTK
+/// doesn't ship `SpeechRecognition`) and surface it
+/// on Windows / macOS / iOS.
+///
+/// The returned shape is `VoicePlatformCapabilities`
+/// (serialised as `camelCase`):
+///   - `ondevice`:         M2c desktop Whisper path
+///   - `webSpeech`:        WebView's `SpeechRecognition`
+///   - `nativeDictation`:  Future iOS / Android plugin
+///   - `osFamily`:         The coarse OS family
+///
+/// Pure compile-time decision; no I/O, no async, no
+/// state. The JS side hydrates the
+/// `voiceCapabilitiesStore` once at app startup
+/// (next to `setupVoicePreferencesPersistence()`).
+/// See `docs/decisions/0046-m2c-mobile-shim.md` for
+/// the ADR and the deferred Swift / Kotlin plugin
+/// notes.
+#[tauri::command]
+fn voice_platform_get_capabilities() -> voice_platform::VoicePlatformCapabilities {
+    voice_platform_get_capabilities_rs()
+}
+
+/// `stt_start_listening`'s IPC arg shape. The Rust
+/// `ListenOptions` struct stays private to the
+/// `stt_capture` module; the JS side talks to this
+/// camelCase shape and we translate. Mirrors the
+/// `ChatRequestArgs` pattern in 5b-1.
+mod stt_listen_args_js {
+    use serde::Deserialize;
+    #[derive(Debug, Clone, Default, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ListenArgs {
+        /// BCP-47 language tag, e.g. "en".
+        pub language: Option<String>,
+        /// Hard cap on session audio length.
+        pub max_duration_ms: Option<u32>,
+    }
 }
 
 // --- Phase 4a: embedded terminal (pipe only, no UI) ------------
@@ -988,9 +1374,50 @@ fn random_hex(n: usize) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Phase I: when the OS hands the app an `app://lipi.open?path=...`
+    // URL (cold start, warm activation, or a second-instance launch on
+    // Windows / Linux), the deep-link plugin fires a `deep-link://new-url`
+    // event. We re-emit it as `lipi://deep-link` so the frontend doesn't
+    // have to depend on the plugin's internal event name (which could
+    // change between plugin versions). The frontend parses the URL
+    // shape and validates the path against the user's home / Documents
+    // / Desktop before opening the workspace.
+    //
+    // Registering the listener inside `setup` (rather than at builder
+    // time) is required because the plugin's `on_open_url` API needs
+    // an `AppHandle`, which is only available once the runtime is up.
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .setup(|app| {
+            let handle_for_emit = app.handle().clone();
+            app.handle().clone().deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    let s: String = url.into();
+                    let _ = handle_for_emit.emit("lipi://deep-link", s);
+                }
+            });
+            // On Linux + Windows dev builds, the scheme isn't registered
+            // by the OS unless we ask the plugin to do it at runtime.
+            // Production MSI / .deb / .dmg installers register the scheme
+            // themselves; the dev-build fallback is `register_all()`.
+            #[cfg(any(target_os = "linux", all(debug_assertions, target_os = "windows")))]
+            {
+                let _ = app.deep_link().register_all();
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                log::info!(
+                    "Lipi shell ready: '{}' v{}",
+                    env!("CARGO_PKG_NAME"),
+                    env!("CARGO_PKG_VERSION"),
+                );
+                let _ = window.set_title(&format!("Lipi {}", env!("CARGO_PKG_VERSION")));
+            } else {
+                log::error!("Main window 'main' not found on startup");
+            }
+            Ok(())
+        });
 
     builder
         .invoke_handler(tauri::generate_handler![
@@ -1024,6 +1451,18 @@ pub fn run() {
             http_request,
             read_lipi_tools,
             write_lipi_tools,
+            stt_list_models,
+            stt_list_installed_models,
+            stt_is_available,
+            stt_install_model,
+            stt_remove_model,
+            stt_set_active_model,
+            stt_start_listening,
+            stt_stop_listening,
+            voice_platform_get_capabilities,
+            get_user_dirs,
+            apply_template,
+            haptic,
         ])
         .manage(Arc::new(TerminalState::new()))
         .menu(|app| menu::build_main_menu(app))
@@ -1034,20 +1473,6 @@ pub fn run() {
             // so all the actual action logic lives in
             // `src/shared/commands/commands.ts`.
             menu::dispatch(app, event.id().0.clone());
-        })
-        .setup(|app| {
-            // Confirm the main window is present, log readiness.
-            if let Some(window) = app.get_webview_window("main") {
-                log::info!(
-                    "Lipi shell ready: '{}' v{}",
-                    env!("CARGO_PKG_NAME"),
-                    env!("CARGO_PKG_VERSION"),
-                );
-                let _ = window.set_title(&format!("Lipi {}", env!("CARGO_PKG_VERSION")));
-            } else {
-                log::error!("Main window 'main' not found on startup");
-            }
-            Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -15,3 +15,8 @@ export * from './ai';
 export * from './runCommand';
 export * from './httpRequest';
 export * from './lipiTools';
+export * from './stt';
+export * from './voicePlatform';
+export * from './deepLink';
+export * from './templates';
+export * from './haptics';

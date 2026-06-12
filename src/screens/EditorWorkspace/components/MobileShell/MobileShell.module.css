@@ -80,7 +80,16 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   height: calc(56px + var(--safe-bottom));
-  padding-bottom: var(--safe-bottom);
+  /* M5: the `--keyboard-height` variable is set
+     by `useVirtualKeyboard` (js side) and lifts
+     the tab bar above the on-screen keyboard. The
+     `0px` default keeps desktop / no-keyboard
+     layouts unchanged. The `var(--safe-bottom)`
+     is the home-indicator safe area (already
+     present in M1). */
+  padding-bottom: calc(
+    var(--safe-bottom, 0px) + var(--keyboard-height, 0px)
+  );
   background-color: var(--color-bg-elevated);
   border-top: 1px solid var(--color-border-subtle);
 }

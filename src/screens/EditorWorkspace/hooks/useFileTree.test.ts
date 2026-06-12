@@ -33,11 +33,17 @@ const {
   deleteEntryMock,
   renameEntryMock,
   readDirMock,
+  startWatchMock,
+  stopWatchMock,
+  onFsChangeMock,
 } = vi.hoisted(() => ({
   createFileMock: vi.fn(),
   deleteEntryMock: vi.fn(),
   renameEntryMock: vi.fn(),
   readDirMock: vi.fn(),
+  startWatchMock: vi.fn(),
+  stopWatchMock: vi.fn(),
+  onFsChangeMock: vi.fn(),
 }));
 
 vi.mock('@/ipc', async () => {
@@ -48,6 +54,9 @@ vi.mock('@/ipc', async () => {
     deleteEntry: deleteEntryMock,
     renameEntry: renameEntryMock,
     readDir: readDirMock,
+    startWatch: startWatchMock,
+    stopWatch: stopWatchMock,
+    onFsChange: onFsChangeMock,
   };
 });
 
@@ -67,6 +76,9 @@ afterEach(() => {
   deleteEntryMock.mockReset();
   renameEntryMock.mockReset();
   readDirMock.mockReset();
+  startWatchMock.mockReset();
+  stopWatchMock.mockReset();
+  onFsChangeMock.mockReset();
   // Reset the store to a known shape so tests
   // don't leak selection between cases.
   useFileTreeStore.setState({
@@ -261,5 +273,78 @@ describe('renameInTree', () => {
     await expect(
       renameInTree('/a/old.txt', '/a/new.txt', vi.fn()),
     ).rejects.toBe(err);
+  });
+});
+
+/**
+ * `useFileTreeWatcher` is a React hook that
+ * subscribes to `onFsChange` and debounces
+ * `refresh(watchedPath)` calls. Without
+ * `@testing-library/react` we can't render
+ * the hook, but we can exercise the
+ * underlying pure function
+ * `decideFsChangeAction` that decides what
+ * to do with each event.
+ *
+ * The hook itself is a thin wrapper that
+ * just wires the listener + the debounce.
+ * The interesting logic (skip unloaded
+ * dirs, drop entries on Remove) lives in
+ * `decideFsChangeAction` — testing that is
+ * what gives us coverage.
+ */
+
+import { decideFsChangeAction } from './useFileTree';
+import type { FsChangePayload } from '@/ipc';
+
+describe('decideFsChangeAction', () => {
+  it('skips events for directories that are not loaded', () => {
+    const payload: FsChangePayload = {
+      kind: 'create',
+      paths: ['/a/new.txt'],
+      watchedPath: '/a',
+    };
+    const loaded = new Set<string>(['/b']);
+    expect(decideFsChangeAction(payload, loaded)).toBe('skip');
+  });
+
+  it('refreshes loaded directories on create events', () => {
+    const payload: FsChangePayload = {
+      kind: 'create',
+      paths: ['/a/new.txt'],
+      watchedPath: '/a',
+    };
+    const loaded = new Set<string>(['/a']);
+    expect(decideFsChangeAction(payload, loaded)).toBe('refresh');
+  });
+
+  it('refreshes loaded directories on modify events', () => {
+    const payload: FsChangePayload = {
+      kind: 'modify',
+      paths: ['/a/a.txt'],
+      watchedPath: '/a',
+    };
+    const loaded = new Set<string>(['/a']);
+    expect(decideFsChangeAction(payload, loaded)).toBe('refresh');
+  });
+
+  it('drops cached entries on remove events so the next read is fresh', () => {
+    const payload: FsChangePayload = {
+      kind: 'remove',
+      paths: ['/a/a.txt'],
+      watchedPath: '/a',
+    };
+    const loaded = new Set<string>(['/a']);
+    expect(decideFsChangeAction(payload, loaded)).toBe('drop');
+  });
+
+  it('refreshes loaded directories on any-kind events (coalesced bursts)', () => {
+    const payload: FsChangePayload = {
+      kind: 'any',
+      paths: ['/a/x', '/a/y'],
+      watchedPath: '/a',
+    };
+    const loaded = new Set<string>(['/a']);
+    expect(decideFsChangeAction(payload, loaded)).toBe('refresh');
   });
 });

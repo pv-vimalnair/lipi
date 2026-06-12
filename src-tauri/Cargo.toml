@@ -85,6 +85,14 @@ portable-pty = "0.8"
 # gix-hash, etc.). We depend on it directly for the terminal
 # session id (16 random bytes → 32-char hex string).
 getrandom = "0.2"
+# notify (Phase W — FS watcher). 6.1 is the current major.
+# We use the default backend-per-platform selection
+# (Windows: ReadDirectoryChangesW, macOS: FSEvents,
+# Linux: inotify). We do NOT enable `crossbeam` (we
+# don't need parallel event processing — a single
+# Tokio task drains the channel and emits Tauri
+# events).
+notify = "6.1"
 # keyring (Phase 5a — AI provider API keys in the OS keychain).
 # 3.6.x is the current 3.x line. The 2.x line was sync-by-default
 # with a different error type; 3.x is the rewrite with explicit
@@ -146,10 +154,10 @@ hound = "3"
 whisper-rs = { version = "0.14", default-features = false, optional = true }
 
 # Platform-specific deps are added per phase:
-# D2 (editor): notify for FS watcher
-# D3 (git):    gix
-# D4 (term):   portable-pty
-# M2-M3:       cpal + platform STT bindings
+# D2 (editor): notify for FS watcher        [W: shipped]
+# D3 (git):    gix                          [Phase 3b: shipped]
+# D4 (term):   portable-pty                 [Phase 4a: shipped]
+# M2-M3:       cpal + platform STT bindings [Phase M2c: shipped]
 # All gated by feature flags to keep Phase 1a build fast.
 
 [dev-dependencies]
@@ -186,6 +194,13 @@ metal = ["m2c-native", "whisper-rs/metal"]
 cuda = ["m2c-native", "whisper-rs/cuda"]
 vulkan = ["m2c-native", "whisper-rs/vulkan"]
 # Uncomment when we add a plugin in the next phase:
+# W: file watcher. The `notify` crate is a hard
+# dep (not gated) because it adds a few hundred
+# KB to the build but no runtime cost beyond
+# the OS-level handles it opens per watched
+# directory — turning it off would be a
+# behaviour gap, not a size win. If we ever
+# need to slim, move it behind a feature.
 # notify-fs = []
 
 [profile.release]

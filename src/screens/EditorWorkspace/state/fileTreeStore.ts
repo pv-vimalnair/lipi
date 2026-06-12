@@ -45,6 +45,16 @@ interface FileTreeState {
   toggleExpanded: (dirPath: string) => void;
   select: (path: string | null) => void;
   reset: () => void;
+  /**
+   * Drop the cached entries for a directory.
+   * The watcher uses this to clear stale
+   * entries on `Remove` events so the next
+   * `setEntries` call doesn't briefly show
+   * a ghost row. The mutation actions
+   * (`deleteInTree`) also use it before
+   * re-reading the parent.
+   */
+  dropEntries: (dirPath: string) => void;
 }
 
 const initial: Pick<
@@ -81,6 +91,20 @@ export const useFileTreeStore = create<FileTreeState>((set) => ({
     }),
   select: (path) => set({ selectedPath: path }),
   reset: () => set({ ...initial, expanded: new Set() }),
+  dropEntries: (dirPath) =>
+    set((s) => {
+      // We rebuild the entriesByDir without
+      // the dropped key. Using a fresh
+      // object is cheap (small number of
+      // expanded dirs in a typical session)
+      // and avoids the cost of `delete` on
+      // a React-observed object.
+      const next: Record<string, FsEntry[]> = {};
+      for (const [k, v] of Object.entries(s.entriesByDir)) {
+        if (k !== dirPath) next[k] = v;
+      }
+      return { entriesByDir: next };
+    }),
 }));
 
 /** Selectors — keep these tiny so components can compose them. */

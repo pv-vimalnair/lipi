@@ -22,7 +22,7 @@
  * workspace store is the source of truth.
  */
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   readDir,
   pickFolder,
@@ -30,7 +30,12 @@ import {
   createFile,
   deleteEntry,
   renameEntry,
+  onFsChange,
+  startWatch,
+  stopWatch,
+  type FsChangePayload,
   type FsEntry,
+  type WatchHandle,
 } from '@/ipc';
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 import { useFileTreeStore } from '../state/fileTreeStore';
@@ -59,6 +64,14 @@ export interface UseFileTree {
    *  tree reflects the move. Updates selection if the renamed
    *  path was the selected one. */
   rename: (from: string, to: string) => Promise<void>;
+  /** Start watching a directory. Returns the
+   *  handle. The component is responsible for
+   *  calling `stopWatchOnHandle` on teardown. */
+  startWatch: (dirPath: string) => Promise<WatchHandle>;
+  /** Stop the watcher for a handle. Safe to
+   *  call with an id that's already been
+   *  stopped (the Rust side returns `false`). */
+  stopWatchOnHandle: (handle: WatchHandle) => Promise<void>;
 }
 
 /**
@@ -303,6 +316,21 @@ export function useFileTree(): UseFileTree {
     [refresh],
   );
 
+  const startWatchCb = useCallback(
+    async (dirPath: string) => {
+      const handle = await startWatch(dirPath);
+      return handle;
+    },
+    [],
+  );
+
+  const stopWatchOnHandle = useCallback(
+    async (handle: WatchHandle) => {
+      await stopWatch(handle.id);
+    },
+    [],
+  );
+
   return {
     openFolder,
     ensureLoaded,
@@ -313,5 +341,135 @@ export function useFileTree(): UseFileTree {
     create,
     delete: deleteOp,
     rename: renameOp,
+    startWatch: startWatchCb,
+    stopWatchOnHandle,
   };
+}
+
+/**
+ * The per-event decision logic for the
+ * file-tree watcher, extracted as a pure
+ * function so tests can exercise it
+ * without a React renderer.
+ *
+ * Returns the action to take (or
+ * `'skip'` if the event should be
+ * ignored):
+ *   - 'skip'           — the directory
+ *                         isn't loaded, or
+ *                         the event is for a
+ *                         different watched
+ *                         path.
+ *   - 'drop'           — the event is a
+ *                         Remove, drop the
+ *                         cached entries.
+ *   - 'refresh'        — schedule a
+ *                         refresh of the
+ *                         directory.
+ *
+ * Exported for testing.
+ */
+export type FsChangeAction = 'skip' | 'drop' | 'refresh';
+
+export function decideFsChangeAction(
+  payload: FsChangePayload,
+  loadedPaths: ReadonlySet<string>,
+): FsChangeAction {
+  if (!loadedPaths.has(payload.watchedPath)) return 'skip';
+  if (payload.kind === 'remove') return 'drop';
+  return 'refresh';
+}
+
+/**
+ * Subscribe to `fs://changed` events for the
+ * lifetime of the calling component. The
+ * callback is `loadDirIntoStore`'s caller —
+ * we debounce per directory and skip events
+ * for directories we haven't loaded (so an
+ * external `git pull` that creates a
+ * thousand entries in `.git/` doesn't
+ * trigger a thousand refreshes).
+ *
+ * The hook takes a `refresh` callback so
+ * tests can pass a stub. The production
+ * caller (`FileTreePane`) wires the
+ * `useFileTree().refresh` action into this.
+ */
+export function useFileTreeWatcher(
+  refresh: (dirPath: string) => Promise<void>,
+): void {
+  // Per-directory debounce timers. We keep
+  // them in a ref so changing `refresh`
+  // doesn't reset the debounce state.
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
+  // The most recent `refresh` we want to
+  // call when the debounce fires. Same
+  // reason as above.
+  const refreshRef = useRef(refresh);
+  useEffect(() => {
+    refreshRef.current = refresh;
+  }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    void onFsChange((payload: FsChangePayload) => {
+      const watched = payload.watchedPath;
+      const action = decideFsChangeAction(
+        payload,
+        // Snapshot the keys — reading
+        // `entriesByDir` directly inside
+        // the callback would be a
+        // re-render hazard.
+        new Set(Object.keys(useFileTreeStore.getState().entriesByDir)),
+      );
+      if (action === 'skip') return;
+      if (action === 'drop') {
+        useFileTreeStore.getState().dropEntries(watched);
+      }
+
+      // Debounce per-directory: a 75 ms
+      // burst-coalesce in Rust is already
+      // in place, but a user deleting
+      // several files via the OS file
+      // manager can produce multiple
+      // 75 ms-coalesced events in quick
+      // succession. We add a 150 ms
+      // follow-up debounce on the JS side
+      // to absorb that.
+      const existing = timersRef.current.get(watched);
+      if (existing) clearTimeout(existing);
+      const t = setTimeout(() => {
+        timersRef.current.delete(watched);
+        void refreshRef.current(watched).catch(() => {
+          // Swallow — the refresh
+          // action's own error path
+          // (setStatus to error) will
+          // have already surfaced the
+          // message in the UI.
+        });
+      }, 150);
+      timersRef.current.set(watched, t);
+    }).then((off) => {
+      if (cancelled) {
+        off();
+      } else {
+        unlisten = off;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+      // Clear any pending timers on
+      // teardown so we don't fire a
+      // refresh after the component
+      // unmounted.
+      for (const t of timersRef.current.values()) clearTimeout(t);
+      timersRef.current.clear();
+    };
+  }, []);
 }

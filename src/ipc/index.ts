@@ -21,3 +21,4 @@ export * from './deepLink';
 export * from './templates';
 export * from './haptics';
 export * from './nativeDictation';
+export * from './fsWatcher';

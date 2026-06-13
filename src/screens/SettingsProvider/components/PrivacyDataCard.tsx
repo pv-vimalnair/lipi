@@ -1,6 +1,7 @@
 /**
  * PrivacyDataCard — Settings "Privacy & data" section
- * with the S2 v2 export/import buttons.
+ * with the S2 export/import buttons, now
+ * S3-wired.
  *
  * Phase S2. This is the S2 counterpart to the
  * 5b v1 `ToolSettingsBackupCard`. The difference:
@@ -12,6 +13,24 @@
  *     lives in a "Privacy & data" section at
  *     the bottom of Settings.
  *
+ * Phase S3 adds the **transactional apply** and
+ * the **import preview**:
+ *
+ *   - The apply is now `applyLipiStateV3`
+ *     (snapshot all three stores → apply →
+ *     restore-on-failure), per Decision #63.
+ *     The v2 partial-on-error apply is
+ *     preserved on disk as a documented
+ *     fallback; this card is the v3 default.
+ *
+ *   - The import flow is now:
+ *       parse → preview → confirm → apply
+ *     The preview shows the user what will
+ *     change BEFORE they commit. "No changes"
+ *     is a valid result (the file is identical
+ *     to the current state; the Apply button
+ *     is disabled).
+ *
  * The privacy scope (no keys, no audit log, no
  * live state) is documented in
  * `LIPI_STATE_V2_PRIVACY_STATEMENT` (a single
@@ -19,17 +38,12 @@
  * above the export/import buttons. The user sees
  * exactly what's in the file *before* they
  * click Export.
- *
- * The Import button goes through a native
- * confirm dialog because the apply is
- * destructive. We do NOT use a custom modal —
- * a `window.confirm` is enough for a single-
- * click flow and matches the 5b v1 pattern.
  */
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 
 import { Button } from '@/shared/components/Button';
-import { applyLipiStateV2 } from '@/shared/settingsIOv2.apply';
+import { applyLipiStateV3 } from '@/shared/settingsIOv3.apply';
+import { computeLipiStateImportPreview } from '@/shared/settingsIOv3.preview';
 import {
   buildLipiStateV2,
   LIPI_STATE_V2_PRIVACY_STATEMENT,
@@ -73,6 +87,55 @@ export function privacyCardLede(): string {
   return 'Back up your Lipi state to a JSON file you can keep as a backup or copy to another machine. Importing overwrites your current state.';
 }
 
+/** Pure: a human-friendly line for a single
+ *  preview diff row. Used by both the UI
+ *  and the tests (so the wording is one
+ *  place). */
+export function previewDiffLabel(diff: {
+  path: string;
+  before: unknown;
+  after: unknown;
+}): string {
+  switch (diff.path) {
+    case 'workspace.currentPath':
+      return `Workspace path: ${stringifyValue(diff.before)} → ${stringifyValue(diff.after)}`;
+    case 'workspace.recents': {
+      const before = diff.before as { added: string[]; removed: string[] };
+      const after = diff.after as { added: string[]; removed: string[] };
+      const addedCount = after.added.length;
+      const removedCount = before.removed.length;
+      const parts: string[] = ['Recents list:'];
+      if (addedCount > 0) parts.push(`  +${addedCount} new`);
+      if (removedCount > 0) parts.push(`  -${removedCount} removed`);
+      return parts.join('\n');
+    }
+    case 'voicePreferences.provider':
+      return `Voice provider: ${diff.before} → ${diff.after}`;
+    case 'toolSettings.disabledToolNames': {
+      const before = diff.before as { added: string[]; removed: string[] };
+      const after = diff.after as { added: string[]; removed: string[] };
+      const parts: string[] = ['Disabled tools:'];
+      for (const t of after.added) parts.push(`  + ${t}`);
+      for (const t of before.removed) parts.push(`  - ${t}`);
+      return parts.join('\n');
+    }
+    default: {
+      if (diff.path.startsWith('toolSettings.confirmationMode.')) {
+        const tool = diff.path.slice('toolSettings.confirmationMode.'.length);
+        return `Tool "${tool}" confirmation: ${stringifyValue(diff.before)} → ${stringifyValue(diff.after)}`;
+      }
+      return `${diff.path}: ${stringifyValue(diff.before)} → ${stringifyValue(diff.after)}`;
+    }
+  }
+}
+
+function stringifyValue(v: unknown): string {
+  if (v === null) return '(none)';
+  if (v === undefined) return '(missing)';
+  if (typeof v === 'string') return v;
+  return JSON.stringify(v);
+}
+
 /** Build the v2 payload from the live stores.
  *  Lives as a function (not inlined in the
  *  onExport callback) so the test can pin the
@@ -109,6 +172,17 @@ export function PrivacyDataCard() {
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const importNoticeTimerRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // The S3 import-preview state.
+  // `null` means "no preview
+  // shown" (the user hasn't
+  // picked a file, or the file
+  // failed to parse). When set,
+  // the card renders the preview
+  // block above the action row.
+  const [pendingImport, setPendingImport] = useState<{
+    parsed: LipiStateV2Data;
+    preview: ReturnType<typeof computeLipiStateImportPreview>;
+  } | null>(null);
 
   useEffect(() => {
     return () => {
@@ -118,9 +192,21 @@ export function PrivacyDataCard() {
     };
   }, []);
 
+  const showNotice = useCallback((msg: string) => {
+    setImportNotice(msg);
+    if (importNoticeTimerRef.current !== null) {
+      window.clearTimeout(importNoticeTimerRef.current);
+    }
+    importNoticeTimerRef.current = window.setTimeout(() => {
+      setImportNotice(null);
+      importNoticeTimerRef.current = null;
+    }, 3000);
+  }, []);
+
   const onExport = useCallback(() => {
     setImportError(null);
     setImportNotice(null);
+    setPendingImport(null);
     const file = buildLipiStateV2(snapshotStoresForExport());
     const json = serialiseLipiStateV2(file);
     const blob = new Blob([json], { type: 'application/json' });
@@ -132,19 +218,13 @@ export function PrivacyDataCard() {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    setImportNotice('Exported.');
-    if (importNoticeTimerRef.current !== null) {
-      window.clearTimeout(importNoticeTimerRef.current);
-    }
-    importNoticeTimerRef.current = window.setTimeout(() => {
-      setImportNotice(null);
-      importNoticeTimerRef.current = null;
-    }, 3000);
-  }, []);
+    showNotice('Exported.');
+  }, [showNotice]);
 
   const onImportFile = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     setImportError(null);
     setImportNotice(null);
+    setPendingImport(null);
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
@@ -163,33 +243,43 @@ export function PrivacyDataCard() {
         setImportError(parseErrorMessage(parsed.error));
         return;
       }
-      // Destructive: confirm with the user
-      // before overwriting local state.
-      // `window.confirm` is the simplest
-      // synchronous confirmation and matches
-      // the 5b v1 card's pattern.
-      const ok = window.confirm(
-        'Importing will replace your current workspace, voice provider, and tool settings. ' +
-          'This is destructive. Continue?',
+      // S3 step 2: show the
+      // preview BEFORE asking
+      // for confirmation. The
+      // user sees a list of
+      // changes (or "No
+      // changes") and can
+      // decide whether to
+      // proceed. The apply is
+      // destructive; this is
+      // the right time to
+      // surface the diff.
+      const preview = computeLipiStateImportPreview(
+        snapshotStoresForExport(),
+        parsed.data,
       );
-      if (!ok) return;
-      const applied = applyLipiStateV2(parsed.data);
-      if (!applied.ok) {
-        setImportError(
-          `Imported file is valid, but applying it failed (${applied.error.kind}): ${applied.error.message}`,
-        );
-        return;
-      }
-      setImportNotice('Imported.');
-      if (importNoticeTimerRef.current !== null) {
-        window.clearTimeout(importNoticeTimerRef.current);
-      }
-      importNoticeTimerRef.current = window.setTimeout(() => {
-        setImportNotice(null);
-        importNoticeTimerRef.current = null;
-      }, 3000);
+      setPendingImport({ parsed: parsed.data, preview });
     };
     reader.readAsText(file);
+  }, []);
+
+  const onConfirmImport = useCallback(() => {
+    if (pendingImport === null) return;
+    setImportError(null);
+    const applied = applyLipiStateV3(pendingImport.parsed);
+    setPendingImport(null);
+    if (!applied.ok) {
+      setImportError(
+        `Imported file is valid, but applying it failed (${applied.error.kind}): ${applied.error.message}. Your state was restored to what it was before the import.`,
+      );
+      return;
+    }
+    showNotice('Imported.');
+  }, [pendingImport, showNotice]);
+
+  const onCancelImport = useCallback(() => {
+    setPendingImport(null);
+    setImportError(null);
   }, []);
 
   return (
@@ -215,6 +305,59 @@ export function PrivacyDataCard() {
           <span className={styles.importButton}>Import Lipi state…</span>
         </label>
       </div>
+      {pendingImport !== null && (
+        <div
+          className={styles.preview}
+          role="region"
+          aria-label="Import preview"
+          data-testid="lipi-state-import-preview"
+        >
+          <h4 className={styles.previewTitle}>
+            {pendingImport.preview.isNoOp
+              ? 'No changes'
+              : `${pendingImport.preview.changeCount} change${pendingImport.preview.changeCount === 1 ? '' : 's'} will be applied:`}
+          </h4>
+          {!pendingImport.preview.isNoOp && (
+            <ul className={styles.previewList}>
+              {pendingImport.preview.diffs.map((d) => (
+                <li
+                  key={d.path}
+                  className={styles.previewItem}
+                  data-path={d.path}
+                >
+                  <pre className={styles.previewItemBody}>
+                    {previewDiffLabel(d)}
+                  </pre>
+                </li>
+              ))}
+            </ul>
+          )}
+          {pendingImport.preview.isNoOp && (
+            <p className={styles.previewNoOp}>
+              The file is identical to your current state. You can close
+              this preview without doing anything.
+            </p>
+          )}
+          <div className={styles.previewActions}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onCancelImport}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              onClick={onConfirmImport}
+              disabled={pendingImport.preview.isNoOp}
+              data-testid="lipi-state-apply"
+            >
+              Apply import
+            </Button>
+          </div>
+        </div>
+      )}
       {importNotice && (
         <p className={styles.notice} role="status">
           {importNotice}

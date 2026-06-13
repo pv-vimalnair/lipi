@@ -108,3 +108,66 @@
   color: var(--color-danger-strong, #f08785);
   font-size: var(--font-size-sm, 12px);
 }
+
+/* S3 import preview — the diff
+ * list the user sees BEFORE
+ * confirming the import. The
+ * "No changes" message is also
+ * rendered here when the file
+ * is identical to the current
+ * state. */
+
+.preview {
+  margin-top: var(--space-3, 12px);
+  padding: var(--space-3, 12px);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  background-color: var(--color-bg-sunken, #161616);
+}
+
+.previewTitle {
+  margin: 0 0 var(--space-2, 8px);
+  font-size: var(--font-size-sm, 12px);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-text);
+}
+
+.previewList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+}
+
+.previewItem {
+  margin: 0;
+  padding: var(--space-2, 8px);
+  border-left: 2px solid var(--color-accent, #6aa6ff);
+  background-color: var(--color-bg-elevated, #1a1a1a);
+  border-radius: 0 4px 4px 0;
+}
+
+.previewItemBody {
+  margin: 0;
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.previewNoOp {
+  margin: 0 0 var(--space-2, 8px);
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text-muted);
+}
+
+.previewActions {
+  display: flex;
+  gap: var(--space-2, 8px);
+  margin-top: var(--space-3, 12px);
+  justify-content: flex-end;
+}

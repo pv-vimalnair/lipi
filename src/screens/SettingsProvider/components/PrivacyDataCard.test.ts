@@ -40,6 +40,7 @@ vi.mock('@/shared/state/toolSettingsStore', () => ({
 
 const {
   parseErrorMessage,
+  previewDiffLabel,
   privacyCardLede,
   snapshotStoresForExport,
 } = await import('./PrivacyDataCard');
@@ -133,5 +134,89 @@ describe('snapshotStoresForExport', () => {
       'C:/Users/dev/proj',
       'C:/Users/dev/other',
     ]);
+  });
+});
+
+describe('previewDiffLabel', () => {
+  it('formats workspace.currentPath changes with a before/after arrow', () => {
+    const label = previewDiffLabel({
+      path: 'workspace.currentPath',
+      before: 'C:/old',
+      after: 'C:/new',
+    });
+    expect(label).toBe('Workspace path: C:/old → C:/new');
+  });
+
+  it('renders workspace.currentPath = null as "(none)"', () => {
+    const label = previewDiffLabel({
+      path: 'workspace.currentPath',
+      before: null,
+      after: 'C:/new',
+    });
+    expect(label).toContain('(none)');
+    expect(label).toContain('C:/new');
+  });
+
+  it('formats workspace.recents with added/removed counts', () => {
+    const label = previewDiffLabel({
+      path: 'workspace.recents',
+      before: { added: [], removed: ['/old'] },
+      after: { added: ['/new'], removed: [] },
+    });
+    expect(label).toContain('Recents list');
+    expect(label).toContain('+1 new');
+    expect(label).toContain('-1 removed');
+  });
+
+  it('formats voicePreferences.provider as a simple arrow', () => {
+    const label = previewDiffLabel({
+      path: 'voicePreferences.provider',
+      before: 'stub',
+      after: 'wispr',
+    });
+    expect(label).toBe('Voice provider: stub → wispr');
+  });
+
+  it('formats toolSettings.disabledToolNames with per-tool bullets', () => {
+    const label = previewDiffLabel({
+      path: 'toolSettings.disabledToolNames',
+      before: { added: [], removed: ['a'] },
+      after: { added: ['b', 'c'], removed: [] },
+    });
+    expect(label).toContain('+ b');
+    expect(label).toContain('+ c');
+    expect(label).toContain('- a');
+  });
+
+  it('formats per-tool confirmationMode changes with the tool name', () => {
+    const label = previewDiffLabel({
+      path: 'toolSettings.confirmationMode.run_shell_command',
+      before: 'always_confirm',
+      after: 'per_call',
+    });
+    expect(label).toBe(
+      'Tool "run_shell_command" confirmation: always_confirm → per_call',
+    );
+  });
+
+  it('formats a new tool (before = null) as a clear "(none)" indicator', () => {
+    const label = previewDiffLabel({
+      path: 'toolSettings.confirmationMode.new_tool',
+      before: null,
+      after: 'always_allow',
+    });
+    expect(label).toContain('Tool "new_tool"');
+    expect(label).toContain('(none)');
+    expect(label).toContain('always_allow');
+  });
+
+  it('falls back to a generic arrow for unknown paths', () => {
+    const label = previewDiffLabel({
+      path: 'someFutureField.value',
+      before: 'a',
+      after: 'b',
+    });
+    expect(label).toContain('someFutureField.value');
+    expect(label).toContain('a → b');
   });
 });

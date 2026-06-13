@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent } from 'react';
 
 import { Button } from '@/shared/components/Button';
@@ -12,6 +12,15 @@ import {
   type FileTreeStatus,
 } from '../../state/fileTreeStore';
 import { useFileTree, useFileTreeWatcher } from '../../hooks/useFileTree';
+import {
+  ConfirmDestructiveModal,
+  FileRowContextMenu,
+  InlineNameInput,
+  initialNameFor,
+  type FileRowAction,
+  type FileRowMenuItem,
+  type InlineNameInputMode,
+} from './index';
 import styles from './FileTreePane.module.css';
 
 const INDENT_PX = 12; // matches --space-3
@@ -22,13 +31,17 @@ const INDENT_PX = 12; // matches --space-3
  *   - Selected root is read into the store and rendered recursively.
  *   - Directories lazy-load their children on first expand.
  *   - Click a file: log the path.
- *   - Right-click a row: opens a context menu with
- *     New File / Rename / Delete. The v1 menus use
- *     `window.prompt` for the name input and
- *     `window.confirm` for the destructive confirm —
- *     a real inline editor / modal confirm is a
- *     follow-up polish phase, not part of this
- *     feature.
+ *   - Right-click a row: opens a floating context menu
+ *     (`FileRowContextMenu`) with 2-3 items
+ *     (New File in this folder / Rename / Delete for
+ *     dirs; Rename / Delete for files). The picked
+ *     action opens a purpose-built modal:
+ *     `InlineNameInput` for name entry
+ *     (replaces the v1 `window.prompt`) and
+ *     `ConfirmDestructiveModal` for the delete gate
+ *     (replaces the v1 `window.confirm`). See
+ *     Decision #66 in HANDOFF for the v1 → v2
+ *     polish history.
  */
 export function FileTreePane() {
   const status = useFileTreeStore(fileTreeSelectors.status);
@@ -188,6 +201,160 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
   const isSelected = selectedPath === entry.path;
   const isDir = entry.isDir;
 
+  // --- Decision #66 polish: state machine
+  // for the right-click menu + the 2 modals.
+  // The 3 pieces of UI are mutually
+  // exclusive (only one can be open at a
+  // time), and the parent's existing
+  // `runMutation` is the common path for
+  // surfacing errors next to the row.
+  type MenuState = { x: number; y: number; entry: FsEntry } | null;
+  const [menu, setMenu] = useState<MenuState>(null);
+  type NameInputState = {
+    mode: InlineNameInputMode;
+    initialName: string;
+    existingNames: Set<string>;
+    // The entry the action targets. For
+    // 'new-file' this is the directory
+    // we're creating in (i.e. the row
+    // that was right-clicked, which is
+    // itself a directory). For 'rename'
+    // this is the entry being renamed.
+    target: FsEntry;
+  } | null;
+  const [nameInput, setNameInput] = useState<NameInputState>(null);
+  type ConfirmState = {
+    kind: 'file' | 'folder';
+    name: string;
+    target: FsEntry;
+  } | null;
+  const [confirm, setConfirm] = useState<ConfirmState>(null);
+
+  // The existing entries for the
+  // directory the action will land
+  // in. For 'new-file' on a directory
+  // row, this is the directory's
+  // children. For 'rename' on a file
+  // row, this is the file's parent's
+  // children (excluding the file
+  // itself). For 'rename' on a
+  // directory row, this is the
+  // directory's parent's children
+  // (excluding the directory itself).
+  const collectExistingNames = useCallback(
+    (parentPath: string, excludeName?: string): Set<string> => {
+      const all = useFileTreeStore.getState().entriesByDir;
+      const entries = all[parentPath] ?? [];
+      const out = new Set<string>();
+      for (const e of entries) {
+        if (excludeName !== undefined && e.name === excludeName) continue;
+        out.add(e.name);
+      }
+      return out;
+    },
+    [],
+  );
+
+  // Build the menu items. Folders get 3
+  // items (New File in this folder /
+  // Rename / Delete); files get 2 (Rename
+  // / Delete).
+  const menuItems: ReadonlyArray<FileRowMenuItem> = isDir
+    ? [
+        { id: 'new-file', action: 'new-file', label: 'New file in folder…' },
+        { id: 'rename', action: 'rename', label: 'Rename…' },
+        {
+          id: 'delete',
+          action: 'delete',
+          label: 'Delete…',
+          destructive: true,
+        },
+      ]
+    : [
+        { id: 'rename', action: 'rename', label: 'Rename…' },
+        {
+          id: 'delete',
+          action: 'delete',
+          label: 'Delete…',
+          destructive: true,
+        },
+      ];
+
+  const handleMenuPick = useCallback(
+    (action: FileRowAction) => {
+      const m = menu;
+      setMenu(null);
+      if (!m) return;
+      // Compute the target parent for the
+      // resulting action. For 'new-file'
+      // on a folder row, the parent is the
+      // folder itself. For all other
+      // actions, the parent is the entry's
+      // parent (the row above it).
+      const target = m.entry;
+      if (action === 'new-file') {
+        if (!isDir) return; // unreachable: new-file is only on folder rows
+        const existing = collectExistingNames(target.path);
+        setNameInput({
+          mode: 'new-file',
+          initialName: initialNameFor('new-file', existing, target.name),
+          existingNames: existing,
+          target,
+        });
+      } else if (action === 'rename') {
+        const parent = isDir ? parentOf(target.path) : parentOf(target.path);
+        // For a top-level file/dir, the
+        // parent is the root, and the
+        // root's children live under
+        // `rootPath` in the store. We
+        // handle that by always reading
+        // the existing-names set from
+        // the entry's parent path.
+        const existing = collectExistingNames(parent, target.name);
+        setNameInput({
+          mode: 'rename',
+          initialName: target.name,
+          existingNames: existing,
+          target,
+        });
+      } else if (action === 'delete') {
+        setConfirm({
+          kind: isDir ? 'folder' : 'file',
+          name: target.name,
+          target,
+        });
+      }
+    },
+    [collectExistingNames, isDir, menu],
+  );
+
+  const handleNameConfirm = useCallback(
+    (name: string) => {
+      const ni = nameInput;
+      setNameInput(null);
+      if (!ni) return;
+      if (ni.mode === 'new-file') {
+        const parent = ni.target.path;
+        const newPath = joinPath(parent, name);
+        void runMutation(() => create(newPath));
+      } else {
+        // rename
+        const parent = parentOf(ni.target.path) ?? '';
+        const newPath = joinPath(parent, name);
+        if (newPath === ni.target.path) return; // no-op
+        void runMutation(() => rename(ni.target.path, newPath));
+      }
+    },
+    [nameInput],
+  );
+
+  const handleConfirmDelete = useCallback(() => {
+    const c = confirm;
+    setConfirm(null);
+    if (!c) return;
+    void runMutation(() => deleteOp(c.target.path));
+  }, [confirm]);
+
   const handleClick = () => {
     setRowError(null);
     if (isDir) {
@@ -214,47 +381,7 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
     e.preventDefault();
     setRowError(null);
     select(entry.path);
-    const target = isDir ? entry.path : parentOf(entry.path);
-    if (!target) return;
-    // Pick the action via a confirm-style prompt.
-    // v1 uses native `window.prompt` / `confirm` —
-    // see the file's header comment. The label
-    // tells the user what kind of entity they're
-    // creating the new item inside.
-    const choice = window.prompt(
-      isDir
-        ? `Action for "${entry.name}" (folder):\n  1. New File in this folder\n  2. Rename\n  3. Delete\n\nEnter 1, 2, or 3 (Cancel = no-op).`
-        : `Action for "${entry.name}" (file):\n  1. Rename\n  2. Delete\n\nEnter 1 or 2 (Cancel = no-op).`,
-      '',
-    );
-    if (choice === null) return;
-    const c = choice.trim();
-    if (isDir) {
-      if (c === '1') {
-        const name = window.prompt('New file name:', 'untitled.txt');
-        if (!name) return;
-        const newPath = joinPath(target, name);
-        void runMutation(() => create(newPath));
-      } else if (c === '2') {
-        const newName = window.prompt('Rename to:', entry.name);
-        if (!newName || newName === entry.name) return;
-        const newPath = joinPath(parentOf(entry.path) ?? '', newName);
-        void runMutation(() => rename(entry.path, newPath));
-      } else if (c === '3') {
-        if (!window.confirm(`Delete folder "${entry.name}" and all its contents? This cannot be undone.`)) return;
-        void runMutation(() => deleteOp(entry.path));
-      }
-    } else {
-      if (c === '1') {
-        const newName = window.prompt('Rename to:', entry.name);
-        if (!newName || newName === entry.name) return;
-        const newPath = joinPath(target, newName);
-        void runMutation(() => rename(entry.path, newPath));
-      } else if (c === '2') {
-        if (!window.confirm(`Delete "${entry.name}"? This cannot be undone.`)) return;
-        void runMutation(() => deleteOp(entry.path));
-      }
-    }
+    setMenu({ x: e.clientX, y: e.clientY, entry });
   };
 
   const runMutation = async (fn: () => Promise<void>) => {
@@ -351,6 +478,42 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
             />
           ))}
         </ul>
+      )}
+      {/* Decision #66 polish — the floating
+       * right-click menu + the 2 modals.
+       * They're mounted at the row level
+       * (not the tree root) so the menu
+       * can be opened on any row without
+       * lifting state. Only one is open
+       * at a time, gated by the
+       * conditional renders. */}
+      {menu && (
+        <FileRowContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems}
+          onPick={handleMenuPick}
+          onDismiss={() => setMenu(null)}
+        />
+      )}
+      {nameInput && (
+        <InlineNameInput
+          open
+          mode={nameInput.mode}
+          initialName={nameInput.initialName}
+          existingNames={nameInput.existingNames}
+          onConfirm={handleNameConfirm}
+          onCancel={() => setNameInput(null)}
+        />
+      )}
+      {confirm && (
+        <ConfirmDestructiveModal
+          open
+          kind={confirm.kind}
+          name={confirm.name}
+          onConfirm={handleConfirmDelete}
+          onCancel={() => setConfirm(null)}
+        />
       )}
     </li>
   );

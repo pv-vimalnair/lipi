@@ -1,0 +1,50 @@
+/* FileRowContextMenu — Decision #66 polish.
+ *
+ * A floating menu anchored at the right-click
+ * x/y. Auto-flips near viewport edges (handled
+ * in the component via `computeContextMenuPosition`).
+ * Items get a danger tint when the row is
+ * marked `data-destructive`.
+ */
+
+.menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1) 0;
+  min-width: 200px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.item {
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.item:hover,
+.item:focus,
+.item[data-focused] {
+  background: var(--color-bg-hover);
+}
+
+.item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.item[data-destructive] {
+  color: var(--color-danger);
+}
+
+.item[data-destructive]:hover,
+.item[data-destructive]:focus {
+  background: var(--color-danger-soft, rgba(220, 38, 38, 0.12));
+}

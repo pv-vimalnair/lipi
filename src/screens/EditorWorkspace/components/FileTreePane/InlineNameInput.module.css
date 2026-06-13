@@ -1,0 +1,64 @@
+/* InlineNameInput — Decision #66 polish.
+ *
+ * A thin modal that wraps the existing
+ * `Modal` primitive with a labelled
+ * text input + Cancel/Submit buttons
+ * for the file-tree's "New File" and
+ * "Rename" actions. The component
+ * itself just renders + validates; the
+ * rules live in `fileNameValidation.ts`.
+ */
+
+.modal {
+  /* Tighter than the Modal default —
+   * the input + buttons only need
+   * ~360px to breathe. */
+  max-width: 380px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-md);
+  font-family: var(--font-family-mono, monospace);
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+
+.input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}

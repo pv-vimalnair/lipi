@@ -1,0 +1,31 @@
+/* ConfirmDestructiveModal — Decision #66 polish.
+ *
+ * Reuses the shared `Modal` primitive's
+ * layout. The body is a regular paragraph
+ * (no special colour — the action button
+ * carries the danger signal).
+ */
+
+.modal {
+  max-width: 440px;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.body {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: var(--line-height-relaxed);
+}
+
+.detail {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}

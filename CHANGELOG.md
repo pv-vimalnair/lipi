@@ -6,6 +6,161 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 2 — Offline licensing layer)
+
+The first step of the "Lipi to Paid Public Launch" roadmap
+(see HANDOFF §6 "Current phase" and §9.24 for the full
+writeup, and `docs/plans/prod-p2-licensing-design.md` for
+the design). Lipi now has an **offline-verifiable
+subscription**: a license key is a JWS-style compact
+signed document (`LIP1.<base64url(payload)>.<base64url(signature)>`)
+using Ed25519. The Rust side embeds the public key
+(production + trial) and verifies the signature offline —
+no server round-trip, no phone-home, no revocation list.
+This matches the project's "no backend, ever"
+architectural rule (Decision #17) and the user's choice
+to keep license validation offline for the paid-public-
+launch roadmap.
+
+**The license key shape**
+
+(`docs/plans/prod-p2-licensing-design.md`, implemented
+in `src-tauri/src/licensing.rs`):
+
+- A license is `"LIP1." || base64url(payload_json) || "." || base64url(signature)`.
+- The payload is JSON with seven fields: `format`
+  (fixed `"lipi-license-v1"`), `plan` (`"trial" | "monthly" | "yearly"`),
+  `iat` / `nbf` / `exp` (Unix timestamps), `sub` (the
+  machine fingerprint — SHA-256 of
+  `hostname || "\n" || username || "\n" || mac_address`,
+  hex-encoded to 64 chars), and `jti` (a random per-license
+  id, 16 random hex chars).
+- The signature is Ed25519 (RFC 8032) over
+  `"LIP1." || base64url(payload)`. The production
+  public key is embedded as a `const [u8; 32]`; the
+  trial public key is embedded as a separate const.
+  The trial private key is also embedded (a deliberate
+  trade-off: 14-day max `exp` bounds the worst case).
+  The production private key is **not** embedded; it's
+  stored in the project lead's CI secret store.
+
+**The trial flow**
+
+- A 14-day trial is auto-generated on the first
+  `license_get_status` call after install. The trial
+  payload is signed with the trial private key, and the
+  resulting `LIP1.…` key is stored in the OS keychain
+  (service `app.lipi.ide`, user `license`).
+- The trial is overwritten when the user activates a
+  paid license. A user who wants to "reset" the trial
+  has to uninstall + reinstall (and lose their
+  settings — this is a feature: it prevents trial-reset
+  abuse).
+- Re-generating the trial on `license_deactivate()` lets
+  a user "transfer to a new machine" by deleting the
+  current license, copying their settings, and
+  reactivating on the new hardware (Phase 3 will
+  polish this; Phase 2 is the minimum).
+
+**Tauri commands** (`src-tauri/src/licensing.rs`):
+
+- `license_get_status()` → `LicenseStatus`. Reads the
+  keychain, verifies the signature, checks the
+  machine fingerprint, and returns the derived status
+  (`Unactivated` / `Active` / `GracePeriod` / `Expired`
+  / `Trial` / `Invalid`).
+- `license_activate(key)` → `LicenseStatus`. Verifies
+  the pasted key, stores it in the keychain, returns
+  the new status. On failure, returns
+  `Invalid { reason }` without modifying the keychain.
+- `license_deactivate()` → `LicenseStatus`. Deletes
+  the keychain entry. The next `license_get_status`
+  call auto-generates a new 14-day trial.
+- `license_get_machine_fingerprint()` → `string`.
+  Used by the activation screen so the user can
+  include it in a "please issue me a license"
+  support email.
+
+**TS layer** (`src/ipc/licensing.ts`):
+
+- The four IPC wrappers + the `LicenseStatusPayload`
+  type mirror the Rust side. The `LicenseStatusPayload`
+  is a tagged union (`{ kind: 'active', ... }` /
+  `{ kind: 'invalid', reason: '...' }` / etc.) using
+  camelCase JSON. The `src/shared/state/licenseStore.ts`
+  Zustand store caches the status in memory (hydrate
+  once at app startup, refresh on activate / deactivate,
+  load machine fingerprint on demand).
+
+**UI** (`src/screens/License/License.tsx` +
+`src/screens/SettingsProvider/components/LicenseCard.tsx`):
+
+- **Activation screen** (`License.tsx`): a single-column
+  form with a labelled textarea for the key, an
+  "Activate" button, a "Get a license →" link to the
+  pricing page, and a machine-fingerprint display.
+- **Settings card** (`LicenseCard.tsx`): the existing
+  SettingsProvider's Privacy & data section now has a
+  "License" card showing the current status, a
+  "Show machine fingerprint" button, and a
+  "Deactivate" button (with a confirm step).
+- The full-screen gate (block the workspace when
+  unactivated / expired) and the title-bar trial
+  badge are Phase 3.
+
+**Verification**
+
+- `cargo test licensing` — **21 tests** covering the
+  sign / verify round-trip, signature rejection on
+  tampered payload, signature rejection on wrong
+  signing key, malformed-key rejection, oversize
+  field rejection, machine fingerprint shape + stability,
+  status derivation for all six variants
+  (active / grace / expired / trial / unactivated /
+  invalid-not-yet-valid), keychain integration (mock
+  keychain via the `keyring` crate's `MockCredentialBuilder`),
+  and the trial generation flow.
+- `npm test src/shared/state/licenseStore.test.ts` —
+  **10 tests** covering the `null → populated`
+  transition, hydrate idempotency, refresh
+  non-idempotency, activate / deactivate IPC wiring,
+  whitespace trimming on activate, machine fingerprint
+  cache, and the `invalid` status surfacing on bad keys.
+- `npm test src/screens/SettingsProvider/components/LicenseCard.test.ts` —
+  **17 tests** covering the `statusLine` and
+  `humanizeInvalidReason` pure helpers (singular /
+  plural day wording, plan capitalisation, machine-
+  mismatch / not-yet-valid / verification-failed /
+  empty-key reason strings, and the unactivated
+  fallback).
+- `npm run typecheck` — clean.
+- `npm run build` — clean (the existing pre-M6b
+  chunk-size warnings are unchanged).
+- `cargo check` — clean (no warnings).
+
+**Threat model**
+
+- The "no backend, ever" rule (Decision #17) means we
+  cannot do online license validation. The trade-offs
+  are documented in the design doc and Decision #85.
+  In short: extracting the trial private key from the
+  binary is bounded by the 14-day `exp`; a paid license
+  is bound to a single machine by the `sub` (fingerprint)
+  claim, and a tampered keychain entry fails signature
+  verification on the next status call.
+- We don't try to defend against debugger-driven
+  bypasses or VM cloning. The threat model matches
+  JetBrains / Sublime / every other desktop tool.
+
+**Out of scope (Phase 2 does NOT do)**
+
+- No payment processing (Phase 4).
+- No IAP integration (App Store / Microsoft Store; Phase 4).
+- No "transfer to new machine" UI flow (Phase 3).
+- No team / per-seat / volume licensing (a future pricing tier).
+- No license-server CLI tool (Phase 4's
+  `sign_license --plan yearly --machine <fp>`).
+
 ### Added (M6b — Per-tab state keying + v4 settings export / import)
 
 M6a shipped the tab *data model* and the tab *strip*; M6b ships the per-tab *state* — file-tree expansion, selected row, open editor tabs, active editor tab — persisted on the tab itself, so a user can switch to a different tab and come back to the exact same view. The settings export / import format is bumped to v4: the v3 single `workspace.currentPath` shape is replaced with a `workspace.workspaces[]` array of `{ id, path, addedAt, state: WorkspaceTabState }` rows, and the v3 → v4 import migration is automatic (a v3 file is detected on parse and migrated in-memory, so existing v3 exports continue to import seamlessly).

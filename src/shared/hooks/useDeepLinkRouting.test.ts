@@ -46,9 +46,13 @@ const WIN_DIRS = {
 };
 
 function resetStore(): void {
+  // M6a: the store no longer
+  // has a `currentPath`
+  // field.
   useWorkspaceStore.setState({
     hydrated: true,
-    currentPath: null,
+    workspaces: [],
+    activeId: null,
     recents: [],
     status: { kind: 'idle' },
   });

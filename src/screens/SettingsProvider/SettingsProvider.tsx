@@ -16,7 +16,7 @@ import {
   secretsSetApiKey,
 } from '@/ipc';
 import { useAppStore } from '@/shared/state/appStore';
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import { useWorkspaceStore, workspaceSelectors } from '@/shared/state/workspaceStore';
 import { useToolSettingsStore, toolSettingsSelectors } from '@/shared/state/toolSettingsStore';
 import { useCustomToolsStore } from '@/shared/state/customToolsStore';
 import { useGitStore } from '@/screens/EditorWorkspace/state/gitStore';
@@ -76,7 +76,9 @@ import styles from './SettingsProvider.module.css';
  */
 export function SettingsProvider() {
   const setActiveScreen = useAppStore((s) => s.setActiveScreen);
-  const currentPath = useWorkspaceStore((s) => s.currentPath);
+  // M6a: read the active path via
+  // the `useActivePath` selector.
+  const currentPath = useWorkspaceStore(workspaceSelectors.currentPath);
   const isDev = import.meta.env.DEV;
 
   const onBack = useCallback(() => {

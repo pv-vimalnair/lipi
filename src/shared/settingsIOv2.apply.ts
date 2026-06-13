@@ -52,7 +52,7 @@
 
 import { useToolSettingsStore } from '@/shared/state/toolSettingsStore';
 import { useVoicePreferencesStore } from '@/shared/state/voicePreferencesStore';
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import { createWorkspaceTab, useWorkspaceStore } from '@/shared/state/workspaceStore';
 
 import type { LipiStateV2Data } from './settingsIOv2';
 
@@ -88,11 +88,30 @@ export function applyLipiStateV2(
   data: LipiStateV2Data,
 ): ApplyLipiStateV2Result {
   // 1. workspace.
+  // M6a: the v2 export format still
+  // has `currentPath` (singular),
+  // but the store now uses the
+  // `workspaces` + `activeId`
+  // shape. Re-construct a single
+  // tab from the v2 `currentPath`
+  // so the import restores the
+  // user's last open workspace.
   try {
-    useWorkspaceStore.setState({
-      currentPath: data.workspace.currentPath,
-      recents: data.workspace.recents,
-    });
+    const importedPath = data.workspace.currentPath;
+    if (importedPath) {
+      const tab = createWorkspaceTab(importedPath);
+      useWorkspaceStore.setState({
+        workspaces: [tab],
+        activeId: tab.id,
+        recents: data.workspace.recents,
+      });
+    } else {
+      useWorkspaceStore.setState({
+        workspaces: [],
+        activeId: null,
+        recents: data.workspace.recents,
+      });
+    }
   } catch (e) {
     return {
       ok: false,

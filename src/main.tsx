@@ -10,6 +10,7 @@ import { useFirstRunStore } from '@/shared/state/firstRunStore';
 import { useTourStore } from '@/shared/state/tourStore';
 import {
   useWorkspaceStore,
+  workspaceSelectors,
 } from '@/shared/state/workspaceStore';
 import { Button } from '@/shared/components/Button';
 import {
@@ -77,7 +78,11 @@ function WelcomeHeaderActions(): JSX.Element {
 function ScreenRoot() {
   const activeScreen = useAppStore((s) => s.activeScreen);
   const hydrated = useWorkspaceStore((s) => s.hydrated);
-  const currentPath = useWorkspaceStore((s) => s.currentPath);
+  // M6a: read the active path via
+  // the `useActivePath` selector
+  // (the v1 `currentPath` field no
+  // longer exists on the store).
+  const currentPath = useWorkspaceStore(workspaceSelectors.currentPath);
   const firstRun = useFirstRunOnboarding();
 
   if (activeScreen === 'settings') {

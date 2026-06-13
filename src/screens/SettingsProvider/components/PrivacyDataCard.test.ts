@@ -13,7 +13,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { workspaceState, voicePreferencesState, toolSettingsState } = vi.hoisted(() => ({
   workspaceState: {
-    currentPath: 'C:/Users/dev/proj',
+    // M6a: the snapshot
+    // reads the active
+    // path via the
+    // `useActivePath`
+    // selector, which
+    // needs
+    // `workspaces` +
+    // `activeId` (the v1
+    // `currentPath` field
+    // is gone). The mock
+    // carries both for
+    // clarity.
+    workspaces: [
+      {
+        id: 'tab-1',
+        path: 'C:/Users/dev/proj',
+        addedAt: 1000,
+      },
+    ],
+    activeId: 'tab-1',
+    currentPath: 'C:/Users/dev/proj', // legacy field — kept for diff tests
     recents: ['C:/Users/dev/proj', 'C:/Users/dev/other'],
   },
   voicePreferencesState: { provider: 'wispr' as const },
@@ -23,9 +43,23 @@ const { workspaceState, voicePreferencesState, toolSettingsState } = vi.hoisted(
   },
 }));
 
-vi.mock('@/shared/state/workspaceStore', () => ({
-  useWorkspaceStore: { getState: () => workspaceState },
-}));
+vi.mock('@/shared/state/workspaceStore', async (importOriginal) => {
+  // M6a: the snapshot
+  // function also
+  // imports
+  // `useActivePath`.
+  // Re-export it from
+  // the real module so
+  // the test gets the
+  // production
+  // selector.
+  const actual =
+    (await importOriginal()) as typeof import('@/shared/state/workspaceStore');
+  return {
+    useWorkspaceStore: { getState: () => workspaceState },
+    useActivePath: actual.useActivePath,
+  };
+});
 vi.mock('@/shared/state/voicePreferencesStore', () => ({
   useVoicePreferencesStore: { getState: () => voicePreferencesState },
 }));

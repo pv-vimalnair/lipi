@@ -219,17 +219,23 @@ describe('command palette — workspace commands', () => {
 
   it('Close Folder is enabled only when a workspace is open', async () => {
     const {
+      createWorkspaceTab,
       useWorkspaceStore,
     } = await import('@/shared/state/workspaceStore');
     useWorkspaceStore.setState({
-      currentPath: null,
+      workspaces: [],
+      activeId: null,
       hydrated: true,
       recents: [],
       status: { kind: 'idle' },
     });
     const close = COMMANDS.find((c) => c.id === 'workspace.close');
     expect(close?.isEnabled?.()).toBe(false);
-    useWorkspaceStore.setState({ currentPath: '/x' });
+    const tab = createWorkspaceTab('/x');
+    useWorkspaceStore.setState({
+      workspaces: [tab],
+      activeId: tab.id,
+    });
     expect(close?.isEnabled?.()).toBe(true);
   });
 });
@@ -298,12 +304,16 @@ describe('command palette — firstRun commands', () => {
     const { useFirstRunStore } = await import(
       '@/shared/state/firstRunStore'
     );
-    const { useWorkspaceStore } = await import(
-      '@/shared/state/workspaceStore'
-    );
+    const {
+      createWorkspaceTab,
+      useActivePath,
+      useWorkspaceStore,
+    } = await import('@/shared/state/workspaceStore');
     useFirstRunStore.setState({ dismissed: true, hydrated: true });
+    const lipiTab = createWorkspaceTab('/Users/me/projects/lipi');
     useWorkspaceStore.setState({
-      currentPath: '/Users/me/projects/lipi',
+      workspaces: [lipiTab],
+      activeId: lipiTab.id,
       hydrated: true,
       recents: ['/Users/me/projects/lipi'],
       status: { kind: 'ready', path: '/Users/me/projects/lipi' },
@@ -320,7 +330,7 @@ describe('command palette — firstRun commands', () => {
     // condition is met
     // too).
     expect(useFirstRunStore.getState().dismissed).toBe(false);
-    expect(useWorkspaceStore.getState().currentPath).toBeNull();
+    expect(useActivePath(useWorkspaceStore.getState())).toBeNull();
   });
 
   it('"Reopen first-run setup" is enabled even when no workspace is open', () => {

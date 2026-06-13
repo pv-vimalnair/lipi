@@ -78,7 +78,11 @@
 
 import { useToolSettingsStore } from '@/shared/state/toolSettingsStore';
 import { useVoicePreferencesStore } from '@/shared/state/voicePreferencesStore';
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import {
+  createWorkspaceTab,
+  useActivePath,
+  useWorkspaceStore,
+} from '@/shared/state/workspaceStore';
 
 import type { LipiStateV2Data } from './settingsIOv2';
 import type {
@@ -162,15 +166,35 @@ export function applyLipiStateV3(
         // not affect the
         // snapshot.
         return {
-          currentPath: s.currentPath,
+          currentPath: useActivePath(s),
           recents: [...s.recents],
         };
       },
       write: (v) => {
-        useWorkspaceStore.setState({
-          currentPath: v.currentPath,
-          recents: v.recents,
-        });
+        // M6a: re-construct a tab
+        // array from the v2
+        // export's
+        // `currentPath`. The
+        // v2 format is a
+        // single-path export;
+        // M6b will introduce a
+        // v4 format that
+        // carries the full
+        // tab array.
+        if (v.currentPath) {
+          const tab = createWorkspaceTab(v.currentPath);
+          useWorkspaceStore.setState({
+            workspaces: [tab],
+            activeId: tab.id,
+            recents: v.recents,
+          });
+        } else {
+          useWorkspaceStore.setState({
+            workspaces: [],
+            activeId: null,
+            recents: v.recents,
+          });
+        }
       },
     },
     {
@@ -221,10 +245,20 @@ export function applyLipiStateV3(
   //    the same error shape
   //    v2 returns.
   try {
-    useWorkspaceStore.setState({
-      currentPath: data.workspace.currentPath,
-      recents: data.workspace.recents,
-    });
+    if (data.workspace.currentPath) {
+      const tab = createWorkspaceTab(data.workspace.currentPath);
+      useWorkspaceStore.setState({
+        workspaces: [tab],
+        activeId: tab.id,
+        recents: data.workspace.recents,
+      });
+    } else {
+      useWorkspaceStore.setState({
+        workspaces: [],
+        activeId: null,
+        recents: data.workspace.recents,
+      });
+    }
   } catch (e) {
     restoreSnapshots([workspaceSnap, voiceSnap, toolSnap]);
     return {

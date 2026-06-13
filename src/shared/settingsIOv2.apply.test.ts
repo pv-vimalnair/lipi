@@ -17,9 +17,24 @@ const { setStateMock, applyImportedSettingsMock } = vi.hoisted(() => ({
   applyImportedSettingsMock: vi.fn(),
 }));
 
-vi.mock('@/shared/state/workspaceStore', () => ({
-  useWorkspaceStore: { setState: setStateMock },
-}));
+vi.mock('@/shared/state/workspaceStore', async (importOriginal) => {
+  // M6a: the apply path
+  // also imports
+  // `createWorkspaceTab`
+  // and `useActivePath`.
+  // Re-export them from
+  // the real module so
+  // the test gets the
+  // production
+  // implementations.
+  const actual =
+    (await importOriginal()) as typeof import('@/shared/state/workspaceStore');
+  return {
+    useWorkspaceStore: { setState: setStateMock },
+    createWorkspaceTab: actual.createWorkspaceTab,
+    useActivePath: actual.useActivePath,
+  };
+});
 
 vi.mock('@/shared/state/voicePreferencesStore', () => ({
   useVoicePreferencesStore: { setState: setStateMock },
@@ -60,13 +75,30 @@ describe('applyLipiStateV2', () => {
     const r = applyLipiStateV2(FIXTURE_DATA);
     expect(r.ok).toBe(true);
     // setState is called twice: once for workspace
-    // (with currentPath + recents), once for
-    // voicePreferences (with provider).
+    // (with the M6a
+    // `workspaces` +
+    // `activeId` shape +
+    // recents), once for
+    // voicePreferences (with
+    // provider).
     expect(setStateMock).toHaveBeenCalledTimes(2);
-    expect(setStateMock).toHaveBeenNthCalledWith(1, {
-      currentPath: 'C:/Users/dev/proj',
-      recents: ['C:/Users/dev/proj', 'C:/Users/dev/other'],
-    });
+    // We don't pin the
+    // tab `id` (it's a
+    // `crypto.randomUUID`
+    // inside the apply
+    // path) but we can
+    // assert the
+    // structural shape.
+    const workspaceCall = setStateMock.mock.calls[0]?.[0] as
+      | { workspaces: { id: string; path: string }[]; activeId: string; recents: string[] }
+      | undefined;
+    expect(workspaceCall?.workspaces).toHaveLength(1);
+    expect(workspaceCall?.workspaces[0]?.path).toBe('C:/Users/dev/proj');
+    expect(workspaceCall?.activeId).toBe(workspaceCall?.workspaces[0]?.id);
+    expect(workspaceCall?.recents).toEqual([
+      'C:/Users/dev/proj',
+      'C:/Users/dev/other',
+    ]);
     expect(setStateMock).toHaveBeenNthCalledWith(2, { provider: 'wispr' });
     expect(applyImportedSettingsMock).toHaveBeenCalledWith({
       disabledToolNames: ['run_shell_command'],

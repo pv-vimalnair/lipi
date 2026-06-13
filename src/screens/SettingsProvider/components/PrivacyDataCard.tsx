@@ -56,7 +56,7 @@ import {
 
 import { useToolSettingsStore } from '@/shared/state/toolSettingsStore';
 import { useVoicePreferencesStore } from '@/shared/state/voicePreferencesStore';
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import { useActivePath, useWorkspaceStore } from '@/shared/state/workspaceStore';
 
 import styles from './PrivacyDataCard.module.css';
 
@@ -158,7 +158,7 @@ export function snapshotStoresForExport(): LipiStateV2Data {
   const vp = useVoicePreferencesStore.getState();
   const ts = useToolSettingsStore.getState();
   return {
-    workspace: { currentPath: ws.currentPath, recents: [...ws.recents] },
+    workspace: { currentPath: useActivePath(ws), recents: [...ws.recents] },
     voicePreferences: { provider: vp.provider },
     toolSettings: {
       disabledToolNames: [...ts.disabledToolNames],

@@ -28,14 +28,21 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import { useActivePath, useWorkspaceStore } from '@/shared/state/workspaceStore';
 
 import { shouldShowClearAll } from './Welcome';
 
 function resetStore(): void {
+  // M6a: the store no longer
+  // has a `currentPath`
+  // field. The
+  // `useActivePath`
+  // selector is the
+  // replacement.
   useWorkspaceStore.setState({
     hydrated: true,
-    currentPath: null,
+    workspaces: [],
+    activeId: null,
     recents: [],
     status: { kind: 'idle' },
   });
@@ -91,18 +98,18 @@ describe('Welcome recents: "Clear all" button -> store', () => {
     expect(persisted).toBe('[]');
   });
 
-  it('does not change currentPath (the open workspace is independent)', () => {
+  it('does not change the active path (the open workspace is independent)', () => {
     useWorkspaceStore.getState().open('/projects/a');
     useWorkspaceStore.getState().open('/projects/b');
     // `/projects/b` is the most-recent open, so it's
-    // also the current workspace.
-    expect(useWorkspaceStore.getState().currentPath).toBe('/projects/b');
+    // also the active workspace.
+    expect(useActivePath(useWorkspaceStore.getState())).toBe('/projects/b');
 
     useWorkspaceStore.getState().clearRecents();
 
-    // The current path is preserved; only the recents
+    // The active path is preserved; only the recents
     // list is cleared.
-    expect(useWorkspaceStore.getState().currentPath).toBe('/projects/b');
+    expect(useActivePath(useWorkspaceStore.getState())).toBe('/projects/b');
     expect(useWorkspaceStore.getState().recents).toEqual([]);
   });
 

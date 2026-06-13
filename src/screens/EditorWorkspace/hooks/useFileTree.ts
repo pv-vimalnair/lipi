@@ -37,7 +37,7 @@ import {
   type FsEntry,
   type WatchHandle,
 } from '@/ipc';
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import { useActivePath, useWorkspaceStore } from '@/shared/state/workspaceStore';
 import { useFileTreeStore } from '../state/fileTreeStore';
 
 export interface UseFileTree {
@@ -330,6 +330,95 @@ export function useFileTree(): UseFileTree {
     },
     [],
   );
+
+  // M6a: keep the file tree's
+  // rootPath in sync with the
+  // active workspace path. When
+  // the user switches tabs (or
+  // opens a new one), the file
+  // tree re-roots to the new
+  // active path. The file tree
+  // is "shared" in M6a — each
+  // tab uses the same file tree
+  // instance; per-tab file tree
+  // state (expanded dirs, etc.)
+  // is M6b. For M6a the tree
+  // re-loads the new root and
+  // resets its expansion /
+  // selection.
+  useEffect(() => {
+    const unsubscribe = useWorkspaceStore.subscribe((state, prev) => {
+      const next = useActivePath(state);
+      const prevPath = useActivePath(prev);
+      if (next !== prevPath) {
+        // Active path
+        // changed
+        // (switched
+        // tabs,
+        // opened a
+        // new
+        // folder,
+        // closed a
+        // tab, etc.).
+        // Re-root
+        // the file
+        // tree. The
+        // `loadDir`
+        // call is
+        // async but
+        // we don't
+        // await it
+        // — the
+        // rootPath /
+        // status
+        // updates
+        // happen
+        // synchronously,
+        // and the
+        // entries
+        // populate
+        // when the
+        // IPC
+        // returns.
+        if (next) {
+          setStatus({ kind: 'loading', rootPath: next });
+          void loadDir(next).then(() => {
+            // Only flip
+            // to
+            // `ready`
+            // if the
+            // active
+            // path
+            // hasn't
+            // changed
+            // again
+            // by the
+            // time the
+            // load
+            // finishes.
+            if (useActivePath(useWorkspaceStore.getState()) === next) {
+              setStatus({ kind: 'ready', rootPath: next });
+            }
+          });
+          setRoot(next);
+        } else {
+          // All tabs
+          // closed —
+          // reset
+          // the
+          // file
+          // tree
+          // and
+          // mirror
+          // the
+          // workspace
+          // close.
+          reset();
+        }
+      }
+    });
+    return unsubscribe;
+  }, [loadDir, reset, setRoot, setStatus]);
 
   return {
     openFolder,

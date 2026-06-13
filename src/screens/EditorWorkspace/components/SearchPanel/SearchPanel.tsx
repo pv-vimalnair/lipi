@@ -8,7 +8,7 @@ import {
   type SearchMatch,
   type SearchResult,
 } from '@/ipc';
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import { useWorkspaceStore, workspaceSelectors } from '@/shared/state/workspaceStore';
 import { useEditorTabs } from '../../hooks/useEditorTabs';
 import { useEditorControllerStore } from '../../state/editorControllerStore';
 import styles from './SearchPanel.module.css';
@@ -52,7 +52,9 @@ const MAX_RESULTS_DISPLAYED = 200;
  *    follow-up.
  */
 export function SearchPanel() {
-  const rootPath = useWorkspaceStore((s) => s.currentPath);
+  // M6a: read the active path via
+  // the `useActivePath` selector.
+  const rootPath = useWorkspaceStore(workspaceSelectors.currentPath);
   const { openFile } = useEditorTabs();
   const setPendingReveal = useEditorControllerStore(
     (s) => s.setPendingReveal,

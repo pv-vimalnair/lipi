@@ -6,11 +6,50 @@
   display: grid;
   height: 100vh;
   width: 100vw;
+  /* M6a: the grid is
+     now 4 rows tall
+     — titlebar
+     (36px) + tab
+     strip (32px,
+     shown only when
+     there are
+     workspaces) +
+     content (1fr) +
+     statusbar
+     (24px). The
+     WorkspaceTabs
+     component
+     returns `null`
+     when no
+     workspaces are
+     open, which
+     leaves the row
+     empty (32px
+     gap) — a
+     tiny visual
+     inconsistency
+     vs. the
+     pre-M6a
+     layout. The
+     M6a.2
+     follow-up
+     will fix
+     the gap
+     by
+     toggling
+     the row's
+     `display`
+     based on
+     the
+     store's
+     workspace
+     count. */
   grid-template-columns: 260px 1fr 320px;
-  grid-template-rows: 36px 1fr 24px;
+  grid-template-rows: 36px auto 1fr 24px;
   grid-template-areas:
     'titlebar titlebar titlebar'
-    'tree      editor   side'
+    'tabs      tabs      tabs'
+    'tree      editor    side'
     'statusbar statusbar statusbar';
   background-color: var(--color-bg-base);
 }

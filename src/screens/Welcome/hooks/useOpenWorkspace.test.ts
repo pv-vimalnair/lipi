@@ -51,7 +51,10 @@
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import {
+  useActivePath,
+  useWorkspaceStore,
+} from '@/shared/state/workspaceStore';
 
 const { pickFolderMock } = vi.hoisted(() => ({
   pickFolderMock: vi.fn(),
@@ -69,9 +72,15 @@ vi.mock('@/ipc', async () => {
 const { openWorkspace } = await import('./useOpenWorkspace');
 
 function resetStore(): void {
+  // M6a: the store no longer
+  // has a `currentPath`
+  // field. Use
+  // `workspaces` +
+  // `activeId` instead.
   useWorkspaceStore.setState({
     hydrated: true,
-    currentPath: null,
+    workspaces: [],
+    activeId: null,
     recents: [],
     status: { kind: 'idle' },
   });
@@ -90,7 +99,7 @@ describe('openWorkspace', () => {
     pickFolderMock.mockResolvedValue('/chosen/path');
     await openWorkspace();
     expect(pickFolderMock).toHaveBeenCalledTimes(1);
-    expect(useWorkspaceStore.getState().currentPath).toBe('/chosen/path');
+    expect(useActivePath(useWorkspaceStore.getState())).toBe('/chosen/path');
     expect(useWorkspaceStore.getState().recents[0]).toBe('/chosen/path');
     expect(useWorkspaceStore.getState().status).toEqual({
       kind: 'ready',
@@ -101,7 +110,7 @@ describe('openWorkspace', () => {
   it('skips the picker when called with a path arg', async () => {
     await openWorkspace('/a/recents/click');
     expect(pickFolderMock).not.toHaveBeenCalled();
-    expect(useWorkspaceStore.getState().currentPath).toBe(
+    expect(useActivePath(useWorkspaceStore.getState())).toBe(
       '/a/recents/click',
     );
   });
@@ -109,7 +118,7 @@ describe('openWorkspace', () => {
   it('drops back to idle on user cancel (picker returns null)', async () => {
     pickFolderMock.mockResolvedValue(null);
     await openWorkspace();
-    expect(useWorkspaceStore.getState().currentPath).toBeNull();
+    expect(useActivePath(useWorkspaceStore.getState())).toBeNull();
     expect(useWorkspaceStore.getState().status).toEqual({ kind: 'idle' });
   });
 
@@ -121,7 +130,7 @@ describe('openWorkspace', () => {
     if (status.kind === 'error') {
       expect(status.message).toMatch(/picker/i);
     }
-    expect(useWorkspaceStore.getState().currentPath).toBeNull();
+    expect(useActivePath(useWorkspaceStore.getState())).toBeNull();
   });
 
   it('blocks concurrent opens while one is in flight', async () => {
@@ -162,6 +171,6 @@ describe('openWorkspace', () => {
     // Resolve the first.
     resolve('/done');
     await first;
-    expect(useWorkspaceStore.getState().currentPath).toBe('/done');
+    expect(useActivePath(useWorkspaceStore.getState())).toBe('/done');
   });
 });

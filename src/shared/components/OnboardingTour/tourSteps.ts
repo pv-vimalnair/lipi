@@ -52,9 +52,10 @@
  *      automatically.
  */
 
-import type {
-  useWorkspaceStore,
-} from '@/shared/state/workspaceStore';
+// (M6a: `useActivePath` is no
+// longer needed here — the
+// gate takes a precomputed
+// `currentPath`.)
 
 /** Where the callout is positioned
  *  relative to the anchor. The
@@ -222,13 +223,28 @@ export function computeTourShouldAutoStart(args: {
  *  workspace-store fields the
  *  gate needs. */
 export function readWorkspaceGateFields(
-  workspaceStore: Pick<
-    ReturnType<typeof useWorkspaceStore.getState>,
-    'hydrated' | 'currentPath'
-  >,
+  // M6a: the gate takes
+  // plain primitives
+  // — `hydrated` and
+  // the precomputed
+  // `currentPath`. The
+  // store's
+  // `workspaces` +
+  // `activeId` shape
+  // is hidden behind
+  // the `useActivePath`
+  // selector so the
+  // gate can be
+  // tested without
+  // fabricating a
+  // full `WorkspaceState`.
+  args: {
+    hydrated: boolean;
+    currentPath: string | null;
+  },
 ): { workspaceHydrated: boolean; currentPath: string | null } {
   return {
-    workspaceHydrated: workspaceStore.hydrated,
-    currentPath: workspaceStore.currentPath,
+    workspaceHydrated: args.hydrated,
+    currentPath: args.currentPath,
   };
 }

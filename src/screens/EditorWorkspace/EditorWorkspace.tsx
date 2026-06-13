@@ -6,6 +6,7 @@ import { TitleBar } from './components/TitleBar';
 import { StatusBar } from './components/StatusBar';
 import { MobileShell } from './components/MobileShell';
 import { ConfirmToolCallModal } from './components/ConfirmToolCallModal';
+import { WorkspaceTabs } from './components/WorkspaceTabs';
 import { DeviceEmulator } from '@/dev/DeviceEmulator';
 import { useDeviceEmulatorShortcutWhenDev } from '@/dev/useDeviceEmulatorShortcut';
 import { useDeviceEmulatorStore } from '@/dev/state/deviceEmulatorStore';
@@ -228,7 +229,8 @@ export function EditorWorkspace() {
         data-visible={!isMobile}
         aria-hidden={isMobile}
       >
-        <TitleBar subtitle={isDev ? 'dev · welcome' : undefined} />
+        <TitleBar subtitle={isDev ? 'dev · M6a' : undefined} />
+        <WorkspaceTabs />
         <FileTreePane />
         <EditorPane />
         <SidePanelPane />

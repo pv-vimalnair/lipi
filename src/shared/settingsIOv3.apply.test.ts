@@ -18,6 +18,18 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// M6a: the v3 apply path
+// reads the active path
+// via `useActivePath(ws)`,
+// which needs
+// `workspaces` +
+// `activeId`. The
+// legacy `currentPath`
+// field is still
+// maintained as a
+// derived getter (the
+// test assertions
+// read it).
 const {
   workspaceState,
   voiceState,
@@ -27,8 +39,20 @@ const {
   setToolStateMock,
   applyImportedSettingsMock,
 } = vi.hoisted(() => {
-  const workspaceState = {
-    currentPath: 'C:/Users/old/ws',
+  const oldWsTab = {
+    id: 'old-ws-tab',
+    path: 'C:/Users/old/ws',
+    addedAt: 1000,
+  };
+  const workspaceState: {
+    workspaces: typeof oldWsTab[];
+    activeId: string;
+    currentPath: string;
+    recents: string[];
+  } = {
+    workspaces: [oldWsTab],
+    activeId: oldWsTab.id,
+    currentPath: oldWsTab.path,
     recents: ['C:/Users/old/ws', 'C:/Users/other'],
   };
   const voiceState = { provider: 'stub' as const };
@@ -46,9 +70,23 @@ const {
     workspaceState,
     voiceState,
     toolState,
-    setWorkspaceStateMock: vi.fn((patch: Partial<typeof workspaceState>) => {
-      Object.assign(workspaceState, patch);
-    }),
+    setWorkspaceStateMock: vi.fn(
+      (patch: Partial<typeof workspaceState>) => {
+        Object.assign(workspaceState, patch);
+        // Keep the legacy
+        // `currentPath`
+        // derived getter
+        // up-to-date so the
+        // test assertions
+        // that read
+        // `workspaceState.currentPath`
+        // continue to work.
+        const active = workspaceState.workspaces.find(
+          (w) => w.id === workspaceState.activeId,
+        );
+        workspaceState.currentPath = active?.path ?? '';
+      },
+    ),
     setVoiceStateMock: vi.fn((patch: Partial<typeof voiceState>) => {
       Object.assign(voiceState, patch);
     }),
@@ -67,12 +105,29 @@ const {
   };
 });
 
-vi.mock('@/shared/state/workspaceStore', () => ({
-  useWorkspaceStore: {
-    getState: () => workspaceState,
-    setState: setWorkspaceStateMock,
-  },
-}));
+vi.mock('@/shared/state/workspaceStore', async (importOriginal) => {
+  // M6a: the v3 apply path
+  // also imports
+  // `createWorkspaceTab`
+  // and `useActivePath`.
+  // `importOriginal()` returns
+  // the real module's exports
+  // (without re-running the
+  // top-level); we re-export
+  // those alongside the
+  // mock for the
+  // workspaceStore.
+  const actual =
+    (await importOriginal()) as typeof import('@/shared/state/workspaceStore');
+  return {
+    useWorkspaceStore: {
+      getState: () => workspaceState,
+      setState: setWorkspaceStateMock,
+    },
+    createWorkspaceTab: actual.createWorkspaceTab,
+    useActivePath: actual.useActivePath,
+  };
+});
 
 vi.mock('@/shared/state/voicePreferencesStore', () => ({
   useVoicePreferencesStore: {
@@ -92,7 +147,8 @@ vi.mock('@/shared/state/toolSettingsStore', () => ({
   },
 }));
 
-const { applyLipiStateV3 } = await import('./settingsIOv3.apply');
+const v3Module = await import('./settingsIOv3.apply');
+const { applyLipiStateV3 } = v3Module;
 
 const NEW_DATA = {
   workspace: {
@@ -152,9 +208,34 @@ describe('applyLipiStateV3', () => {
   it('writes all three stores on success', () => {
     const r = applyLipiStateV3(NEW_DATA);
     expect(r.ok).toBe(true);
-    expect(workspaceState.currentPath).toBe('C:/Users/new/proj');
-    expect(voiceState.provider).toBe('wispr');
-    expect(toolState.disabledToolNames).toEqual(['run_shell_command']);
+    // The success path calls
+    // each store's setState
+    // exactly once with the
+    // expected payload. The
+    // M6a mock body is
+    // gated on the test
+    // scope; we assert on
+    // the `mock.calls`
+    // record directly so
+    // the test is
+    // independent of
+    // any closure-scope
+    // surprise.
+    expect(setWorkspaceStateMock).toHaveBeenCalledTimes(1);
+    const wsCall = setWorkspaceStateMock.mock.calls[0]?.[0] as
+      | { workspaces: { id: string; path: string }[]; activeId: string; recents: string[] }
+      | undefined;
+    expect(wsCall?.workspaces).toHaveLength(1);
+    expect(wsCall?.workspaces[0]?.path).toBe('C:/Users/new/proj');
+    expect(wsCall?.activeId).toBe(wsCall?.workspaces[0]?.id);
+    expect(wsCall?.recents).toEqual(['C:/Users/new/proj']);
+    expect(setVoiceStateMock).toHaveBeenCalledTimes(1);
+    expect(setVoiceStateMock).toHaveBeenCalledWith({ provider: 'wispr' });
+    expect(applyImportedSettingsMock).toHaveBeenCalledTimes(1);
+    expect(applyImportedSettingsMock).toHaveBeenCalledWith({
+      disabledToolNames: ['run_shell_command'],
+      confirmationMode: { run_shell_command: 'always_confirm' },
+    });
   });
 
   it('returns ok:true and does not write to a recovery path on success', () => {

@@ -46,9 +46,15 @@ vi.mock('./useOpenWorkspace', async () => {
 const { applyTemplateFlow } = await import('./useApplyTemplate');
 
 function resetStore(): void {
+  // M6a: the store no longer
+  // has a `currentPath`
+  // field. Use
+  // `workspaces` +
+  // `activeId` instead.
   useWorkspaceStore.setState({
     hydrated: true,
-    currentPath: null,
+    workspaces: [],
+    activeId: null,
     recents: [],
     status: { kind: 'idle' },
   });

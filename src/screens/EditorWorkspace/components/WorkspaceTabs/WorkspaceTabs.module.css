@@ -1,0 +1,104 @@
+.strip {
+  background-color: var(--color-bg-elev-1);
+  border-bottom: 1px solid var(--color-border-soft);
+  height: 32px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 4px;
+  gap: 2px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px 0 10px;
+  border-radius: 4px;
+  background-color: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  max-width: 220px;
+  border: 1px solid transparent;
+  /* Tab transitions
+     are subtle — the
+     hover state is
+     most of the
+     feedback. */
+  transition: background-color 100ms ease;
+}
+
+.tab:hover {
+  background-color: var(--color-bg-hover);
+}
+
+.tab[data-active='true'] {
+  background-color: var(--color-bg-base);
+  color: var(--color-text-base);
+  border-color: var(--color-border-base);
+}
+
+.tabLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* The label is the
+     clickable target
+     for switching
+     tabs; the close
+     button has its
+     own click
+     handler. */
+  pointer-events: none;
+}
+
+.closeButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+  opacity: 0.6;
+  /* The × is dim
+     by default and
+     brightens on
+     hover — same
+     pattern VS Code
+     uses. */
+  transition: opacity 80ms ease, background-color 80ms ease;
+}
+
+.closeButton:hover {
+  opacity: 1;
+  background-color: var(--color-bg-hover-strong);
+}
+
+.tab[data-active='true'] .closeButton {
+  opacity: 0.8;
+}
+
+.tab[data-active='true'] .closeButton:hover {
+  opacity: 1;
+}
+
+.addButton {
+  margin-left: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+}

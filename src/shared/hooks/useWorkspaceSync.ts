@@ -76,7 +76,7 @@ import { useEffect } from 'react';
 import { useFileTreeStore } from '@/screens/EditorWorkspace/state/fileTreeStore';
 import { useGitStore } from '@/screens/EditorWorkspace/state/gitStore';
 import { useCustomToolsStore } from '@/shared/state/customToolsStore';
-import { useWorkspaceStore } from '@/shared/state/workspaceStore';
+import { useActivePath, useWorkspaceStore } from '@/shared/state/workspaceStore';
 
 const IS_DEV = import.meta.env.DEV;
 
@@ -186,7 +186,7 @@ export function useWorkspaceSync(enabled: boolean = true): void {
     // Run the sync once
     // for the initial state.
     sync(
-      useWorkspaceStore.getState().currentPath,
+      useActivePath(useWorkspaceStore.getState()),
       null,
     );
 
@@ -196,7 +196,7 @@ export function useWorkspaceSync(enabled: boolean = true): void {
     // unsubscribe fn.
     const unsubscribe = useWorkspaceStore.subscribe(
       (state, prev) => {
-        sync(state.currentPath, prev.currentPath);
+        sync(useActivePath(state), useActivePath(prev));
       },
     );
     if (IS_DEV) {

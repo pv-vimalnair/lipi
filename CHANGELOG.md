@@ -6,6 +6,373 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (M6a — Multi-workspace tabs: data model + tab strip)
+
+A workspace is now an open *tab* in the editor,
+not a single global path. Users can open
+multiple folders side by side, switch
+between them with one click, close any of
+them, and re-open a closed workspace from
+the recents list (closing a tab is not
+forgetting — it stays in recents). M6a
+ships the data model and the surface; M6b
+will add per-tab state (file tree
+expansion, open editor tabs, scroll
+position) so the user comes back to the
+exact same view when they re-activate a
+tab.
+
+**Data model**
+(`src/shared/state/workspaceStore.ts`):
+
+- The single `currentPath: string | null`
+  field is replaced with two fields:
+  `workspaces: WorkspaceTab[]` and
+  `activeId: string | null`. A
+  `WorkspaceTab` is `{ id, path, addedAt }`
+  where `id` is a `crypto.randomUUID()`,
+  `path` is the absolute folder path on
+  disk, and `addedAt` is the `Date.now()`
+  when the tab was first added (used to
+  break ties in "most recent" ordering).
+- `useActivePath(state)` is the canonical
+  derived helper for the path of the
+  active tab (returns `null` when no tab
+  is active). The existing
+  `workspaceSelectors.currentPath` now
+  points to `useActivePath`, so consumers
+  that used to read
+  `useWorkspaceStore(s => s.currentPath)`
+  continue to work via
+  `useWorkspaceStore(workspaceSelectors.currentPath)`.
+- A new `useActivePathSelector()` hook
+  subscribes to the store and re-renders
+  on change — the React-side companion to
+  the pure `useActivePath(state)` helper.
+- `open(path)`, `close(tabId?)`, and
+  `setActive(tabId)` are the three tab
+  actions. `open` is a no-op-tab-add if
+  the path is already open (it just
+  re-activates the existing tab and bumps
+  recents); `close` picks the next tab to
+  the right of the closed one (or the
+  last tab to the left, or `null` if
+  there are no tabs left) when the
+  closed tab was active; `setActive`
+  switches tabs without mutating the
+  list.
+- Recents are unchanged in shape: an
+  array of strings capped at
+  `MAX_RECENTS` (5), deduped with the
+  newest prepended. Closing a tab
+  **preserves** its path in recents
+  (closing is not forgetting).
+
+**Persistence migration**
+(in-store, idempotent, non-destructive):
+
+- New v2 keys:
+  `lipi:workspace:workspaces:v1` (the
+  tab array), `lipi:workspace:activeId:v1`
+  (the active tab id or `null`), and the
+  unchanged recents key
+  `lipi:workspace:recents:v1`.
+- The pre-M6a v1 key
+  `lipi:workspace:v1` (the single
+  `currentPath` string or `null`) is read
+  on first hydrate after M6a ships. If
+  present, the store wraps it in a single
+  `WorkspaceTab` and writes the v2 keys.
+  The v1 key is then removed (a
+  successful migration is the right time
+  to drop the old shape).
+- The migration is **defensive about
+  partial / corrupt data**: each tab is
+  shape-checked (`id` string, `path`
+  string, `addedAt` number) and malformed
+  rows are dropped; the active id is
+  validated against the tab list and
+  falls back to the first tab if it
+  doesn't match; missing-but-tabs-present
+  is recovered by picking the first tab.
+- The migration only fires when the v2
+  `workspaces` key is absent. After the
+  first M6a hydrate, the v1 key is gone
+  and the v2 keys are the only source of
+  truth.
+
+**`WorkspaceTabs` component**
+(`src/screens/EditorWorkspace/components/WorkspaceTabs/`):
+
+- One pill per open tab, rendered as a
+  flex strip between the titlebar and the
+  file tree.
+- Click a pill to switch to that tab
+  (dispatches `setActive(tabId)`). Click
+  the `×` to close (dispatches
+  `close(tabId)`). Middle-click also
+  closes (the standard browser-tab
+  affordance).
+- The `+` button at the right end opens
+  the native folder picker and adds a
+  new tab for the chosen path (the
+  `open()` action handles the
+  dedup-and-activate logic).
+- A11y: `role="tablist"` on the strip,
+  `role="tab"` on each pill,
+  `aria-selected={isActive}`,
+  `aria-label="Open workspaces"`,
+  `title={tab.path}` (the full path on
+  hover), `aria-label="Close <name>"` on
+  the close button.
+- The strip returns `null` when no tabs
+  are open — the editor is not visible
+  in that state, the Welcome screen is
+  the only thing mounted, and the strip
+  would be visual noise.
+
+**File tree reactivity** (`useFileTree.ts`):
+
+- The hook subscribes to the
+  `useWorkspaceStore` and re-roots the
+  file tree to the new active path
+  whenever the user switches tabs. The
+  per-tab expansion state is global in
+  M6a (M6b will key it per tab).
+
+**Command Palette**:
+
+- `workspace.open` ("Open Folder…")
+  dispatches `useWorkspaceStore.getState().open(chosen)`,
+  which adds a new tab (or re-activates
+  the existing one for the same path).
+- `workspace.close` ("Close Folder")
+  dispatches `close()` (no arg = close
+  the active tab). The router picks up
+  the now-`null` active path and routes
+  to the Welcome screen automatically.
+- "Open Recent" commands call the same
+  `openWorkspace(path)` helper, which
+  goes through `open(path)`. Recent
+  re-opens add a new tab if the path is
+  not already open.
+
+**Backward compatibility**:
+
+- All pre-M6a consumers that read
+  `useWorkspaceStore(s => s.currentPath)`
+  are migrated to
+  `useWorkspaceStore(workspaceSelectors.currentPath)`
+  (the derived selector). The
+  `settingsIOv2.apply.ts` and
+  `settingsIOv3.apply.ts` v2 / v3
+  settings import paths keep their
+  `currentPath` field on the *export*
+  shape (the user's exported
+  `lipi-state` JSON still has a
+  `workspace.currentPath` field, the
+  same as before); the apply side
+  reconstructs a `WorkspaceTab` from the
+  imported `currentPath` so the v2/v3
+  export format stays compatible with
+  the new v2 internal store.
+- `useActivePath` is the canonical
+  replacement for direct
+  `state.currentPath` access in *new*
+  code. The 5 files that used to read
+  `s.currentPath` directly are migrated
+  in this PR: `main.tsx`, `SearchPanel.tsx`,
+  `SettingsProvider.tsx`, `useWorkspaceSync.ts`,
+  `PrivacyDataCard.tsx`. The helper
+  function in `tourSteps.ts` is refactored
+  to take a plain `{ hydrated, currentPath }`
+  object instead of a `Pick<WorkspaceState, ...>`,
+  decoupling the onboarding-tour gate
+  from the internal store shape.
+
+**Tests**:
+
+- 21 new tests in
+  `workspaceStore.test.ts` cover:
+  - v1 → v2 migration (v1 keys absent → no
+    migration; v1 current present → v2
+    keys written + v1 key removed; v1
+    recents merged into v2 recents;
+    corrupt v1 values fall back to
+    defaults; idempotent on second
+    hydrate)
+  - `open()` (new tab; existing path is a
+    no-op-add; recents updated; status
+    flipped to `ready`; persisted to v2
+    keys)
+  - `close()` (closes the active tab when
+    no arg; the right-of-closed tab
+    becomes active; falls back to the
+    last-left tab; falls back to `null`;
+    non-active close preserves active;
+    closed path is preserved in recents)
+  - `setActive()` (switches active; writes
+    to v2 active key; no-op on unknown
+    id)
+  - `useActivePath` derived helper (null
+    when no active; returns active tab's
+    path; null when active id has no
+    matching tab)
+  - Persistence round-trip (v2 keys
+    survive a store re-hydrate)
+- 6 new tests in
+  `WorkspaceTabs.test.tsx` cover the
+  strip rendering, active-tab
+  highlighting, click-to-switch, × to
+  close, + to add via the picker, and
+  the "no tabs → render nothing" guard.
+  The tests use a real DOM render
+  (`createRoot` + `act`) rather than
+  `renderToStaticMarkup` because
+  Zustand's `useSyncExternalStore` reads
+  the *initial* state during SSR, which
+  would miss the per-test
+  `useWorkspaceStore.setState(...)`
+  setup. Decision #78 documents the
+  rationale.
+- 18 test files were touched (not
+  added) to migrate `setState({ currentPath: ... })`
+  and `s.currentPath` reads to the new
+  v2 shape (`workspaces` + `activeId`).
+  Most of these are one-line
+  `setState` updates in
+  `settingsIOv2.apply.test.ts`,
+  `settingsIOv3.apply.test.ts`,
+  `useApplyTemplate.test.ts`,
+  `useOpenWorkspace.test.ts`,
+  `useDeepLinkRouting.test.ts`,
+  `commands.test.ts`,
+  `PrivacyDataCard.test.ts`.
+- **Total vitest: 813 / 813** (was 791
+  before this phase; +22 from
+  `workspaceStore.test.ts` +6 from
+  `WorkspaceTabs.test.tsx`; the rest are
+  migrations of existing tests to the
+  new shape).
+
+**Files touched**:
+
+- `src/shared/state/workspaceStore.ts` —
+  rewritten: 696 insertions / 142
+  deletions. New `WorkspaceTab` type,
+  `workspaces` + `activeId` state,
+  `useActivePath` / `useActivePathSelector`
+  helpers, v1 → v2 migration logic,
+  `open` / `close` / `setActive`
+  actions, updated `workspaceSelectors`,
+  v2 storage keys exported for tests.
+- `src/shared/state/workspaceStore.test.ts` —
+  482 insertions, +21 tests for the new
+  shape.
+- `src/screens/EditorWorkspace/components/WorkspaceTabs/WorkspaceTabs.tsx` +
+  `.module.css` + `index.ts` — new
+  component, ~200 LoC, with the
+  accessibility wiring described above.
+- `src/screens/EditorWorkspace/components/WorkspaceTabs/WorkspaceTabs.test.tsx` —
+  new test file, 6 tests.
+- `src/screens/EditorWorkspace/EditorWorkspace.tsx` +
+  `EditorWorkspace.module.css` — mount
+  `<WorkspaceTabs />` above
+  `<FileTreePane />`; new `tabs` grid
+  row in the CSS.
+- `src/screens/EditorWorkspace/hooks/useFileTree.ts` —
+  `useEffect` subscribes to
+  `useWorkspaceStore` and re-roots the
+  tree when the active tab changes.
+- `src/main.tsx` —
+  `workspaceSelectors.currentPath`.
+- `src/screens/EditorWorkspace/components/SearchPanel/SearchPanel.tsx`
+  — same selector migration.
+- `src/screens/SettingsProvider/SettingsProvider.tsx`
+  — same selector migration.
+- `src/screens/SettingsProvider/components/PrivacyDataCard.tsx`
+  + `.test.ts` — use `useActivePath(ws)`
+  in the export snapshot; mock updated
+  to provide `useActivePath` /
+  `createWorkspaceTab`.
+- `src/shared/components/OnboardingTour/tourSteps.ts` —
+  `readWorkspaceGateFields` accepts a
+  plain `{ hydrated, currentPath }`
+  object.
+- `src/shared/hooks/useWorkspaceSync.ts`
+  — `sync()` uses `useActivePath(state)`
+  for both arguments.
+- `src/shared/settingsIOv2.apply.ts` +
+  `.test.ts` — apply path reconstructs
+  a `WorkspaceTab` from the imported
+  `currentPath`.
+- `src/shared/settingsIOv3.apply.ts` +
+  `.test.ts` — same, plus the
+  `readLipiState` / `writeLipiState`
+  helpers export `currentPath` from
+  `useActivePath(s)`.
+- `src/shared/commands/commands.ts` +
+  `.test.ts` — `workspace.open` and
+  `workspace.close` go through the new
+  `open()` / `close()` actions (the
+  "Open Recent" commands call
+  `openWorkspace(path)` which delegates
+  to `open(chosen)`).
+- `src/screens/Welcome/hooks/useOpenWorkspace.ts`
+  + `.test.ts` + `useApplyTemplate.ts`
+  + `.test.ts` — `resetStore` updates
+  use the v2 shape.
+- `src/shared/hooks/useDeepLinkRouting.test.ts` —
+  same.
+
+**No Rust changes.** `cargo check` /
+`cargo test` unchanged. M6a is a
+frontend-only phase.
+
+**Titlebar**: now `dev · M6a`.
+
+**Verification**:
+
+- `npx tsc -b` — clean, 0 errors.
+- `npx vitest run` — **813 / 813** pass
+  (was 791).
+- `npm run build` — clean, 700 KB JS /
+  107 KB CSS, gzipped 201 KB / 18 KB.
+- `cargo check` — clean (no Rust
+  changes).
+
+**Decisions** (the architectural calls):
+
+- **#77** — `workspaces + activeId` is the
+  v2 internal store shape. A derived
+  `useActivePath(state)` helper is the
+  canonical replacement for the old
+  `currentPath` field. Export shape
+  unchanged.
+- **#78** — WorkspaceTabs tests use a
+  real DOM render, not
+  `renderToStaticMarkup`, because
+  Zustand's `useSyncExternalStore` reads
+  the *initial* state during SSR.
+- **#79** — v1 → v2 migration is
+  in-store, idempotent, and drops the
+  v1 key only on success. The v1 keys
+  are not re-written by the new code.
+- **#80** — Closing a tab preserves its
+  path in recents ("closed is not
+  forgotten"). Re-opening a closed
+  folder from recents is the canonical
+  "I want this again" path.
+
+**M6b** (next, when scheduled):
+per-tab state keying (file tree
+expansion, open editor tabs, scroll
+position) + v4 settings export / import
+(the v3 export `workspace.currentPath`
+shape extends to a
+`workspace.workspaces[]` array with
+per-tab state). See HANDOFF §6.
+
 ### Added (File-tree mutations)
 
 Right-click any file or folder in the

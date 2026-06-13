@@ -311,16 +311,14 @@ a Windows quirk, not a Lipi issue.
 
 ## 6. How to continue (next session checklist)
 
-**Current phase: Decision #66 polish — file-tree right-click context menu — SHIPPED.** This is a one-shot polish that closes the only remaining v1 "ugly" UX surface in the file tree: the `window.prompt` / `window.confirm` calls used by the right-click action picker, the new-file name input, the rename name input, and the delete confirm. The polish replaces all 4 `window.prompt` calls and 2 `window.confirm` calls with 3 purpose-built components (`FileRowContextMenu` floating `<ul role="menu">` anchored at the click x/y with auto-flip + keyboard nav + outside-click dismissal; `InlineNameInput` modal that reuses the shared `Modal` primitive with a labelled text input, validation, and pre-selection of the basename on rename; `ConfirmDestructiveModal` modal that reuses `Modal` with a danger-variant Delete button and per-kind body copy). All 3 components are wired into `FileTreePane`'s `TreeNode` via 3 pieces of mutually-exclusive state (`menu` / `nameInput` / `confirm`). The pure helpers `validateFileName` (7 rules: non-empty, not `.` / `..`, no path separators or Windows-illegal chars, no reserved device names, case-insensitive collision check, length cap, trailing-dots/space strip) and `suggestNewFileName` (untitled.txt → untitled (1).txt → … → 10k bail-out with timestamped fallback) back the `InlineNameInput`. The `computeContextMenuPosition` pure helper handles the auto-flip math. 791/791 vitest tests pass (+56 for this phase: 24 fileNameValidation + 20 FileRowContextMenu + 8 InlineNameInput + 4 ConfirmDestructiveModal = 56; previous 735 + 56 = 791). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. See `CHANGELOG.md` "Added (Decision #66 polish — file-tree right-click context menu)" for the full feature list; see HANDOFF §9.21 for the per-phase writeup; see Decision #76 for the architectural call.
+**Current phase: M6a — Multi-workspace tabs: data model + tab strip — SHIPPED.** M6a is the first half of the M6 multi-workspace tabs plan. The pre-M6a `useWorkspaceStore` tracked a single `currentPath: string | null`; M6a replaces that with `workspaces: WorkspaceTab[]` (`{ id, path, addedAt }`) and `activeId: string | null`, plus a derived `useActivePath(state)` helper that consumers use to read the active tab's path. A new `useActivePathSelector()` hook subscribes to the store and re-renders on change. A v1 → v2 in-store migration wraps the old single `currentPath` in a `WorkspaceTab` on first hydrate, writes the v2 keys, and drops the v1 keys (only on success — the v1 keys are otherwise left in place, a defensive measure for users with both an old binary and a new binary running side-by-side). The new `<WorkspaceTabs />` component renders one pill per open tab between the titlebar and the file tree (click to switch, `×` to close, middle-click to close, `+` to add via the native folder picker; full a11y: `role="tablist"` / `role="tab"` / `aria-selected`). The file tree re-roots to the new active path when the user switches tabs (M6a is global expansion state; M6b will key it per tab). Recents are unchanged in shape but now `MAX_RECENTS`-capped strings, with "closed is not forgotten" semantics (closing a tab preserves its path in recents; re-opening from recents adds a new tab). The Command Palette's `workspace.open` and `workspace.close` commands now dispatch the new `open(path)` / `close(tabId?)` actions. 813/813 vitest tests pass (+22 from this phase: 21 in `workspaceStore.test.ts` covering the v1→v2 migration, `open` / `close` / `setActive` actions, and `useActivePath`; 6 in `WorkspaceTabs.test.tsx` for the strip rendering and a11y). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. Titlebar subtitle is now `dev · M6a`. See `CHANGELOG.md` "Added (M6a — Multi-workspace tabs: data model + tab strip)" for the full feature list; see HANDOFF §9.22 for the per-phase writeup; see Decisions #77–#80 for the architectural calls.
 
-**Previous phase (this session):** Workspace track — SHIPPED (File-tree mutations + File watcher + Workspace search). This three-phase batch closes the "what is in my workspace, what changed on disk, and how do I find anything" loop. FTM adds right-click New / Rename / Delete in `FileTreePane` (Rust `fs_create_file` / `fs_delete_entry` / `fs_rename_entry` IPC, JS `useFileTree` pure helpers `createInTree` / `deleteInTree` / `renameInTree` for testability). FW adds a real-time `notify`-backed watcher that emits `fs://changed` (Rust `fs_watch` / `fs_unwatch` with 75 ms debounce, JS `useFileTreeWatcher` with 150 ms JS-side debounce + a `decideFsChangeAction` pure helper that filters the event stream). WS adds a `SearchPanel` side-tab (Rust hand-rolled grep with `.git` / `node_modules` / `dist` / `build` ignores, 5 MB file-size cap, 1 000 result cap, 4096-byte binary-probe; JS `SearchPanel` with debounced query + case-insensitive toggle + clickable result rows that set `pendingReveal` in `editorControllerStore` for Monaco to consume on mount). 651/651 vitest tests pass (+60 for the batch: 4 fs IPC + 6 fsWatcher IPC + 7 workspaceSearch IPC + 7 fs unit + 8 fs_watcher unit + 13 workspace_search unit + 7 useFileTree + 9 SearchPanel store/hook); 157/157 cargo tests pass (+11 for the batch). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (File-tree mutations)" / "Added (File watcher)" / "Added (Workspace search)" for the full feature lists; see HANDOFF §9.16 / §9.17 / §9.18 for the per-phase writeups.
+**Previous phase (Decision #66 polish):** file-tree right-click context menu — SHIPPED. The pre-Decision-#66 `window.prompt` / `window.confirm` right-click flow in `FileTreePane` is replaced with 3 purpose-built components (`FileRowContextMenu` floating `<ul role="menu">` anchored at the click x/y with auto-flip + keyboard nav + outside-click dismissal; `InlineNameInput` modal that reuses the shared `Modal` primitive with a labelled text input, validation, and pre-selection of the basename on rename; `ConfirmDestructiveModal` modal that reuses `Modal` with a danger-variant Delete button and per-kind body copy). All 3 components are wired into `FileTreePane`'s `TreeNode` via 3 pieces of mutually-exclusive state (`menu` / `nameInput` / `confirm`). The pure helpers `validateFileName` (7 rules: non-empty, not `.` / `..`, no path separators or Windows-illegal chars, no reserved device names, case-insensitive collision check, length cap, trailing-dots/space strip) and `suggestNewFileName` (untitled.txt → untitled (1).txt → … → 10k bail-out with timestamped fallback) back the `InlineNameInput`. The `computeContextMenuPosition` pure helper handles the auto-flip math. 791/791 vitest tests pass (+56 for this phase: 24 fileNameValidation + 20 FileRowContextMenu + 8 InlineNameInput + 4 ConfirmDestructiveModal = 56; previous 735 + 56 = 791). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. See `CHANGELOG.md` "Added (Decision #66 polish — file-tree right-click context menu)" for the full feature list; see HANDOFF §9.21 for the per-phase writeup; see Decision #76 for the architectural call.
 
-(M2b is documented in detail in §9.4; M3 in §9.9; FTM/FW/WS in §9.16/§9.17/§9.18; K/S3 in §9.19/§9.20. The detailed "current phase" status lines from earlier sessions have been removed here in favour of the single live "current phase" line at the top; the CHANGELOG and §9 are the source of truth for what each shipped.)
-
-**Next:** With Decision #66 shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
-- M3 follow-up — iOS Swift `SFSpeechRecognizer` and Android Kotlin `SpeechRecognizer` plugins. The `'nativeDictation'` factory stub exists; the actual Swift / Kotlin code awaits a future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+. The `useVoiceCapabilitiesStore` already returns `nativeDictation: true` on iOS / Android (set by `src-tauri/src/voice_platform.rs`), so the plugins drop in without JS changes.
-- M6 — Multi-workspace tabs (open 2+ workspaces side by side in the same window)
-- Several mobile-build follow-ups — full Swift / Kotlin plugin implementation, mobile haptics wiring, App Store / Play Store submission readiness
+**Next:** With M6a shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
+- **M6b** — Per-tab state keying (file tree expansion, open editor tabs, scroll position, focused row) + v4 settings export / import (the v3 `workspace.currentPath` shape extends to a `workspace.workspaces[]` array with per-tab state; the v3→v4 import migration wraps any old `currentPath` into a single `WorkspaceTab` with empty per-tab state). Same as M6a: pure frontend work, no Rust changes, but the data model + persistence migration + per-tab keying are non-trivial and warrant a dedicated design pass before code.
+- **M3 follow-up** — iOS Swift `SFSpeechRecognizer` and Android Kotlin `SpeechRecognizer` plugins. The `'nativeDictation'` factory stub exists; the actual Swift / Kotlin code awaits a future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+. The `useVoiceCapabilitiesStore` already returns `nativeDictation: true` on iOS / Android (set by `src-tauri/src/voice_platform.rs`), so the plugins drop in without JS changes.
+- Several mobile-build follow-ups — full Swift / Kotlin plugin implementation, mobile haptics wiring, App Store / Play Store submission readiness.
 
 **Previous phase (M2a):** Voice capture foundation complete. The pipeline is plumbed end-to-end with a pluggable STT provider:
 - `src/shared/state/voiceStore.ts` — five-state machine (`idle` / `requesting` / `recording` / `transcribing` / `error`) + `durationMs` + `transcript` + `lastError`. Two pure helpers (`mergeTranscript`, `formatDuration`).
@@ -3433,6 +3431,615 @@ changed.
 - **No keyboard shortcut to open the menu on the focused row.** A keyboard user can `Tab` to a row, but the only way to open the menu is a right-click. A v2 could add a `Shift+F10` or `ContextMenu` key handler on the row that opens the menu at the row's `getBoundingClientRect` centre.
 - **No animation.** The menu appears and disappears instantly. A v2 could add a CSS transition (`data-state="entering" / "exiting"`) and a 100ms fade.
 - **No new-folder action.** The menu only has New File, Rename, Delete. New Folder is a v2 (it would be a third `kind: 'folder'` row in the `ConfirmDestructiveModal`, plus a `mode: 'new-folder'` in `InlineNameInputMode`).
+
+### 9.22 M6a - SHIPPED (Multi-workspace tabs: data model + tab strip, see CHANGELOG "Added (M6a — Multi-workspace tabs: data model + tab strip)")
+
+The first half of the M6
+multi-workspace tabs
+plan. M6a ships the
+data model + the
+tab strip; M6b
+(separate phase) will
+add per-tab state
+keying and a v3→v4
+settings export /
+import migration.
+
+**The data model
+change.** The pre-M6a
+`useWorkspaceStore`
+tracked a single
+`currentPath:
+string | null`. That
+field is gone; the
+new shape is:
+
+```ts
+interface WorkspaceTab {
+  id: string;       // crypto.randomUUID()
+  path: string;     // absolute folder path
+  addedAt: number;  // Date.now()
+}
+
+interface WorkspaceState {
+  workspaces: WorkspaceTab[];
+  activeId: string | null;
+  recents: string[];
+  // ... status, hydrated, plus the same
+  // open/close/setActive/setStatus/clearRecents/
+  // removeRecent actions as before
+}
+```
+
+The `id` is a UUID
+(not the path) so the
+tab stays
+identifiable across
+rename / move — the
+canonical tab key in
+all persistence keys,
+all recents, and all
+in-store subscriptions
+is the `id`. The
+`path` is the human
+facing label and the
+only thing persisted
+in the v2 export
+shape. The `addedAt`
+breaks ties in "most
+recent tab" ordering
+(M6b will need it for
+the "tab to the right
+of the closed one"
+fallback when two
+tabs share a path).
+
+**`useActivePath` —
+the canonical
+replacement for
+`state.currentPath`.**
+A pure helper:
+
+```ts
+export function useActivePath(
+  state: Pick<WorkspaceState, 'workspaces' | 'activeId'>,
+): string | null {
+  if (!state.activeId) return null;
+  const tab = state.workspaces.find((w) => w.id === state.activeId);
+  return tab?.path ?? null;
+}
+```
+
+Plus a React-side
+companion:
+
+```ts
+export function useActivePathSelector(): string | null {
+  return useActivePath(useWorkspaceStore.getState());
+}
+```
+
+The existing
+`workspaceSelectors.currentPath`
+now points to
+`useActivePath`, so
+the 5 pre-M6a
+consumers that read
+`useWorkspaceStore(s => s.currentPath)`
+are migrated to
+`useWorkspaceStore(workspaceSelectors.currentPath)`
+in this PR. The
+helper function in
+`tourSteps.ts`
+(`readWorkspaceGateFields`)
+is refactored to
+accept a plain
+`{ hydrated, currentPath }`
+object instead of a
+`Pick<WorkspaceState, ...>`,
+decoupling the
+onboarding-tour gate
+from the internal
+store shape. New code
+should use
+`useActivePathSelector()`
+directly.
+
+**The persistence
+migration (v1 → v2,
+in-store, idempotent,
+non-destructive).**
+Three new v2 keys:
+`lipi:workspace:workspaces:v1`
+(the tab array),
+`lipi:workspace:activeId:v1`
+(the active tab id),
+and the unchanged
+recents key
+`lipi:workspace:recents:v1`.
+The pre-M6a v1 key
+`lipi:workspace:v1`
+is the single
+`currentPath` string
+or `null`. On first
+hydrate after M6a
+ships, if the v2
+workspaces key is
+absent, the store
+reads the v1 keys,
+wraps the v1
+`currentPath` in a
+single `WorkspaceTab`
+(generated via
+`createWorkspaceTab(path)`,
+which is just
+`{ id: crypto.randomUUID(), path, addedAt: Date.now() }`),
+merges the v1 recents
+into the v2 recents
+key (deduped, in
+order), and writes
+the v2 keys. The v1
+keys are then removed
+— a successful
+migration is the
+right time to drop
+the old shape.
+
+The migration is
+defensive about
+partial / corrupt
+data. Each tab row is
+shape-checked
+(`id` string, `path`
+string, `addedAt`
+number) and malformed
+rows are dropped — a
+single corrupt row
+from a future version
+doesn't wipe the
+whole tab list. The
+active id is validated
+against the tab list
+and falls back to the
+first tab if it
+doesn't match (the
+user sees their
+last-open workspace).
+Missing-but-tabs-present
+is recovered by
+picking the first tab.
+Recents are filtered
+to strings only; the
+shape hasn't changed
+in V1, so a corrupt
+entry is a one-liner
+to drop.
+
+The migration only
+fires when the v2
+workspaces key is
+absent. After the
+first M6a hydrate, the
+v1 key is gone and
+the v2 keys are the
+only source of truth.
+The `open()`, `close()`,
+and `setActive()`
+actions write to the
+v2 keys only — the
+v1 key is never
+re-written by the
+new code. (A
+defensive measure in
+case a user has both
+an old binary and a
+new binary running
+side-by-side, e.g. a
+dev session and a
+packaged build; the
+old binary's last
+`currentPath` write
+would otherwise
+re-introduce the v1
+key, but the new
+binary's read-side
+migration handles
+that by re-reading
+the v1 key if the v2
+key is gone.)
+
+**The `WorkspaceTabs`
+component.** One pill
+per open tab,
+rendered as a flex
+strip between the
+titlebar and the file
+tree. The strip lives
+in a new grid row
+(`grid-area: tabs`,
+`grid-template-rows:
+36px auto 1fr 24px`)
+so it sits directly
+under the titlebar
+and pushes the file
+tree down to fill the
+remaining space. Each
+pill has the folder
+basename (the last
+path segment, with
+`/[^/\\]+$/` regex —
+handles both Windows
+`\` and Unix `/` path
+separators) as its
+label, with a `title`
+attribute carrying
+the full path on
+hover. The active tab
+has a `data-active="true"`
+attribute (which the
+CSS uses to paint the
+accent underline +
+lighter background)
+and `aria-selected="true"`
+(per WAI-ARIA's tab
+pattern). The whole
+strip is `role="tablist"`
+with `aria-label="Open workspaces"`.
+
+The `×` close button
+on each pill is a
+real `<button>` (not
+a span) with
+`aria-label="Close <basename>"`
+and a `stopPropagation`
+on click so it
+doesn't also activate
+the tab. Middle-click
+on the pill itself
+also closes the tab
+— the standard
+browser-tab affordance,
+wired via the
+`onAuxClick` handler
+with a `e.button === 1`
+check.
+
+The `+` button at the
+right end opens the
+native folder picker
+via `pickFolder()` and
+calls `open(chosen)`
+on the result. The
+existing
+`openWorkspace(path)`
+helper in the Welcome
+screen folder is the
+single bridge between
+the picker and the
+store; the new `open`
+action in the store
+handles the
+dedup-and-activate
+logic (if the path is
+already open, just
+re-activate the
+existing tab and bump
+recents; if not, add
+a new tab + make it
+active).
+
+The strip returns
+`null` when
+`workspaces.length === 0`
+— the editor is not
+visible in that state
+(the router routes to
+the Welcome screen),
+and the strip would be
+visual noise. The
+component decides
+visibility itself so
+callers don't need to
+know.
+
+**`useFileTree`
+reactivity.** The
+hook subscribes to
+`useWorkspaceStore`
+and re-roots the file
+tree to the new active
+path whenever the user
+switches tabs:
+
+```ts
+useEffect(() => {
+  const unsubscribe = useWorkspaceStore.subscribe(
+    (state, prev) => {
+      const next = useActivePath(state);
+      const prevPath = useActivePath(prev);
+      if (next !== prevPath) {
+        if (next) {
+          setStatus({ kind: 'loading', rootPath: next });
+          void loadDir(next).then(() => {
+            // ... update status if still active ...
+          });
+          setRoot(next);
+        } else {
+          reset(); // all tabs closed
+        }
+      }
+    },
+  );
+  return unsubscribe;
+}, [loadDir, reset, setRoot, setStatus]);
+```
+
+The per-tab
+expansion state is
+global in M6a (a
+single `expanded` set
+in `useFileTreeStore`).
+M6b will key it per
+tab (so switching
+from tab A (expanded
+to `/src`) to tab B
+(collapsed) and back
+preserves A's
+expansion). For M6a,
+the file tree
+re-roots to the new
+active path on
+switch; the expansion
+state is whatever it
+was on the previous
+visit to that path
+(it's a `Map<path, Set<dir>>`,
+so the same path keeps
+its expansion across
+visits).
+
+**Backward
+compatibility.** The
+v2 export format is
+unchanged: a
+`lipi-state` JSON
+file's `workspace`
+section still has a
+`currentPath` field
+(plus the existing
+`recents` array). The
+apply path (both v2
+and v3) reconstructs
+a `WorkspaceTab` from
+the imported
+`currentPath`:
+
+```ts
+if (v.currentPath) {
+  const tab = createWorkspaceTab(v.currentPath);
+  useWorkspaceStore.setState({
+    workspaces: [tab],
+    activeId: tab.id,
+    recents: v.recents,
+  });
+}
+```
+
+So a v2 / v3 export
+file from a pre-M6a
+install imports into
+M6a with the same
+"one open workspace"
+shape it had on
+export. The inverse
+direction (M6a
+exporting a v2 / v3
+file) is handled the
+same way:
+`workspace: { currentPath: useActivePath(s), recents: [...s.recents] }`
+— if multiple tabs
+are open, only the
+active one is
+exported, which is
+the right behaviour
+for the "I want to
+share my workspace
+state with a friend"
+use case. M6b's v4
+export format will
+extend the `workspace`
+section to a
+`workspaces[]` array
+with per-tab state;
+the v3 → v4 import
+migration will wrap
+the old `currentPath`
+in a `WorkspaceTab`
+with empty per-tab
+state.
+
+**The 18 test files
+that were touched**
+(not added) to
+migrate `setState({
+currentPath: ... })`
+and `s.currentPath`
+reads to the new v2
+shape
+(`workspaces` +
+`activeId`): the
+`settingsIOv2.apply.test.ts`
+and
+`settingsIOv3.apply.test.ts`
+mocks needed explicit
+`useActivePath` and
+`createWorkspaceTab`
+exports; the
+`useApplyTemplate.test.ts`
+and
+`useOpenWorkspace.test.ts`
+`resetStore` calls
+needed
+`workspaces: [], activeId: null`;
+the
+`useDeepLinkRouting.test.ts`
+same. The
+`commands.test.ts`
+`open()` /
+`close()` /
+`setActive()` tests
+needed the new v2
+shape. The
+`PrivacyDataCard.test.ts`
+mock state needed a
+`workspaces` / `activeId`
+/ `currentPath`-derived
+shape. The
+`settingsIOv2.apply.test.ts`
+assertions check
+`setStateMock.toHaveBeenNthCalledWith({ workspaces: ..., activeId: ... })`
+rather than the old
+`currentPath` field.
+Most of these are
+one-line `setState`
+updates; the mock
+updates are the
+meatiest parts of the
+PR (the v2 / v3 apply
+test files are 50+ line
+diffs each).
+
+**`renderToStaticMarkup`
+vs. real DOM render
+for `WorkspaceTabs`
+tests.** This is
+Decision #78. Zustand
+uses
+`useSyncExternalStore`
+under the hood:
+
+```js
+function useStore(api, selector = identity) {
+  const slice = React.useSyncExternalStore(
+    api.subscribe,
+    React.useCallback(() => selector(api.getState()), [api, selector]),
+    React.useCallback(() => selector(api.getInitialState()), [api, selector])
+  );
+  ...
+}
+```
+
+The third argument is
+the *server snapshot*
+— it returns
+`selector(api.getInitialState())`,
+not the live state.
+`renderToStaticMarkup`
+IS SSR, so the
+component sees the
+*initial* state, not
+whatever the test set
+up via
+`useWorkspaceStore.setState({...})`.
+The test debug output
+made the bug obvious:
+
+```
+DEBUG state: [{t1}, {t2}]        // test set up
+DEBUG WorkspaceTabs activeId: null getState activeId: t1  // BUG
+```
+
+The component's
+`useSyncExternalStore`
+returns the *initial*
+state (no tabs), so
+the component renders
+`null`, so the static
+markup is `''`, so
+`html.match(/role="tab"/g)`
+returns `null`, so
+`(html.match(...) ?? []).toHaveLength(2)`
+throws a `TypeError`
+on `null.toHaveLength`.
+The fix is to use a
+real DOM render
+(`createRoot` + `act`)
+in all six tests. The
+DOM render subscribes
+to the live state via
+the regular
+`useSyncExternalStore`
+path, so the test's
+`setState` is visible
+to the component. The
+test setup is wrapped
+in a `mount()` helper
+that creates a fresh
+`div` per test and
+unmounts on cleanup.
+
+**The test
+breakthrough.** This
+session had a long
+debug on the
+`WorkspaceTabs` tests
+where
+`renderToStaticMarkup`
+was returning an
+empty string. The
+debug output (via
+`process.stderr.write`
+to bypass Vitest's
+console capture)
+revealed that
+`useWorkspaceStore.getState().activeId`
+was `'t1'` but
+`useWorkspaceStore(workspaceSelectors.activeId)`
+returned `null` — the
+hook was reading
+*initial* state during
+SSR. The fix was to
+switch all six tests
+to a real DOM render
+with `createRoot` +
+`act`. This is a
+documented Vitest
++ Zustand gotcha
+(Decision #78); future
+tests of components
+that read Zustand
+state should use DOM
+render, not
+`renderToStaticMarkup`.
+
+**M6b (next, when
+scheduled).** Per-tab
+state keying (file
+tree expansion, open
+editor tabs, scroll
+position, focused
+row, recent files
+list) + v4 settings
+export / import. The
+v3 export
+`workspace.currentPath`
+shape extends to a
+`workspace.workspaces[]`
+array of
+`{ id, path, addedAt, state: { expandedDirs, openEditorTabs, focusedPath, scrollPosition, recentFiles } }`;
+the v3 → v4 import
+migration wraps any
+old `currentPath` in
+a single `WorkspaceTab`
+with empty per-tab
+state. The data model
+is non-trivial —
+per-tab state is the
+largest single piece
+of new M6b code — and
+warrants a dedicated
+design pass before
+code.
 
 ---
 

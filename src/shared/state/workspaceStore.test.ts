@@ -654,4 +654,298 @@ describe('useWorkspaceStore', () => {
     expect(useActivePath(s)).toBe('/round-trip');
     expect(s.recents[0]).toBe('/round-trip');
   });
+
+  // -----------------------------------------------------------------
+  // M6b — per-tab state keying
+  // -----------------------------------------------------------------
+  // Each tab now carries a
+  // `state: WorkspaceTabState`
+  // field. The M6b additions to
+  // the store are:
+  //   1. `EMPTY_TAB_STATE` export
+  //      (the canonical empty).
+  //   2. `createWorkspaceTab`
+  //      accepts an optional
+  //      `state` argument.
+  //   3. `open()` initialises the
+  //      new tab's `state` to
+  //      `EMPTY_TAB_STATE`.
+  //   4. `setTabState(tabId,
+  //      partial)` merges `partial`
+  //      into the tab's `state`
+  //      and persists.
+  //   5. `replaceTabState(tabId,
+  //      state)` replaces the
+  //      tab's `state` and
+  //      persists.
+  //   6. The hydrate synthesises
+  //      `EMPTY_TAB_STATE` for
+  //      pre-M6b tabs (no `state`
+  //      field) and for
+  //      partial-state tabs.
+  //   7. The `useActiveTabState`
+  //      helper returns the
+  //      active tab's state, or
+  //      `EMPTY_TAB_STATE` if no
+  //      tab is active.
+  describe('M6b — per-tab state keying', () => {
+    it('creates a new tab with EMPTY_TAB_STATE', () => {
+      useWorkspaceStore.getState().open('/proj');
+      const tab = useWorkspaceStore.getState().workspaces[0]!;
+      expect(tab.state).toEqual({
+        expandedDirs: [],
+        selectedPath: null,
+        openEditorTabPaths: [],
+        activeEditorTabPath: null,
+      });
+    });
+
+    it('setTabState merges the partial into the tab state', () => {
+      useWorkspaceStore.getState().open('/proj');
+      const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
+      useWorkspaceStore.getState().setTabState(tabId, {
+        expandedDirs: ['/proj/src', '/proj/src/components'],
+      });
+      const after = useWorkspaceStore.getState().workspaces[0]!;
+      expect(after.state.expandedDirs).toEqual([
+        '/proj/src',
+        '/proj/src/components',
+      ]);
+      // Other fields stay at
+      // their empty-state
+      // defaults.
+      expect(after.state.selectedPath).toBeNull();
+      expect(after.state.openEditorTabPaths).toEqual([]);
+    });
+
+    it('setTabState is a no-op for an unknown tab id', () => {
+      useWorkspaceStore.getState().open('/proj');
+      const before = useWorkspaceStore.getState().workspaces[0]!.state;
+      useWorkspaceStore.getState().setTabState('nonsense', {
+        selectedPath: '/proj/x',
+      });
+      const after = useWorkspaceStore.getState().workspaces[0]!.state;
+      expect(after).toBe(before); // same reference — no-op
+    });
+
+    it('setTabState is a no-op if the merge is structurally identical', () => {
+      useWorkspaceStore.getState().open('/proj');
+      const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
+      useWorkspaceStore.getState().setTabState(tabId, {
+        expandedDirs: ['/proj/src'],
+      });
+      const before = useWorkspaceStore.getState().workspaces[0]!.state;
+      // Setting the same
+      // expandedDirs array
+      // reference should be a
+      // no-op (the array is
+      // compared by reference).
+      useWorkspaceStore.getState().setTabState(tabId, {
+        expandedDirs: before.expandedDirs,
+      });
+      const after = useWorkspaceStore.getState().workspaces[0]!.state;
+      expect(after).toBe(before); // same reference — no-op
+    });
+
+    it('replaceTabState replaces the whole state', () => {
+      useWorkspaceStore.getState().open('/proj');
+      const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
+      const next = {
+        expandedDirs: ['/proj/src'],
+        selectedPath: '/proj/src/index.ts',
+        openEditorTabPaths: ['/proj/src/index.ts'],
+        activeEditorTabPath: '/proj/src/index.ts',
+      };
+      useWorkspaceStore.getState().replaceTabState(tabId, next);
+      const after = useWorkspaceStore.getState().workspaces[0]!;
+      expect(after.state).toEqual(next);
+    });
+
+    it('replaceTabState is a no-op for an unknown tab id', () => {
+      useWorkspaceStore.getState().open('/proj');
+      const before = useWorkspaceStore.getState().workspaces[0]!.state;
+      useWorkspaceStore.getState().replaceTabState('nonsense', {
+        ...before,
+        selectedPath: '/x',
+      });
+      expect(useWorkspaceStore.getState().workspaces[0]!.state).toBe(before);
+    });
+
+    it('setTabState persists the new state to localStorage', () => {
+      useWorkspaceStore.getState().open('/proj');
+      const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
+      useWorkspaceStore.getState().setTabState(tabId, {
+        openEditorTabPaths: ['/proj/a.ts', '/proj/b.ts'],
+        activeEditorTabPath: '/proj/a.ts',
+      });
+      const stored = JSON.parse(
+        localStorage.getItem(STORAGE_KEY_WORKSPACES_V2) ?? '[]',
+      );
+      expect(stored[0].state).toEqual({
+        expandedDirs: [],
+        selectedPath: null,
+        openEditorTabPaths: ['/proj/a.ts', '/proj/b.ts'],
+        activeEditorTabPath: '/proj/a.ts',
+      });
+    });
+
+    it('hydrate synthesises EMPTY_TAB_STATE for pre-M6b tabs (no state field)', () => {
+      // Persist a pre-M6b
+      // tab (no `state`
+      // field).
+      const preM6b = {
+        id: 't1',
+        path: '/legacy',
+        addedAt: 1000,
+        // no `state` field
+      };
+      localStorage.setItem(
+        STORAGE_KEY_WORKSPACES_V2,
+        JSON.stringify([preM6b]),
+      );
+      localStorage.setItem(STORAGE_KEY_ACTIVE_ID_V2, JSON.stringify('t1'));
+      useWorkspaceStore.getState().hydrate();
+      const tab = useWorkspaceStore.getState().workspaces[0]!;
+      expect(tab.state).toEqual({
+        expandedDirs: [],
+        selectedPath: null,
+        openEditorTabPaths: [],
+        activeEditorTabPath: null,
+      });
+    });
+
+    it('hydrate fills in missing fields for a partial-state tab', () => {
+      // Persist a tab with a
+      // partial `state`
+      // (e.g. from a future
+      // version that added a
+      // new field and an
+      // older install is
+      // missing it).
+      const partial = {
+        id: 't1',
+        path: '/proj',
+        addedAt: 1000,
+        state: {
+          expandedDirs: ['/proj/src'],
+          // selectedPath, openEditorTabPaths, activeEditorTabPath all missing
+        },
+      };
+      localStorage.setItem(
+        STORAGE_KEY_WORKSPACES_V2,
+        JSON.stringify([partial]),
+      );
+      localStorage.setItem(STORAGE_KEY_ACTIVE_ID_V2, JSON.stringify('t1'));
+      useWorkspaceStore.getState().hydrate();
+      const tab = useWorkspaceStore.getState().workspaces[0]!;
+      expect(tab.state).toEqual({
+        expandedDirs: ['/proj/src'],
+        selectedPath: null,
+        openEditorTabPaths: [],
+        activeEditorTabPath: null,
+      });
+    });
+
+    it('hydrate drops a corrupt tab (e.g. wrong type for state.expandedDirs)', () => {
+      const corrupt = {
+        id: 't1',
+        path: '/proj',
+        addedAt: 1000,
+        state: {
+          expandedDirs: 'not-an-array', // wrong type
+        },
+      };
+      localStorage.setItem(
+        STORAGE_KEY_WORKSPACES_V2,
+        JSON.stringify([corrupt]),
+      );
+      localStorage.setItem(STORAGE_KEY_ACTIVE_ID_V2, JSON.stringify('t1'));
+      useWorkspaceStore.getState().hydrate();
+      const tab = useWorkspaceStore.getState().workspaces[0]!;
+      // The wrong-type field
+      // is reset to the
+      // empty-state default;
+      // the rest of the
+      // state shape is
+      // preserved.
+      expect(tab.state.expandedDirs).toEqual([]);
+      expect(tab.state.selectedPath).toBeNull();
+    });
+
+    it('useActiveTabState returns the active tab state, or EMPTY_TAB_STATE if none', async () => {
+      const { useActiveTabState } = await import('./workspaceStore');
+      // No active tab —
+      // returns empty.
+      expect(
+        useActiveTabState({
+          workspaces: [],
+          activeId: null,
+        }),
+      ).toEqual({
+        expandedDirs: [],
+        selectedPath: null,
+        openEditorTabPaths: [],
+        activeEditorTabPath: null,
+      });
+      // With an active tab —
+      // returns its state.
+      const tab = createWorkspaceTab('/proj', 't1', 1000, {
+        expandedDirs: ['/proj/src'],
+        selectedPath: '/proj/src/index.ts',
+        openEditorTabPaths: ['/proj/src/index.ts'],
+        activeEditorTabPath: '/proj/src/index.ts',
+      });
+      expect(
+        useActiveTabState({
+          workspaces: [tab],
+          activeId: 't1',
+        }),
+      ).toEqual(tab.state);
+    });
+
+    it('close preserves the closed tab’s state (with the tab itself)', () => {
+      // M6b doesn't change
+      // close behaviour
+      // relative to M6a —
+      // the closed tab goes
+      // away, and its
+      // per-tab `state` goes
+      // with it. Closing is
+      // not forgetting the
+      // path (recents), but
+      // the per-tab state is
+      // for the open tab
+      // only. This test
+      // documents the
+      // behaviour.
+      useWorkspaceStore.getState().open('/proj');
+      const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
+      useWorkspaceStore.getState().setTabState(tabId, {
+        openEditorTabPaths: ['/proj/a.ts'],
+      });
+      useWorkspaceStore.getState().close(tabId);
+      expect(useWorkspaceStore.getState().workspaces).toEqual([]);
+      // The path is still in
+      // recents (closing is
+      // not forgetting —
+      // Decision #80).
+      expect(useWorkspaceStore.getState().recents).toContain('/proj');
+    });
+
+    it('createWorkspaceTab accepts a custom state argument', () => {
+      const custom = {
+        expandedDirs: ['/proj/src'],
+        selectedPath: '/proj/src/index.ts',
+        openEditorTabPaths: ['/proj/src/index.ts'],
+        activeEditorTabPath: '/proj/src/index.ts',
+      };
+      const tab = createWorkspaceTab('/proj', 't1', 1000, custom);
+      expect(tab).toEqual({
+        id: 't1',
+        path: '/proj',
+        addedAt: 1000,
+        state: custom,
+      });
+    });
+  });
 });

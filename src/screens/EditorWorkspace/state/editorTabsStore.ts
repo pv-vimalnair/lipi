@@ -46,6 +46,39 @@ interface EditorTabsState {
   activate: (id: string) => void;
   close: (id: string) => void;
   closeAll: () => void;
+  /**
+   * M6b: replace the entire
+   * live editor tabs state
+   * (order + tabs + activeId)
+   * in one shot. The
+   * tab-switch orchestrator
+   * in `useEditorTabs` calls
+   * this with the new active
+   * tab's persisted state
+   * (paths → fresh loading
+   * `EditorTab`s; the IPC
+   * `readFile` round-trip
+   * fills in the content).
+   *
+   * `order` is the list of
+   * file paths, left to right.
+   * `activeId` is the path of
+   * the active tab (or `null`).
+   * `tabs` is a map keyed by
+   * path; the orchestrator
+   * passes a placeholder
+   * (`load: { kind: 'loading' }`)
+   * for each path and the
+   * `readFile` IPC round-trip
+   * seals them with
+   * `tabFromLoaded` /
+   * `upsertTab`.
+   */
+  replaceAll: (
+    order: string[],
+    tabs: Record<string, EditorTab>,
+    activeId: string | null,
+  ) => void;
 }
 
 export const useEditorTabsStore = create<EditorTabsState>((set) => ({
@@ -106,6 +139,24 @@ export const useEditorTabsStore = create<EditorTabsState>((set) => ({
     }),
 
   closeAll: () => set({ tabs: {}, order: [], activeId: null }),
+
+  replaceAll: (order, tabs, activeId) =>
+    set({
+      order: order.slice(),
+      tabs: { ...tabs },
+      // Only keep the active id if
+      // it's actually in the new
+      // order. If a tab was
+      // rehydrated with no
+      // `activeEditorTabPath` (or
+      // a stale one), drop to
+      // null. (The orchestrator
+      // also reconciles this
+      // before calling, but the
+      // store is defensive.)
+      activeId:
+        activeId && order.includes(activeId) ? activeId : order[0] ?? null,
+    }),
 }));
 
 export const editorTabsSelectors = {

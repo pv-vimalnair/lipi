@@ -101,6 +101,79 @@ export type WorkspaceStatus =
   | { kind: 'error'; message: string };
 
 /**
+ * Per-tab state that's persisted
+ * to `localStorage` and restored
+ * on tab switch.
+ *
+ * M6b (June 2026): each tab
+ * remembers its own file tree
+ * expansion / selection / open
+ * editor tabs / active editor
+ * tab. Before M6b these were
+ * global (shared across all
+ * open workspaces). The
+ * `WorkspaceTab` carries the
+ * `state` field; the file tree
+ * and editor tabs live stores
+ * are a "view" over the active
+ * tab's `state` (mirror-on-write,
+ * push-on-tab-switch).
+ *
+ * - `expandedDirs` is a sorted
+ *   array of full absolute paths
+ *   (sorted for stable JSON
+ *   serialisation).
+ * - `selectedPath` is the file
+ *   or directory currently
+ *   selected in the file tree,
+ *   or `null` if nothing is
+ *   selected.
+ * - `openEditorTabPaths` is the
+ *   list of file paths of the
+ *   open editor tabs, in
+ *   tab-strip order (left to
+ *   right).
+ * - `activeEditorTabPath` is the
+ *   path of the currently active
+ *   editor tab, or `null` if no
+ *   editor tab is active. When
+ *   non-null it MUST be one of
+ *   the paths in
+ *   `openEditorTabPaths`; the
+ *   store's `setTabState` does
+ *   NOT enforce this (we trust
+ *   the mirror-back), but the
+ *   `useEditorTabs` rehydration
+ *   treats a mismatch as "no
+ *   active editor tab".
+ */
+export interface WorkspaceTabState {
+  expandedDirs: string[];
+  selectedPath: string | null;
+  openEditorTabPaths: string[];
+  activeEditorTabPath: string | null;
+}
+
+/**
+ * The canonical empty
+ * `WorkspaceTabState`. All tabs
+ * are initialised with this on
+ * `open()` (M6b), and tabs
+ * hydrated from a pre-M6b v1
+ * `localStorage` key (no
+ * `state` field) get a copy
+ * of this. Exported for tests
+ * and the v3 → v4 settings
+ * import migration.
+ */
+export const EMPTY_TAB_STATE: WorkspaceTabState = {
+  expandedDirs: [],
+  selectedPath: null,
+  openEditorTabPaths: [],
+  activeEditorTabPath: null,
+};
+
+/**
  * One open workspace tab.
  *
  * The `id` is stable across the
@@ -121,11 +194,25 @@ export type WorkspaceStatus =
  * `open` and never changes
  * (a "Move" would be a close +
  * open).
+ *
+ * M6b (June 2026): the `state`
+ * field is the per-tab
+ * persisted state — file tree
+ * expansion, file tree
+ * selection, open editor tabs,
+ * active editor tab. The
+ * pre-M6b shape (no `state`
+ * field) is tolerated by the
+ * hydrate code: any tab without
+ * a `state` field gets
+ * `EMPTY_TAB_STATE` synthesised
+ * for it.
  */
 export interface WorkspaceTab {
   id: string;
   path: string;
   addedAt: number;
+  state: WorkspaceTabState;
 }
 
 interface WorkspaceState {
@@ -235,6 +322,42 @@ interface WorkspaceState {
    * in the store. */
   setActive: (tabId: string) => void;
   /**
+   * Merge `partial` into the
+   * `state` field of the tab
+   * identified by `tabId`. The
+   * file tree and editor tabs
+   * live stores call this on
+   * every mutation (e.g. when
+   * the user toggles a
+   * directory's expansion) to
+   * keep the persisted
+   * `tab.state` in sync with
+   * the live view. No-op if
+   * the tab id is not in the
+   * store.
+   *
+   * M6b. */
+  setTabState: (
+    tabId: string,
+    partial: Partial<WorkspaceTabState>,
+  ) => void;
+  /**
+   * Replace the entire
+   * `state` field of the tab
+   * identified by `tabId`. The
+   * tab switch orchestrator
+   * calls this with the new
+   * active tab's
+   * `WorkspaceTabState` to push
+   * the per-tab persisted state
+   * into the live file tree /
+   * editor tabs stores. No-op
+   * if the tab id is not in
+   * the store.
+   *
+   * M6b. */
+  replaceTabState: (tabId: string, state: WorkspaceTabState) => void;
+  /**
    * Update the transient status
    * (e.g. show a spinner while
    * the folder picker is open,
@@ -320,13 +443,28 @@ function dedupAndCap(paths: string[], newest: string): string[] {
  * (aside from the side effects of
  * `crypto.randomUUID` and
  * `Date.now`, which the test
- * injects via the same module). */
+ * injects via the same module).
+ *
+ * M6b: the `state` field defaults
+ * to `EMPTY_TAB_STATE`. Tests and
+ * the v3 → v4 settings import
+ * migration pass a `state`
+ * argument to construct a tab
+ * with pre-populated per-tab
+ * state. The signature stays
+ * backward-compatible: any
+ * caller that passes 1, 2, or 3
+ * arguments gets the previous
+ * behaviour plus the empty
+ * state.
+ */
 export function createWorkspaceTab(
   path: string,
   id: string = crypto.randomUUID(),
   addedAt: number = Date.now(),
+  state: WorkspaceTabState = EMPTY_TAB_STATE,
 ): WorkspaceTab {
-  return { id, path, addedAt };
+  return { id, path, addedAt, state };
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -347,13 +485,30 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
     // Validate the v2 shape. The
     // tabs are an array of objects
-    // with `{id, path, addedAt}` —
-    // any row that doesn't match
-    // the shape is dropped, the
-    // rest are kept (a single
-    // corrupt row from a future
-    // version's bug doesn't wipe
-    // the whole tab list).
+    // with `{id, path, addedAt,
+    // state}` — any row that
+    // doesn't match the shape is
+    // dropped, the rest are kept
+    // (a single corrupt row from a
+    // future version's bug doesn't
+    // wipe the whole tab list).
+    //
+    // M6b: the `state` field is
+    // M6b-only. A pre-M6b tab (no
+    // `state` field) is valid —
+    // we synthesise an empty
+    // `WorkspaceTabState` for it
+    // (a "fresh tab" view, no
+    // per-tab memory). A
+    // partial-`state` tab (some
+    // fields missing) gets the
+    // missing fields filled in
+    // with the empty-state
+    // defaults — defensive against
+    // a future version that
+    // added a new field and an
+    // older install's persisted
+    // state is missing it.
     let workspaces: WorkspaceTab[] = [];
     if (Array.isArray(workspacesRaw)) {
       for (const w of workspacesRaw) {
@@ -364,7 +519,40 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
           typeof (w as WorkspaceTab).path === 'string' &&
           typeof (w as WorkspaceTab).addedAt === 'number'
         ) {
-          workspaces.push(w as WorkspaceTab);
+          // M6b: validate / synthesise
+          // the per-tab `state` field.
+          const tab = w as WorkspaceTab;
+          const rawState = (w as { state?: unknown }).state;
+          const state: WorkspaceTabState =
+            rawState && typeof rawState === 'object'
+              ? {
+                  expandedDirs: Array.isArray(
+                    (rawState as WorkspaceTabState).expandedDirs,
+                  )
+                    ? (rawState as WorkspaceTabState).expandedDirs.filter(
+                        (d): d is string => typeof d === 'string',
+                      )
+                    : [],
+                  selectedPath:
+                    typeof (rawState as WorkspaceTabState).selectedPath ===
+                      'string'
+                      ? (rawState as WorkspaceTabState).selectedPath
+                      : null,
+                  openEditorTabPaths: Array.isArray(
+                    (rawState as WorkspaceTabState).openEditorTabPaths,
+                  )
+                    ? (rawState as WorkspaceTabState).openEditorTabPaths.filter(
+                        (p): p is string => typeof p === 'string',
+                      )
+                    : [],
+                  activeEditorTabPath:
+                    typeof (rawState as WorkspaceTabState).activeEditorTabPath ===
+                      'string'
+                      ? (rawState as WorkspaceTabState).activeEditorTabPath
+                      : null,
+                }
+              : { ...EMPTY_TAB_STATE };
+          workspaces.push({ ...tab, state });
         }
       }
     }
@@ -602,6 +790,61 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     writeJson(STORAGE_KEY_ACTIVE_ID_V2, tabId);
   },
 
+  setTabState: (tabId, partial) => {
+    const state = get();
+    const idx = state.workspaces.findIndex((w) => w.id === tabId);
+    if (idx === -1) return; // unknown tab — no-op
+    const prev = state.workspaces[idx];
+    const nextState: WorkspaceTabState = { ...prev.state, ...partial };
+    // No-op short-circuit: if
+    // the merged state is
+    // structurally identical
+    // to the previous state,
+    // skip the set / write.
+    // This keeps the
+    // mirror-back cheap when
+    // the live store fires
+    // `set` for a no-op
+    // (e.g. toggling a dir
+    // that was already
+    // expanded).
+    if (
+      nextState.expandedDirs === prev.state.expandedDirs &&
+      nextState.selectedPath === prev.state.selectedPath &&
+      nextState.openEditorTabPaths === prev.state.openEditorTabPaths &&
+      nextState.activeEditorTabPath === prev.state.activeEditorTabPath
+    ) {
+      return;
+    }
+    const nextWorkspaces = state.workspaces.slice();
+    nextWorkspaces[idx] = { ...prev, state: nextState };
+    set({ workspaces: nextWorkspaces });
+    writeJson(STORAGE_KEY_WORKSPACES_V2, nextWorkspaces);
+  },
+
+  replaceTabState: (tabId, state) => {
+    const ws = get().workspaces;
+    const idx = ws.findIndex((w) => w.id === tabId);
+    if (idx === -1) return; // unknown tab — no-op
+    const prev = ws[idx];
+    // No-op short-circuit: if
+    // the replacement is
+    // structurally identical,
+    // skip.
+    if (
+      state.expandedDirs === prev.state.expandedDirs &&
+      state.selectedPath === prev.state.selectedPath &&
+      state.openEditorTabPaths === prev.state.openEditorTabPaths &&
+      state.activeEditorTabPath === prev.state.activeEditorTabPath
+    ) {
+      return;
+    }
+    const nextWorkspaces = ws.slice();
+    nextWorkspaces[idx] = { ...prev, state };
+    set({ workspaces: nextWorkspaces });
+    writeJson(STORAGE_KEY_WORKSPACES_V2, nextWorkspaces);
+  },
+
   setStatus: (status) => set({ status }),
 
   clearRecents: () => {
@@ -699,7 +942,48 @@ export const workspaceSelectors = {
   currentPath: useActivePath,
   recents: (s: WorkspaceState) => s.recents,
   status: (s: WorkspaceState) => s.status,
+  /**
+   * M6b: the active tab's
+   * `state` field, or
+   * `EMPTY_TAB_STATE` if no
+   * tab is active. Used by
+   * the file tree / editor
+   * hooks to push the
+   * per-tab state into the
+   * live stores on tab
+   * switch.
+   */
+  activeTabState: (s: WorkspaceState): WorkspaceTabState => {
+    if (!s.activeId) return EMPTY_TAB_STATE;
+    const tab = s.workspaces.find((w) => w.id === s.activeId);
+    return tab?.state ?? EMPTY_TAB_STATE;
+  },
 };
+
+/**
+ * M6b: derive the active tab's
+ * `state` from the store. The
+ * file tree and editor tabs
+ * hooks call this on tab
+ * switch to push the new
+ * tab's per-tab state into
+ * the live stores.
+ *
+ * Returns `EMPTY_TAB_STATE`
+ * if no tab is active.
+ * Exported as a regular
+ * function so non-React code
+ * (tests, the settings
+ * import path) can call it
+ * directly.
+ */
+export function useActiveTabState(
+  state: Pick<WorkspaceState, 'workspaces' | 'activeId'>,
+): WorkspaceTabState {
+  if (!state.activeId) return EMPTY_TAB_STATE;
+  const tab = state.workspaces.find((w) => w.id === state.activeId);
+  return tab?.state ?? EMPTY_TAB_STATE;
+}
 
 /** Pure helpers exported for tests + the Welcome screen's
  *  "Remove from recents" UI. The storage keys are re-exported

@@ -1,7 +1,7 @@
 /**
  * PrivacyDataCard — Settings "Privacy & data" section
  * with the S2 export/import buttons, now
- * S3-wired.
+ * S3-wired and M6b-upgraded to v4.
  *
  * Phase S2. This is the S2 counterpart to the
  * 5b v1 `ToolSettingsBackupCard`. The difference:
@@ -13,50 +13,59 @@
  *     lives in a "Privacy & data" section at
  *     the bottom of Settings.
  *
- * Phase S3 adds the **transactional apply** and
- * the **import preview**:
+ * Phase S3 added the **transactional apply**
+ * (`applyLipiStateV3`, snapshot all three
+ * stores → apply → restore-on-failure) and
+ * the **import preview** (parse → preview →
+ * confirm → apply).
  *
- *   - The apply is now `applyLipiStateV3`
- *     (snapshot all three stores → apply →
- *     restore-on-failure), per Decision #63.
- *     The v2 partial-on-error apply is
- *     preserved on disk as a documented
- *     fallback; this card is the v3 default.
+ * M6b (June 2026) upgrades the file format
+ * to v4 (the multi-workspace-tabs shape):
+ * the `workspace` payload is now an array
+ * of `WorkspaceTab` objects plus an
+ * `activeId`, and each tab carries its own
+ * per-tab `state` (file tree expansion /
+ * selection / open editor tabs / active
+ * editor tab). The v4 apply is also
+ * transactional (same S3 design), AND it
+ * auto-detects v3 files and runs an
+ * in-memory v3 → v4 migration. So a v3
+ * import is transparent to the user — the
+ * UI surfaces a "this is a v3 file" notice
+ * and the rest of the flow is the same.
  *
- *   - The import flow is now:
- *       parse → preview → confirm → apply
- *     The preview shows the user what will
- *     change BEFORE they commit. "No changes"
- *     is a valid result (the file is identical
- *     to the current state; the Apply button
- *     is disabled).
- *
- * The privacy scope (no keys, no audit log, no
- * live state) is documented in
- * `LIPI_STATE_V2_PRIVACY_STATEMENT` (a single
- * multi-line string) and rendered in the card
- * above the export/import buttons. The user sees
+ * The privacy scope (no keys, no audit log,
+ * no live state) is documented in
+ * `LIPI_STATE_V2_PRIVACY_STATEMENT` (a
+ * single multi-line string, re-used by v4)
+ * and rendered in the card above the
+ * export/import buttons. The user sees
  * exactly what's in the file *before* they
  * click Export.
  */
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 
 import { Button } from '@/shared/components/Button';
-import { applyLipiStateV3 } from '@/shared/settingsIOv3.apply';
-import { computeLipiStateImportPreview } from '@/shared/settingsIOv3.preview';
+import { applyLipiStateV4 } from '@/shared/settingsIOv4.apply';
 import {
-  buildLipiStateV2,
-  LIPI_STATE_V2_PRIVACY_STATEMENT,
-  parseLipiStateV2,
-  serialiseLipiStateV2,
-  suggestLipiStateV2Filename,
-  type LipiStateV2Data,
-  type LipiStateV2ParseError,
-} from '@/shared/settingsIOv2';
+  computeLipiStateV4ImportPreview,
+  previewDiffLabelV4,
+} from '@/shared/settingsIOv4.preview';
+import {
+  buildLipiStateV4,
+  LIPI_STATE_V4_FORMAT,
+  LIPI_STATE_V4_VERSION,
+  parseLipiStateV4,
+  serialiseLipiStateV4,
+  suggestLipiStateV4Filename,
+  type LipiStateV4Data,
+  type LipiStateV4ParseError,
+} from '@/shared/settingsIOv4';
+import { LIPI_STATE_V2_PRIVACY_STATEMENT } from '@/shared/settingsIOv2';
 
 import { useToolSettingsStore } from '@/shared/state/toolSettingsStore';
 import { useVoicePreferencesStore } from '@/shared/state/voicePreferencesStore';
-import { useActivePath, useWorkspaceStore } from '@/shared/state/workspaceStore';
+import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 
 import styles from './PrivacyDataCard.module.css';
 
@@ -66,7 +75,7 @@ import styles from './PrivacyDataCard.module.css';
  *  not duplicated across the two error paths:
  *  the in-page import error and a future
  *  "import via deep-link" path). */
-export function parseErrorMessage(err: LipiStateV2ParseError): string {
+export function parseErrorMessage(err: LipiStateV4ParseError): string {
   switch (err.kind) {
     case 'not-json':
       return `Not valid JSON: ${err.message.replace(/^Not valid JSON: /, '')}`;
@@ -87,56 +96,7 @@ export function privacyCardLede(): string {
   return 'Back up your Lipi state to a JSON file you can keep as a backup or copy to another machine. Importing overwrites your current state.';
 }
 
-/** Pure: a human-friendly line for a single
- *  preview diff row. Used by both the UI
- *  and the tests (so the wording is one
- *  place). */
-export function previewDiffLabel(diff: {
-  path: string;
-  before: unknown;
-  after: unknown;
-}): string {
-  switch (diff.path) {
-    case 'workspace.currentPath':
-      return `Workspace path: ${stringifyValue(diff.before)} → ${stringifyValue(diff.after)}`;
-    case 'workspace.recents': {
-      const before = diff.before as { added: string[]; removed: string[] };
-      const after = diff.after as { added: string[]; removed: string[] };
-      const addedCount = after.added.length;
-      const removedCount = before.removed.length;
-      const parts: string[] = ['Recents list:'];
-      if (addedCount > 0) parts.push(`  +${addedCount} new`);
-      if (removedCount > 0) parts.push(`  -${removedCount} removed`);
-      return parts.join('\n');
-    }
-    case 'voicePreferences.provider':
-      return `Voice provider: ${diff.before} → ${diff.after}`;
-    case 'toolSettings.disabledToolNames': {
-      const before = diff.before as { added: string[]; removed: string[] };
-      const after = diff.after as { added: string[]; removed: string[] };
-      const parts: string[] = ['Disabled tools:'];
-      for (const t of after.added) parts.push(`  + ${t}`);
-      for (const t of before.removed) parts.push(`  - ${t}`);
-      return parts.join('\n');
-    }
-    default: {
-      if (diff.path.startsWith('toolSettings.confirmationMode.')) {
-        const tool = diff.path.slice('toolSettings.confirmationMode.'.length);
-        return `Tool "${tool}" confirmation: ${stringifyValue(diff.before)} → ${stringifyValue(diff.after)}`;
-      }
-      return `${diff.path}: ${stringifyValue(diff.before)} → ${stringifyValue(diff.after)}`;
-    }
-  }
-}
-
-function stringifyValue(v: unknown): string {
-  if (v === null) return '(none)';
-  if (v === undefined) return '(missing)';
-  if (typeof v === 'string') return v;
-  return JSON.stringify(v);
-}
-
-/** Build the v2 payload from the live stores.
+/** Build the v4 payload from the live stores.
  *  Lives as a function (not inlined in the
  *  onExport callback) so the test can pin the
  *  shape: any new persisted field added to a
@@ -144,21 +104,49 @@ function stringifyValue(v: unknown): string {
  *  the omission is caught by the diff in the
  *  test snapshot.
  *
- *  **Cloning**: the `recents` array, the
- *  `disabledToolNames` array, and the
- *  `confirmationMode` record are all shallow-
- *  cloned. The serialised JSON is the export
- *  contract; a future caller that mutates the
- *  returned payload (e.g. redacting a path)
- *  must NOT accidentally mutate the live
- *  store. Pinned by the test in
- *  `PrivacyDataCard.test.ts`. */
-export function snapshotStoresForExport(): LipiStateV2Data {
+ *  **Cloning**: every array and record
+ *  (`workspaces[]`, `recents`,
+ *  `disabledToolNames`,
+ *  `confirmationMode`, every tab's
+ *  `state.expandedDirs` /
+ *  `state.openEditorTabPaths`) is
+ *  shallow-cloned. The serialised JSON
+ *  is the export contract; a future caller
+ *  that mutates the returned payload
+ *  (e.g. redacting a path) must NOT
+ *  accidentally mutate the live store.
+ *  Pinned by the test in
+ *  `PrivacyDataCard.test.ts`.
+ *
+ *  **M6b**: the `workspace` payload is
+ *  now an array of `WorkspaceTab`
+ *  objects plus an `activeId` (the v4
+ *  shape). Each tab's `state` is
+ *  included verbatim (file tree
+ *  expansion / selection / open editor
+ *  tabs / active editor tab). The
+ *  pre-M6b `currentPath` field is
+ *  gone. */
+export function snapshotStoresForExport(): LipiStateV4Data {
   const ws = useWorkspaceStore.getState();
   const vp = useVoicePreferencesStore.getState();
   const ts = useToolSettingsStore.getState();
   return {
-    workspace: { currentPath: useActivePath(ws), recents: [...ws.recents] },
+    workspace: {
+      workspaces: ws.workspaces.map((t) => ({
+        id: t.id,
+        path: t.path,
+        addedAt: t.addedAt,
+        state: {
+          expandedDirs: [...t.state.expandedDirs],
+          selectedPath: t.state.selectedPath,
+          openEditorTabPaths: [...t.state.openEditorTabPaths],
+          activeEditorTabPath: t.state.activeEditorTabPath,
+        },
+      })),
+      activeId: ws.activeId,
+      recents: [...ws.recents],
+    },
     voicePreferences: { provider: vp.provider },
     toolSettings: {
       disabledToolNames: [...ts.disabledToolNames],
@@ -179,9 +167,16 @@ export function PrivacyDataCard() {
   // failed to parse). When set,
   // the card renders the preview
   // block above the action row.
+  // M6b: the `sourceFormat` field
+  // tells the UI whether the
+  // file was a native v4 (no
+  // banner) or a v3 migrated to
+  // v4 ("this is a v3 file…
+  // importing as v4" banner).
   const [pendingImport, setPendingImport] = useState<{
-    parsed: LipiStateV2Data;
-    preview: ReturnType<typeof computeLipiStateImportPreview>;
+    parsed: LipiStateV4Data;
+    preview: ReturnType<typeof computeLipiStateV4ImportPreview>;
+    sourceFormat: 'v3' | 'v4';
   } | null>(null);
 
   useEffect(() => {
@@ -207,13 +202,13 @@ export function PrivacyDataCard() {
     setImportError(null);
     setImportNotice(null);
     setPendingImport(null);
-    const file = buildLipiStateV2(snapshotStoresForExport());
-    const json = serialiseLipiStateV2(file);
+    const file = buildLipiStateV4(snapshotStoresForExport());
+    const json = serialiseLipiStateV4(file);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = suggestLipiStateV2Filename();
+    a.download = suggestLipiStateV4Filename();
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -238,7 +233,7 @@ export function PrivacyDataCard() {
     };
     reader.onload = () => {
       const text = String(reader.result ?? '');
-      const parsed = parseLipiStateV2(text);
+      const parsed = parseLipiStateV4(text);
       if (!parsed.ok) {
         setImportError(parseErrorMessage(parsed.error));
         return;
@@ -254,11 +249,15 @@ export function PrivacyDataCard() {
       // destructive; this is
       // the right time to
       // surface the diff.
-      const preview = computeLipiStateImportPreview(
+      const preview = computeLipiStateV4ImportPreview(
         snapshotStoresForExport(),
         parsed.data,
       );
-      setPendingImport({ parsed: parsed.data, preview });
+      setPendingImport({
+        parsed: parsed.data,
+        preview,
+        sourceFormat: parsed.sourceFormat,
+      });
     };
     reader.readAsText(file);
   }, []);
@@ -266,7 +265,7 @@ export function PrivacyDataCard() {
   const onConfirmImport = useCallback(() => {
     if (pendingImport === null) return;
     setImportError(null);
-    const applied = applyLipiStateV3(pendingImport.parsed);
+    const applied = applyLipiStateV4(pendingImport.parsed);
     setPendingImport(null);
     if (!applied.ok) {
       setImportError(
@@ -289,6 +288,10 @@ export function PrivacyDataCard() {
       <pre className={styles.privacyStatement}>
         {LIPI_STATE_V2_PRIVACY_STATEMENT}
       </pre>
+      <p className={styles.formatNote}>
+        Files use the {LIPI_STATE_V4_FORMAT} v{LIPI_STATE_V4_VERSION} format
+        (multi-workspace tabs + per-tab state).
+      </p>
       <div className={styles.actions}>
         <Button type="button" onClick={onExport}>
           Export Lipi state…
@@ -317,6 +320,17 @@ export function PrivacyDataCard() {
               ? 'No changes'
               : `${pendingImport.preview.changeCount} change${pendingImport.preview.changeCount === 1 ? '' : 's'} will be applied:`}
           </h4>
+          {pendingImport.sourceFormat === 'v3' && (
+            <p
+              className={styles.migrationNotice}
+              data-testid="lipi-state-migration-notice"
+            >
+              This is a v3 file. It will be imported as v4 — the
+              single <code>currentPath</code> becomes one tab with no
+              per-tab state (no file tree expansion, no open editor
+              tabs). After importing, re-export to save a v4 file.
+            </p>
+          )}
           {!pendingImport.preview.isNoOp && (
             <ul className={styles.previewList}>
               {pendingImport.preview.diffs.map((d) => (
@@ -326,7 +340,7 @@ export function PrivacyDataCard() {
                   data-path={d.path}
                 >
                   <pre className={styles.previewItemBody}>
-                    {previewDiffLabel(d)}
+                    {previewDiffLabelV4(d)}
                   </pre>
                 </li>
               ))}

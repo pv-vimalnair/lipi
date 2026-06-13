@@ -45,6 +45,49 @@
   word-break: break-word;
 }
 
+/* M6b: a one-line note about
+ * the file format version.
+ * Surfaces the v4 magic + version
+ * so the user knows the shape
+ * of the file they're about to
+ * export / import. */
+.formatNote {
+  margin: 0 0 var(--space-2, 8px);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+/* M6b: a banner that appears
+ * in the import preview when
+ * the user picked a v3 file
+ * and we're migrating it to
+ * v4 in memory. The banner
+ * explains the v3 → v4
+ * transformation (the
+ * `currentPath` becomes one
+ * tab with no per-tab state)
+ * and suggests re-exporting
+ * after the import. */
+.migrationNotice {
+  margin: 0 0 var(--space-2, 8px);
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  font-size: var(--font-size-sm, 12px);
+  line-height: 1.5;
+  color: var(--color-text);
+  background-color: var(--color-bg-elevated, #1a1a1a);
+  border-left: 2px solid var(--color-warning-strong, #f0c674);
+  border-radius: 0 4px 4px 0;
+}
+
+.migrationNotice code {
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  background-color: var(--color-bg-sunken, #161616);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 .actions {
   display: flex;
   gap: var(--space-2, 8px);

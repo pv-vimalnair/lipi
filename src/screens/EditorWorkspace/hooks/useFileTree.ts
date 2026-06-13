@@ -222,6 +222,15 @@ export function useFileTree(): UseFileTree {
   const toggleExpanded = useFileTreeStore((s) => s.toggleExpanded);
   const selectPath = useFileTreeStore((s) => s.select);
   const reset = useFileTreeStore((s) => s.reset);
+  // M6b: bulk push of the
+  // active tab's
+  // `expandedDirs` /
+  // `selectedPath` into the
+  // live file tree store on
+  // tab switch.
+  const setExpandedAndSelected = useFileTreeStore(
+    (s) => s.setExpandedAndSelected,
+  );
 
   const loadDir = useCallback(
     async (dirPath: string) => {
@@ -270,6 +279,32 @@ export function useFileTree(): UseFileTree {
     async (dirPath: string) => {
       const wasExpanded = useFileTreeStore.getState().expanded.has(dirPath);
       toggleExpanded(dirPath);
+      // M6b: mirror the new
+      // expanded-set back to
+      // the active tab's
+      // `state.expandedDirs`.
+      // Done after
+      // `toggleExpanded` so
+      // the live store has the
+      // post-toggle state.
+      // The mirror uses
+      // `setTabState` (not
+      // `replaceTabState`)
+      // because we only want
+      // to touch the
+      // `expandedDirs` field
+      // and leave
+      // `selectedPath` /
+      // `openEditorTabPaths` /
+      // `activeEditorTabPath`
+      // alone.
+      const next = useFileTreeStore.getState().expanded;
+      const activeId = useWorkspaceStore.getState().activeId;
+      if (activeId) {
+        useWorkspaceStore
+          .getState()
+          .setTabState(activeId, { expandedDirs: [...next].sort() });
+      }
       if (!wasExpanded) {
         await ensureLoaded(dirPath);
       }
@@ -290,6 +325,24 @@ export function useFileTree(): UseFileTree {
       // owns the wiring to the editor (open the file) — keeping
       // this hook decoupled from the editor per Rule 6.
       selectPath(path);
+      // M6b: mirror the new
+      // selection back to the
+      // active tab's
+      // `state.selectedPath`.
+      // (Note: `path` is the
+      // new value, not the
+      // post-`selectPath` read;
+      // the live store's
+      // `select(path)` is a
+      // simple set, so
+      // `path` and the live
+      // value are the same.)
+      const activeId = useWorkspaceStore.getState().activeId;
+      if (activeId) {
+        useWorkspaceStore
+          .getState()
+          .setTabState(activeId, { selectedPath: path });
+      }
     },
     [selectPath],
   );
@@ -337,16 +390,35 @@ export function useFileTree(): UseFileTree {
   // the user switches tabs (or
   // opens a new one), the file
   // tree re-roots to the new
-  // active path. The file tree
-  // is "shared" in M6a — each
-  // tab uses the same file tree
-  // instance; per-tab file tree
-  // state (expanded dirs, etc.)
-  // is M6b. For M6a the tree
-  // re-loads the new root and
-  // resets its expansion /
-  // selection.
+  // active path.
+  //
+  // M6b: also push the new
+  // active tab's
+  // `state.expandedDirs` and
+  // `state.selectedPath` into
+  // the live file tree store.
+  // The `entriesByDir` cache is
+  // NOT per-tab (it's per-path,
+  // which is effectively
+  // per-tab in practice but
+  // stays across tab switches
+  // — a re-visit to a
+  // previously-loaded path is
+  // a cache hit, not a
+  // re-fetch).
   useEffect(() => {
+    const applyActiveTabState = () => {
+      const state = useWorkspaceStore.getState();
+      const activeId = state.activeId;
+      if (!activeId) return;
+      const tab = state.workspaces.find((w) => w.id === activeId);
+      if (!tab) return;
+      setExpandedAndSelected(
+        new Set(tab.state.expandedDirs),
+        tab.state.selectedPath,
+      );
+    };
+
     const unsubscribe = useWorkspaceStore.subscribe((state, prev) => {
       const next = useActivePath(state);
       const prevPath = useActivePath(prev);
@@ -382,6 +454,29 @@ export function useFileTree(): UseFileTree {
         // returns.
         if (next) {
           setStatus({ kind: 'loading', rootPath: next });
+          // M6b: push the
+          // new tab's
+          // per-tab
+          // state into
+          // the live
+          // file tree
+          // before the
+          // entries
+          // load. The
+          // new state
+          // is the
+          // source of
+          // truth for
+          // expansion
+          // and
+          // selection;
+          // the
+          // entriesByDir
+          // cache
+          // stays
+          // (it's
+          // per-path).
+          applyActiveTabState();
           void loadDir(next).then(() => {
             // Only flip
             // to
@@ -418,7 +513,7 @@ export function useFileTree(): UseFileTree {
       }
     });
     return unsubscribe;
-  }, [loadDir, reset, setRoot, setStatus]);
+  }, [loadDir, reset, setRoot, setStatus, setExpandedAndSelected]);
 
   return {
     openFolder,

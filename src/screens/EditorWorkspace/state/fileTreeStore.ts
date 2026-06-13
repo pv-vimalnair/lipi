@@ -46,6 +46,28 @@ interface FileTreeState {
   select: (path: string | null) => void;
   reset: () => void;
   /**
+   * M6b: replace the live
+   * `expanded` and
+   * `selectedPath` in one
+   * shot. The tab-switch
+   * orchestrator in
+   * `useFileTree` calls this
+   * with the new active
+   * tab's persisted state
+   * (`state.expandedDirs` →
+   * `Set<string>`,
+   * `state.selectedPath`).
+   * Skips the `entriesByDir`
+   * cache reset (the cache
+   * is per-path, not
+   * per-tab, and is reused
+   * across tab switches).
+   */
+  setExpandedAndSelected: (
+    expanded: Set<string>,
+    selectedPath: string | null,
+  ) => void;
+  /**
    * Drop the cached entries for a directory.
    * The watcher uses this to clear stale
    * entries on `Remove` events so the next
@@ -91,6 +113,8 @@ export const useFileTreeStore = create<FileTreeState>((set) => ({
     }),
   select: (path) => set({ selectedPath: path }),
   reset: () => set({ ...initial, expanded: new Set() }),
+  setExpandedAndSelected: (expanded, selectedPath) =>
+    set({ expanded, selectedPath }),
   dropEntries: (dirPath) =>
     set((s) => {
       // We rebuild the entriesByDir without

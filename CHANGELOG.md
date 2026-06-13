@@ -3067,6 +3067,397 @@ existed in 5a).
   interactive rows are visually
   distinguishable at a glance.
 
+### Added (K — onboarding tour)
+
+A 6-step in-app tour that
+walks the user through the
+four panes the first time
+they open a workspace.
+Dismissable, restorable from
+the command palette, and
+fully keyboard-navigable.
+
+**Store** (`src/shared/state/tourStore.ts`):
+- New Zustand store with
+  `hydrated`, `dismissed`, and
+  `currentStep` fields.
+- Persists `lipi:tour:dismissed:v1`
+  to `localStorage`. The step
+  cursor is NOT persisted —
+  the tour is a per-session
+  experience; a returning
+  user either sees it (first
+  launch) or doesn't
+  (subsequent launches).
+- `start()` clears the
+  dismissed flag and
+  sets `currentStep` to 0.
+  `next()` / `prev()` advance
+  the cursor (pure +1 / -1).
+  `finish()` persists
+  `dismissed: true`.
+- `restore()` on a thrown
+  write is swallowed with a
+  DEV-mode console.warn
+  (the snapshot primitive
+  itself logs the failure;
+  the store just doesn't
+  crash the user mid-import).
+- 25 store tests covering
+  hydrate (incl. private-mode
+  fail-closed), start / next /
+  prev / finish, the pure
+  `_computeNextStep` /
+  `_computePrevStep` helpers,
+  and a full lifecycle
+  integration.
+
+**Step list**
+(`src/shared/components/OnboardingTour/tourSteps.ts`):
+- 6 steps: welcome (centered)
+  → fileTree (anchored right)
+  → sidePanel (anchored left)
+  → aiVoice (anchored top)
+  → commandPalette (centered)
+  → outro (centered).
+- The `commandPalette` step
+  is centered (not anchored)
+  because the palette is only
+  on screen when open, and
+  the editor's UI has no
+  single natural anchor for
+  "where the palette lives".
+  Centering keeps the callout
+  visible without searching
+  for a non-existent target.
+- A pure `computeTourShouldAutoStart`
+  gate — the auto-start
+  effect calls it once both
+  the tour store and the
+  workspace store have
+  hydrated. The gate returns
+  `true` only when the user
+  has a workspace open AND
+  hasn't dismissed the tour
+  on a previous launch.
+- 15 step-list tests pinning
+  the shape (id uniqueness,
+  non-empty copy, title/body
+  length caps, every anchored
+  step has a target, at
+  least one centered step).
+
+**Placement math**
+(`src/shared/components/OnboardingTour/placement.ts`):
+- Pure `computeAnchoredLayout`
+  places a callout next to
+  a target rect, with auto-
+  flip to the opposite side
+  if the requested side
+  would clip the viewport.
+  Falls back to centered if
+  BOTH sides would clip.
+- `computeCenterLayout` for
+  the `kind: 'center'`
+  steps.
+- The placement math
+  takes the viewport as an
+  explicit argument (no
+  `window.innerWidth`
+  fallback) so it's fully
+  testable in a JSDOM
+  environment.
+- 9 placement tests covering
+  each side, flip, fallback,
+  and viewport clamping.
+
+**Callout sizing**
+(`src/shared/components/OnboardingTour/calloutSize.ts`):
+- Pure helper: a step's
+  callout grows in height
+  with body length. Steps
+  under 100 chars get the
+  default 180px height;
+  100–160 chars get 220px;
+  over 160 chars get 260px.
+  Pinned by the body-length
+  invariant in
+  `tourSteps.test.ts`
+  (every body < 200 chars).
+
+**Component**
+(`src/shared/components/OnboardingTour/OnboardingTour.tsx`):
+- The overlay renders a
+  fixed-positioned backdrop
+  with a centered or
+  anchored callout. The
+  callout has Prev / Skip /
+  Next / Finish buttons (Prev
+  disabled on step 0; Next
+  becomes Finish on the last
+  step; "No changes" path is
+  not used here — the tour
+  is always at least 6
+  steps).
+- Keyboard nav: `←` prev,
+  `→` / `Enter` next /
+  finish, `Esc` dismiss.
+  Input / textarea /
+  contentEditable targets
+  swallow the keys so the
+  user typing in the command
+  palette's search box
+  doesn't accidentally
+  advance the tour.
+- A `useAnchorRect` hook
+  subscribes to the
+  target's
+  `getBoundingClientRect()`
+  on scroll / resize via
+  rAF. The callout follows
+  the anchor if the user
+  pans the editor mid-step.
+- Backdrop click dismisses
+  the tour (clicks inside
+  the callout are stopped
+  via `e.stopPropagation`).
+- The auto-start effect
+  runs once when both
+  stores have hydrated.
+  If the user closes the
+  workspace mid-tour, an
+  effect calls `finish()`
+  automatically so the
+  tour doesn't get stuck
+  on a step.
+
+**Command palette**
+(`src/shared/commands/commands.ts`):
+- New "Restart onboarding
+  tour" entry in the
+  **Help** group. Calls
+  `useTourStore.getState().start()`.
+
+**Anchors added** (4 sites):
+- `data-tour-target="welcome.openFolder"`
+  on the Welcome screen's
+  primary "Open Folder" button.
+- `data-tour-target="fileTree"`
+  on the FileTreePane body
+  (a `<div>` wrapping the
+  existing tree render).
+- `data-tour-target="sidePanel"`
+  on the SidePanelPane root.
+- `data-tour-target="aiVoiceButton"`
+  on the AIPanel's
+  `voiceCluster` span
+  (the cluster that holds
+  the VoiceButton).
+
+**v1 limitations** (called
+out for follow-up):
+- The tour is desktop-only.
+  On mobile the file tree
+  / side panel are replaced
+  by the MobileShell tab
+  bar, so the anchored
+  steps wouldn't find
+  their targets. The
+  centered steps still
+  show; the anchored steps
+  fall back to center. A
+  future K iteration can
+  gate by viewport or
+  build a parallel mobile
+  step list.
+- No animations. The
+  callouts appear / disappear
+  instantly. A v2 polish
+  could add 120ms fades.
+  Skipped for v1 to keep
+  the tour snappy (a 6-step
+  tour with 720ms total
+  animation delay is a
+  noticeable cost for a
+  "5 seconds to get
+  oriented" feature).
+
+**Tests added**: 25 store +
+15 steps + 9 placement = **49
+new tests**.
+
+**Verify (all green):**
+- TSC: clean
+- Vitest: 56 files, 700
+  tests pass (was 651 before
+  the K phase, +5 files /
+  +49 tests).
+- Vite build: clean
+
+### Added (S3 — settings v3 transactional import + preview)
+
+The Privacy & data Settings
+card's import flow is now
+transactional: a snapshot
+of all three stores is taken
+before any write, and
+restored on failure. A
+field-level diff preview
+shows the user exactly
+what will change BEFORE
+they commit. Decision #63
+in HANDOFF §4 documents the
+S2 → S3 deferred follow-up
+shape; this phase delivers
+it.
+
+**Snapshot primitive**
+(`src/shared/storeSnapshot.ts`):
+- `createStoreSnapshot(read, write)`
+  — takes a `read()` and a
+  `write(value)` closure,
+  captures the read result
+  at call time, returns
+  `{ value, restore }`. The
+  `restore()` is tolerant of
+  a throwing `write` (logs
+  in DEV, continues; a
+  half-restored state is
+  worse than a logged
+  error).
+- `snapshotStores(s1, s2, s3)`
+  — convenience for the
+  S3 v3 apply's three-store
+  case.
+- `restoreSnapshots(snapshots)`
+  — restores in REVERSE
+  order. For `toolSettings`
+  whose apply pushes a 5a
+  undo entry, restoring in
+  reverse avoids a second
+  undo push on a
+  10-second-old import.
+- 10 tests covering the
+  primitive, the
+  3-tuple helper, and
+  the reverse-order
+  restore.
+
+**v3 apply**
+(`src/shared/settingsIOv3.apply.ts`):
+- `applyLipiStateV3(data)` —
+  snapshots all three
+  stores, applies the v2
+  payload, restores on
+  any step throwing. The
+  return shape is identical
+  to the v2
+  `ApplyLipiStateV2Result`
+  so the UI doesn't need
+  to change.
+- Differences from v2:
+  - Snapshots are taken
+    BEFORE any write
+    (v2 wrote sequentially
+    and accepted a partial
+    state on failure).
+  - On any step throwing,
+    the snapshots are
+    restored in reverse
+    order. The user's
+    local state is
+    guaranteed to end up
+    exactly as it was.
+  - The restore uses a
+    direct `setState` (not
+    `applyImportedSettings`)
+    for the `toolSettings`
+    half — a "no questions
+    asked, put the state
+    back" restore is not
+    undoable in turn.
+- The v2 `applyLipiStateV2`
+  is preserved on disk as
+  a documented fallback
+  (the import strategy is
+  a code-side decision, not
+  a file-shape version).
+- 6 tests covering the
+  success path, all three
+  failure modes (workspace,
+  voice-preferences,
+  tool-settings), and the
+  "snapshot is point-in-time,
+  post-snapshot store
+  mutations don't leak into
+  the restore" invariant.
+
+**Import preview**
+(`src/shared/settingsIOv3.preview.ts`):
+- `computeLipiStateImportPreview(current, incoming)`
+  returns `{ diffs, changeCount, isNoOp }`.
+  Diffs cover:
+  - `workspace.currentPath`
+    (string diff)
+  - `workspace.recents`
+    (added / removed
+    entries)
+  - `voicePreferences.provider`
+    (string diff)
+  - `toolSettings.disabledToolNames`
+    (added / removed
+    tools)
+  - `toolSettings.confirmationMode.<tool>`
+    (per-tool changes;
+    a tool that exists in
+    one but not the other
+    is surfaced as a
+    `null` diff).
+- 11 tests covering each
+  field, the no-op case,
+  and the changeCount
+  invariant.
+
+**PrivacyDataCard** (`src/screens/SettingsProvider/components/PrivacyDataCard.tsx`):
+- New import flow:
+  `parse → preview → confirm → apply`.
+  The v2 `window.confirm`
+  is replaced by an
+  in-card preview block.
+- "No changes" is a valid
+  result: the file is
+  identical to the
+  current state. The
+  preview shows a "No
+  changes" message and
+  the Apply button is
+  disabled (a no-op apply
+  is a wasted user
+  gesture).
+- A new `previewDiffLabel`
+  pure helper formats a
+  diff row for the UI
+  (workspace path arrow,
+  recents added / removed
+  counts, voice provider
+  arrow, per-tool
+  confirmation arrow).
+  8 new tests pin the
+  wording.
+
+**Tests added**: 10 snapshot
++ 6 v3 apply + 11 preview +
+8 previewDiffLabel = **35
+new tests**.
+
+**Verify (all green):**
+- TSC: clean
+- Vitest: 59 files, 735
+  tests pass (was 700
+  before the S3 phase,
+  +3 files / +35 tests).
+- Vite build: clean
+
 ### Verified
 
 - `npx tsc --noEmit` — clean

@@ -269,6 +269,12 @@ on mobile — cannot be retrofitted in Week 8.
 | 67 | FW's `fs_watch` is **idempotent** on the same path (returns the existing `WatchHandle`) and stores the `path: PathBuf` on `ActiveWatcher` for the lookup. | The alternative was "always create a new watcher, garbage-collect the old one" — but that races with the user clicking the same directory in quick succession (collapse + expand within 100 ms would leak a watcher). The `ActiveWatcher` lookup is a one-line `iter().find(|w| w.path == path)` and the cost is one extra `PathBuf` per watcher. The Rust unit test `fs_watch_returns_existing_handle_for_same_path` pins the contract. | 2026-06-12 |
 | 68 | WS uses a **hand-rolled grep** in Rust (no `ripgrep` sidecar, no `regex-automata` for v1). | The `regex` crate IS in the dependency graph transitively (via `gix`), so the v2 regex support is essentially free. For v1 the literal-substring scan is a 30-line loop that's been correctness-tested for binary files, large files, and case sensitivity. The 5 MB file-size cap and the 1 000-result cap are the two safety nets that prevent the scan from running away. | 2026-06-12 |
 | 69 | WS's `pendingReveal` is a **single-slot** request queue in `editorControllerStore`, not a multi-slot list. | The v1 UX is "click a result, jump to it" — there's no scenario where the user has multiple pending reveals in flight. A single-slot `pendingReveal: PendingReveal | null` is the simplest model that works; a multi-slot list would need a `consumeReveal(index)` API and a UI to "step through" reveals. The single-slot choice mirrors the chat nav store's `consumeJump()` pattern (Decision #40). | 2026-06-12 |
+| 70 | K's `useTourStore` is a **dumb step machine**; the `next()` action is a pure unconditional +1, and the overlay component owns the "is this the last step?" check. | The store doesn't import the step list. Adding a step is a one-entry change in `tourSteps.ts`; the store and the overlay pick it up automatically. The "last step → finish" branch lives in the overlay's `handleNext`, not in `store.next()` — the store's `next()` is a pure +1 that's safe in any context (programmatic advance, future "skip to step 3" command, etc.). | 2026-06-13 |
+| 71 | K's step cursor is **not persisted**; only the `dismissed` flag is. | The tour is a per-session orientation. A user who kills the app mid-tour restarts from step 0 next launch. Persisting the step would mean a user who dismissed for 5 minutes on step 3 of 6 comes back to step 3 — but the dismissed flag is set, so they wouldn't see anything. Persisting both is a contradiction. The current step + the dismissed flag are mutually exclusive in practice. | 2026-06-13 |
+| 72 | K's `commandPalette` step is **centered**, not anchored to a DOM node. | The palette is only on screen when the user opens it; there's no permanent "palette button" on the editor (the keyboard shortcut is the only entry). Anchoring to a non-existent node would fail the `useAnchorRect` lookup; the centered fallback would render the callout in the middle of the screen. Centering is the cleaner answer: the step's copy ("press Ctrl/Cmd+Shift+P") is self-contained, and a centered callout is the right visual for "here's how to summon this overlay." | 2026-06-13 |
+| 73 | S3's snapshot primitive **tolerates a throwing `write`** (logs in DEV, continues the restore loop). | The alternative — let the throw propagate — would leave the user in a half-restored state. The v3 apply restores in reverse order, so a failing earlier restore on a less-recent store is reported and the loop moves on; a propagated throw would skip the more-recent stores. The DEV-mode `console.warn` is the breadcrumb; a production user would see the import error ("applying it failed") but their state would be either fully restored or partially restored (with the partial path always being "the last-written store"). | 2026-06-13 |
+| 74 | S3's import flow is **`parse → preview → confirm → apply`**, not `parse → confirm → apply`. | The v2 `window.confirm` was a black box ("this will overwrite everything, OK?"). The v3 preview shows the diff: "Workspace path: A → B; Recents: +1 new, -1 removed; Voice provider: stub → wispr; Tool X confirmation: per_call → always_confirm." A user who picks the wrong file sees "0 changes" and the Apply button is disabled. A user who picks the right file sees the change list and clicks Apply with eyes open. The "no changes" path is a feature, not an edge case. | 2026-06-13 |
+| 75 | S3's `applyLipiStateV3` restore for `toolSettings` uses a **direct `setState`**, not `applyImportedSettings`. | The apply is the destructive surface (it pushes a 5a undo entry). The restore is a "no questions asked, put the state back" — it must NOT push another undo entry. A 10-second-old import that the user wants to abort shouldn't leave a "Click to undo: restore state" toast that's actually re-restoring 10 seconds too late. The `toolSettings` write closure in the snapshot is a raw `setState({disabledToolNames, confirmationMode})`. | 2026-06-13 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -304,16 +310,18 @@ a Windows quirk, not a Lipi issue.
 
 ## 6. How to continue (next session checklist)
 
-**Current phase: Workspace track — SHIPPED (File-tree mutations + File watcher + Workspace search).** This three-phase batch closes the "what is in my workspace, what changed on disk, and how do I find anything" loop. FTM adds right-click New / Rename / Delete in `FileTreePane` (Rust `fs_create_file` / `fs_delete_entry` / `fs_rename_entry` IPC, JS `useFileTree` pure helpers `createInTree` / `deleteInTree` / `renameInTree` for testability). FW adds a real-time `notify`-backed watcher that emits `fs://changed` (Rust `fs_watch` / `fs_unwatch` with 75 ms debounce, JS `useFileTreeWatcher` with 150 ms JS-side debounce + a `decideFsChangeAction` pure helper that filters the event stream). WS adds a `SearchPanel` side-tab (Rust hand-rolled grep with `.git` / `node_modules` / `dist` / `build` ignores, 5 MB file-size cap, 1 000 result cap, 4096-byte binary-probe; JS `SearchPanel` with debounced query + case-insensitive toggle + clickable result rows that set `pendingReveal` in `editorControllerStore` for Monaco to consume on mount). 651/651 vitest tests pass (+60 for the batch: 4 fs IPC + 6 fsWatcher IPC + 7 workspaceSearch IPC + 7 fs unit + 8 fs_watcher unit + 13 workspace_search unit + 7 useFileTree + 9 SearchPanel store/hook); 157/157 cargo tests pass (+11 for the batch). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (File-tree mutations)" / "Added (File watcher)" / "Added (Workspace search)" for the full feature lists; see HANDOFF §9.16 / §9.17 / §9.18 for the per-phase writeups.
+**Current phase: Onboarding tour + settings v3 transactional import — SHIPPED (K + S3).** This two-phase batch closes two long-standing follow-ups: a first-run product tour that walks the user through the four panes, and a transactional settings import (snapshot all three stores, apply, restore on any failure) with a field-level diff preview before the user commits. K adds `useTourStore` (Zustand, `lipi:tour:dismissed:v1` localStorage persistence), a declarative 6-step list in `tourSteps.ts` (welcome → fileTree → sidePanel → aiVoice → commandPalette → outro), pure placement math in `placement.ts` (anchored with auto-flip + centered fallback, viewport clamping, body-length-driven callout sizing), an `OnboardingTour` overlay component mounted at the AppRoot level (backdrop + coach-mark callout with arrow, Back / Skip / Next / Finish, ← / → / Enter / Esc keyboard nav with input-target suppression, `useAnchorRect` hook for scroll/resize tracking), and a new "Restart onboarding tour" command palette entry in the Help group. Four `data-tour-target` anchors (`welcome.openFolder`, `fileTree`, `sidePanel`, `aiVoiceButton`) are added across the Welcome / Editor / AIPanel surfaces. S3 adds a cross-store snapshot primitive (`createStoreSnapshot` / `snapshotStores` / `restoreSnapshots` — reverse-order restore, DEV-mode logged-and-continued on a failing write), a `applyLipiStateV3` that snapshots all three stores before any write and restores on failure (same `ApplyLipiStateV2Result` shape as v2, so the UI doesn't change), a `computeLipiStateImportPreview` field-level diff (workspace path / recents / voice provider / disabled tools / per-tool confirmation mode, with `null` for added/removed keys), and rewires `PrivacyDataCard`'s import flow from `parse → confirm → apply` to `parse → preview → confirm → apply` (the preview is a list of `previewDiffLabel` rows above the Apply / Cancel pair; "No changes" disables Apply). The v2 `applyLipiStateV2` partial-on-error apply is preserved on disk as a documented fallback. 735/735 vitest tests pass (+84 for the batch: 25 tourStore + 15 tourSteps + 9 placement + 10 storeSnapshot + 6 v3 apply + 11 v3 preview + 8 previewDiffLabel = 84 — the previous total of 651 + 84 = 735); 194/194 cargo tests pass (unchanged — both phases are frontend-only). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (K — onboarding tour)" / "Added (S3 — settings v3 transactional import + preview)" for the full feature lists; see HANDOFF §9.19 / §9.20 for the per-phase writeups; see Decisions #70–#73 for the architectural calls.
 
-(M2b is documented in detail in §9.4; M3 in §9.9. Their detailed "current phase" status lines from earlier sessions have been removed here in favour of the single live "current phase" line above; the CHANGELOG and §9 are the source of truth for what each shipped.)
+**Previous phase (this session):** Workspace track — SHIPPED (File-tree mutations + File watcher + Workspace search). This three-phase batch closes the "what is in my workspace, what changed on disk, and how do I find anything" loop. FTM adds right-click New / Rename / Delete in `FileTreePane` (Rust `fs_create_file` / `fs_delete_entry` / `fs_rename_entry` IPC, JS `useFileTree` pure helpers `createInTree` / `deleteInTree` / `renameInTree` for testability). FW adds a real-time `notify`-backed watcher that emits `fs://changed` (Rust `fs_watch` / `fs_unwatch` with 75 ms debounce, JS `useFileTreeWatcher` with 150 ms JS-side debounce + a `decideFsChangeAction` pure helper that filters the event stream). WS adds a `SearchPanel` side-tab (Rust hand-rolled grep with `.git` / `node_modules` / `dist` / `build` ignores, 5 MB file-size cap, 1 000 result cap, 4096-byte binary-probe; JS `SearchPanel` with debounced query + case-insensitive toggle + clickable result rows that set `pendingReveal` in `editorControllerStore` for Monaco to consume on mount). 651/651 vitest tests pass (+60 for the batch: 4 fs IPC + 6 fsWatcher IPC + 7 workspaceSearch IPC + 7 fs unit + 8 fs_watcher unit + 13 workspace_search unit + 7 useFileTree + 9 SearchPanel store/hook); 157/157 cargo tests pass (+11 for the batch). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (File-tree mutations)" / "Added (File watcher)" / "Added (Workspace search)" for the full feature lists; see HANDOFF §9.16 / §9.17 / §9.18 for the per-phase writeups.
 
-**Next:** With the workspace track shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
+(M2b is documented in detail in §9.4; M3 in §9.9; FTM/FW/WS in §9.16/§9.17/§9.18; K/S3 in §9.19/§9.20. The detailed "current phase" status lines from earlier sessions have been removed here in favour of the single live "current phase" line at the top; the CHANGELOG and §9 are the source of truth for what each shipped.)
+
+**Next:** With K + S3 shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
 - M3 follow-up — iOS Swift `SFSpeechRecognizer` and Android Kotlin `SpeechRecognizer` plugins. The `'nativeDictation'` factory stub exists; the actual Swift / Kotlin code awaits a future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+. The `useVoiceCapabilitiesStore` already returns `nativeDictation: true` on iOS / Android (set by `src-tauri/src/voice_platform.rs`), so the plugins drop in without JS changes.
-- K — Onboarding tours (post-first-run)
-- S3 — Settings v3 cross-store snapshot (a follow-up to S2's v2 replace-only import; the v1 cross-store rollback gap is documented in §9.15)
 - M6 — Multi-workspace tabs (open 2+ workspaces side by side in the same window)
 - Several mobile-build follow-ups — full Swift / Kotlin plugin implementation, mobile haptics wiring, App Store / Play Store submission readiness
+- Decision #66 polish — file-tree right-click context menu (the current `window.prompt` / `window.confirm` placeholders are documented as v1; an inline row-editor + styled confirm modal are a small follow-up)
+- Phase 5f follow-ups — "Jump to chat" / per-row "Revert allow_always" inline button / undo toast on clear log (each is a one-session JS-only change; the row+column is already wired by 5e for the "Jump to chat" half)
 
 **Previous phase (M2a):** Voice capture foundation complete. The pipeline is plumbed end-to-end with a pluggable STT provider:
 - `src/shared/state/voiceStore.ts` — five-state machine (`idle` / `requesting` / `recording` / `transcribing` / `error`) + `durationMs` + `transcript` + `lastError`. Two pure helpers (`mergeTranscript`, `formatDuration`).
@@ -2552,6 +2560,444 @@ vite build. All clean.
   fields (for the v2 path), but the
   `SearchPanel` UI doesn't expose them
   yet.
+
+---
+
+### 9.19 Onboarding tour (K) - SHIPPED (see CHANGELOG "Added (K - onboarding tour)")
+
+A first-run **product tour** that walks the
+user through the four panes of the editor.
+The tour is a 6-step overlay (welcome,
+fileTree, sidePanel, aiVoice,
+commandPalette, outro) that renders on
+top of the app for the user's first
+session after opening a workspace.
+
+**Store layer.** A new
+`useTourStore` (`src/shared/state/tourStore.ts`)
+is a Zustand store with three pieces of
+state and four actions:
+
+- `hydrated: boolean` - set by an explicit
+  `hydrate()` call in `AppRoot`'s mount
+  effect (mirrors `useWorkspaceStore` /
+  `useFirstRunStore`).
+- `dismissed: boolean` - persisted to
+  `localStorage` under the key
+  `lipi:tour:dismissed:v1`. A user who
+  hits Skip / Esc / "Finish" sets this to
+  `true`; the tour never auto-starts
+  again.
+- `currentStep: number` - in-memory only
+  (NOT persisted; see Decision #71).
+- Actions: `hydrate()`, `start()` (resets
+  to step 0 and clears `dismissed` for
+  the "Restart tour" command palette
+  entry), `next()` (pure +1,
+  unconditional), `prev()` (pure -1,
+  clamped to 0), `finish()` (sets
+  `dismissed: true`).
+
+The store is intentionally a **dumb step
+machine**; the step count is NOT in the
+store (see Decision #70). Adding a step
+to `tourSteps.ts` is a one-entry change
+and the overlay picks it up
+automatically.
+
+**Step list.** A pure-data array
+`TOUR_STEPS` in
+`src/shared/components/OnboardingTour/tourSteps.ts`
+defines the 6 steps. Each step has:
+
+- `id` - unique string
+- `title` - callout title (1-2 words)
+- `body` - callout body (1-3 sentences,
+  length-cap-checked in the test)
+- `placement: 'center'` for steps without
+  a permanent DOM anchor, OR
+  `{ anchor: 'data-tour-target-string',
+  side: 'top' | 'bottom' | 'left' | 'right' }`
+  for steps anchored to a specific UI
+  element
+
+The 4 anchored targets added to the app:
+
+- `welcome.openFolder` - the "Open
+  Folder" button on `Welcome.tsx` (step
+  1, the entry to opening a workspace)
+- `fileTree` - the wrapper `<div>` around
+  `TreeRoot` in `FileTreePane.tsx` (step
+  2, after the user has opened a
+  workspace)
+- `sidePanel` - the root `<div>` of
+  `SidePanelPane.tsx` (step 3, the Files
+  / AI / Search tab strip)
+- `aiVoiceButton` - the `<span>` wrapping
+  the `VoiceButton` in `AIPanel.tsx` (step
+  4, the mic in the AI composer)
+
+The `commandPalette` step (step 5) is
+centered because the palette has no
+permanent button on the editor - the
+keyboard shortcut IS the surface. A
+centered callout with the shortcut in
+the body ("Press Ctrl/Cmd+Shift+P") is
+the cleaner answer (see Decision #72).
+
+A pure helper
+`computeTourShouldAutoStart({ tourHydrated, tourDismissed, workspaceHydrated, currentPath })`
+returns `true` only when ALL of:
+
+- `tourHydrated === true` (the
+  `localStorage` read completed)
+- `tourDismissed === false` (the user
+  hasn't finished before)
+- `workspaceHydrated === true` (the
+  workspace store has finished its own
+  `localStorage` rehydration)
+- `currentPath` is a non-empty string
+  (the user has opened a workspace - the
+  tour is meaningless on the Welcome
+  screen)
+
+The 4-condition gate is the only thing
+that prevents the tour from auto-starting
+in surprising states (mid-hydration,
+already-dismissed, or still on Welcome).
+
+**Placement math.** Two pure helpers in
+`placement.ts`:
+
+- `computeAnchoredLayout({ rect, viewport, side, calloutSize, padding })` -
+  returns `{ x, y, side }`. Tries the
+  requested `side` first, flips to the
+  opposite side if the callout would clip
+  the viewport, and falls back to
+  centered if BOTH sides clip.
+- `computeCenterLayout({ viewport, calloutSize })` - returns `{ x, y,
+  side: 'center' }` (callout centered in
+  the viewport, used for both centered
+  steps and the "both sides clipped"
+  fallback).
+
+The `viewport` argument is passed by the
+caller (the overlay component reads
+`window.innerWidth` / `innerHeight` at
+call time) - the helpers do NOT touch
+the global `window`. This makes the
+helpers testable with arbitrary
+`Viewport` fixtures (the 9
+`placement.test.ts` cases use a 1024x768
+fixture and assert exact pixel
+positions).
+
+A third pure helper `computeCalloutSize(body: string)` returns
+`{ width, height }` from the default
+`CALLOUT_DEFAULT_WIDTH` (320px) and
+`CALLOUT_DEFAULT_HEIGHT` (180px) by
+checking the body length: `>100` chars
+bumps to 220px, `>160` chars bumps to
+260px. The longer the copy, the taller
+the callout - the title and 3-button
+nav row stay at the top and the body
+scrolls if needed.
+
+**Overlay component.** A new `OnboardingTour` component
+(`src/shared/components/OnboardingTour/OnboardingTour.tsx`)
+mounts at the `AppRoot` level (in
+`main.tsx`, sibling to the existing
+`AboutModal`). The component is a fixed
+backdrop with a positioned callout for
+the current step. It:
+
+- Renders a `position: fixed; inset: 0`
+  semi-transparent dark backdrop
+  (rgba(0, 0, 0, 0.5)) that fills the
+  viewport.
+- Renders the callout as a child of the
+  backdrop, with `position: absolute`
+  and the `left` / `top` from the
+  placement math.
+- Renders a CSS `::before` pseudo-element
+  arrow that adapts to `data-side` -
+  `top` shows a downward triangle at the
+  bottom-center, `bottom` shows an upward
+  triangle at the top-center, `left` and
+  `right` show horizontal triangles.
+  Centered callouts have no arrow.
+- Includes a Back / Skip / Next / Finish
+  row of buttons in the footer.
+- Handles keyboard nav: `Esc` (skip),
+  `ArrowLeft` (back), `ArrowRight` /
+  `Enter` (next). The keyboard listener
+  is `event.target`-aware: if the user is
+  typing in a `<textarea>` / `<input>` /
+  `[contenteditable]`, the arrows /
+  Enter are NOT intercepted (the user's
+  typing wins).
+- Dismisses on backdrop click (calls
+  `useTourStore.getState().finish()`).
+- Auto-finishes if the workspace is
+  closed mid-tour (a `useEffect` watches
+  `useWorkspaceStore.currentPath`; if it
+  goes from non-empty to empty, the tour
+  is finished - opening Welcome in the
+  middle of a tour is a confusing state).
+
+The `useAnchorRect(selector)` hook
+returns the live `getBoundingClientRect`
+of the `data-tour-target=...` element,
+updated on `scroll` / `resize` via a
+`requestAnimationFrame` throttle. The
+rect is `null` while the target is not
+in the DOM (e.g. the user is still on
+the Welcome screen and the
+`fileTree` step is active) - the overlay
+falls back to centered placement when
+the rect is null.
+
+**Command palette integration.** A new
+"Restart onboarding tour" command in
+the Help group (`src/shared/commands/commands.ts`)
+calls `useTourStore.getState().start()`.
+A user who dismissed the tour on day 1
+can re-run it from `Ctrl/Cmd+Shift+P` →
+"Restart onboarding tour" on day 30.
+
+**Verification.** tsc · vitest (59 new
+tests: 25 tourStore + 15 tourSteps + 9
+placement + 10 storeSnapshot - the
+latter is shared with S3) · vite build.
+All clean. 735/735 vitest tests pass
+total (+84 for the K + S3 batch).
+
+**Known limitations.**
+
+- **No analytics.** A v2 path could
+  record `tour_started` / `tour_step_X`
+  / `tour_dismissed` / `tour_completed`
+  events to a local log (no remote
+  shipping per Decision #17), useful
+  for "what step do users dismiss on?"
+  without compromising privacy.
+- **No "save and resume."** A user who
+  kills the app mid-tour restarts from
+  step 0 next launch. Persisting the
+  step would conflict with the dismissed
+  flag (Decision #71).
+- **No pointer highlighting.** A v2
+  polish could add a pulsing ring around
+  the anchor element. The current
+  backdrop + callout is functional but
+  doesn't point at the target visually
+  beyond the arrow (the user has to read
+  the callout copy to know what to look
+  at).
+
+---
+
+### 9.20 Settings v3 transactional import (S3) - SHIPPED (see CHANGELOG "Added (S3 - settings v3 transactional import + preview)")
+
+A **transactional settings import** that
+snapshots all three stores before any
+write, applies the new state, and
+restores the snapshots if any part of
+the apply fails. The import flow is
+rewired from `parse -> confirm -> apply`
+to `parse -> preview -> confirm -> apply`,
+adding a field-level diff preview that
+the user sees BEFORE clicking Apply.
+
+**Snapshot primitive.** A new
+`src/shared/storeSnapshot.ts` exports
+three helpers:
+
+- `createStoreSnapshot<T>({ read, write })` returns
+  `{ value: T, restore: () => void }`.
+  The `read` is called immediately to
+  capture the current state; the
+  `restore` is a closure that calls
+  `write(value)`.
+- `snapshotStores(s1, s2, s3)` returns
+  a 3-tuple of snapshots. The helper is
+  a one-liner that calls
+  `createStoreSnapshot` on each.
+- `restoreSnapshots([s1, s2, s3])` calls
+  `s1.restore()`, then `s2.restore()`,
+  then `s3.restore()` - reverse
+  application order.
+
+The `restore` closure wraps the `write`
+call in a `try-catch` (see Decision
+#73). If the store's `write` throws
+during restore, the error is logged in
+DEV mode and the loop continues to the
+next snapshot. A throw that propagated
+would leave the user in a
+half-restored state; the
+log-and-continue is the safe default.
+
+**Transactional apply.** A new
+`applyLipiStateV3(data, privacyConfirm?)`
+function in
+`src/shared/settingsIOv3.apply.ts`
+replaces the v2 `applyLipiStateV2` for
+the import path:
+
+1. Validate `data` is a v2 payload
+   (the magic string `"lipi-state"` is
+   the version marker; the payload
+   parser rejects v1's `"lipi-settings"`
+   string with a
+   `wrong-format` error).
+2. Snapshot all three stores:
+   `workspace`, `voicePreferences`,
+   `toolSettings`.
+3. Call the per-store apply functions
+   in sequence: `applyWorkspace(data.workspace)`,
+   `applyVoicePreferences(data.voicePreferences)`,
+   `applyToolSettings(data.toolSettings)`.
+4. If ANY of the three apply calls
+   throws, restore all three snapshots
+   (in reverse order) and re-throw the
+   original error.
+5. Return the same
+   `ApplyLipiStateV2Result` shape (the
+   v2 field structure is unchanged) so
+   the v2 `PrivacyDataCard` import UI
+   doesn't need to change beyond the
+   preview integration.
+
+The `applyToolSettings` step is the one
+that needs the snapshot-restored state
+to NOT push a 5a undo entry (Decision
+#75) - so the snapshot's `write` for
+`toolSettings` is a raw
+`setState({disabledToolNames, confirmationMode})`,
+not the `applyImportedSettings` helper
+that would push an undo entry.
+
+**Preview.** A new pure function
+`computeLipiStateImportPreview(current, incoming)` in
+`src/shared/settingsIOv3.preview.ts`
+returns a `LipiStateImportPreview` with
+field-level diffs for:
+
+- `workspace.currentPath` - `'A' -> 'B'`
+  string diff, or `null` if unchanged
+- `workspace.recents` - `{ added: string[],
+  removed: string[] }`, or `null` if
+  unchanged
+- `voicePreferences.provider` -
+  `'stub' -> 'wispr'` provider diff, or
+  `null` if unchanged
+- `toolSettings.disabledToolNames` -
+  `{ added: string[], removed: string[] }`,
+  or `null` if unchanged
+- `toolSettings.confirmationMode` - a
+  per-tool record of
+  `{ oldTool: ConfirmationMode, newTool: ConfirmationMode }`
+  for each tool whose mode changed, or
+  `null` if no tools changed
+
+The function is pure (no I/O, no
+side effects) and is the single source
+of truth for the diff. The 11
+`settingsIOv3.preview.test.ts` cases
+cover the empty / no-changes path, the
+single-field-change paths, and the
+multi-field-change paths.
+
+**UI integration.** The `PrivacyDataCard`
+import flow is rewired from
+`parse -> confirm -> apply` to
+`parse -> preview -> confirm -> apply`:
+
+1. The user picks a file (the file
+   picker is unchanged).
+2. The file is parsed; on success, the
+   `pendingImport` state is set to
+   `{ file, data, preview }`.
+3. The card renders the preview above
+   the existing Apply / Cancel pair:
+   - "Workspace path: A -> B" (if path
+     changed)
+   - "Recents: +1 added, -1 removed" (if
+     recents changed)
+   - "Voice provider: stub -> wispr" (if
+     provider changed)
+   - "Disabled tools: +foo, -bar" (if
+     any tools were added/removed to
+     the disabled set)
+   - "Tool X confirmation: per_call ->
+     always_confirm" (per changed tool)
+4. The "Apply Import" button is
+   **disabled if the preview is empty**
+   (no changes - the file matches the
+   current state). This is the "I picked
+   the wrong file" guard (see Decision
+   #74).
+5. The user clicks Apply - the v3
+   transactional `applyLipiStateV3` is
+   called, the success toast is shown,
+   and the pending import is cleared.
+
+A small `previewDiffLabel` helper
+formats each diff line for the UI ("Voice
+provider: stub -> wispr"). The 8
+`previewDiffLabel` tests in
+`PrivacyDataCard.test.ts` pin the
+format for all 5 previewable diff
+types.
+
+**Backward compatibility.** The v2
+`applyLipiStateV2` is preserved on disk
+as a documented fallback. The v3
+function is a strict superset (same
+return shape, plus the snapshot /
+restore), so the v2 path is reachable
+via a direct import. A future cleanup
+PR can delete the v2 function once
+we're confident no edge case (e.g. a
+backport from a fork) needs it.
+
+**Verification.** tsc · vitest (25 new
+tests: 6 v3 apply + 11 v3 preview + 8
+previewDiffLabel) · vite build. All
+clean. 735/735 vitest tests pass total
+(+84 for the K + S3 batch, shared with
+K's 10 storeSnapshot tests).
+
+**Known limitations.**
+
+- **No partial-apply preview.** A user
+  who picks a partial file (e.g. one
+  with only `voicePreferences`) sees the
+  preview for the one field but the
+  other two fields are silently
+  unchanged. The preview is honest about
+  that ("Voice provider: stub -> wispr"
+  with no mention of workspace / tool
+  settings), but a v2 could add a
+  "Missing fields: workspace, toolSettings"
+  section above the diff.
+- **No "Apply & Export a backup first"
+  option.** A v2 could add a checkbox
+  that exports the current state to
+  `<workspace>/.lipi-state-backup-<timestamp>.json`
+  before the apply. The current path is
+  "trust the snapshot restore" (and
+  it's been tested in 6 rollback
+  scenarios).
+- **No undo.** The 5a undo is for
+  in-app tool decisions, not for
+  settings import. A user who clicks
+  Apply and regrets it 5 seconds later
+  has to re-import the previous state
+  from a known-good export. A v2 could
+  add a 10-second "Click to undo import"
+  toast that snapshots-and-restores.
 
 ---
 

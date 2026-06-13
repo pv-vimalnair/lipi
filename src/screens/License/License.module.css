@@ -1,0 +1,187 @@
+/* License activation screen — Phase 2.
+ *
+ * Mirrors the visual shape of the Welcome screen
+ * (rounded brand mark in the top-left, generous
+ * vertical padding, centered hero with a single
+ * column). The activation form lives in the hero:
+ * a labelled textarea + a primary "Activate"
+ * button + a secondary "Get a license" link.
+ *
+ * The fingerprint block (under the form) uses the
+ * same sunken-bg mono-font style as the
+ * LicenseCard's `.fingerprint`, so the visual
+ * language is consistent between the activation
+ * screen and the settings card. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: var(--color-bg-base, #0e0e10);
+  color: var(--color-fg-base, #e6e6e6);
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif);
+  padding: 24px 32px;
+  box-sizing: border-box;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: linear-gradient(135deg, #5e6ad2, #8a4dff);
+  color: #fff;
+  border-radius: 7px;
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.brandName {
+  font-size: 16px;
+}
+
+.hero {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: stretch;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 48px 16px;
+  text-align: left;
+  width: 100%;
+}
+
+.title {
+  margin: 0 0 var(--space-2, 8px);
+  font-size: 28px;
+  font-weight: var(--font-weight-bold, 700);
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.lede {
+  margin: 0 0 var(--space-4, 16px);
+  font-size: var(--font-size-md, 14px);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.form {
+  margin-block-end: var(--space-4, 16px);
+}
+
+.label {
+  display: block;
+  margin: 0 0 var(--space-1, 4px);
+  font-size: var(--font-size-sm, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text);
+}
+
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-3, 12px);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text);
+  background-color: var(--color-bg-sunken, #161616);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  resize: vertical;
+  min-height: 96px;
+  word-break: break-all;
+}
+
+.textarea:focus {
+  outline: 2px solid var(--color-accent, #5e6ad2);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+
+.textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error {
+  margin: 0;
+  padding: var(--space-2, 8px) var(--space-3, 12px);
+  font-size: var(--font-size-sm, 12px);
+  line-height: 1.5;
+  color: var(--color-text);
+  background-color: var(--color-bg-elevated, #1a1a1a);
+  border-left: 2px solid var(--color-danger-strong, #e06c75);
+  border-radius: 0 4px 4px 0;
+}
+
+.actions {
+  align-items: center;
+}
+
+.pricingLink {
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+
+.pricingLink:hover {
+  color: var(--color-text);
+  text-decoration: underline;
+}
+
+.fingerprintSection {
+  margin-block-start: var(--space-4, 16px);
+  padding-top: var(--space-4, 16px);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.subhead {
+  margin: 0 0 var(--space-2, 8px);
+  font-size: var(--font-size-md, 14px);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-text);
+}
+
+.muted {
+  margin: 0 0 var(--space-2, 8px);
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.fingerprint {
+  display: block;
+  margin: 0;
+  padding: var(--space-3, 12px);
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--color-text);
+  background-color: var(--color-bg-sunken, #161616);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  word-break: break-all;
+  user-select: all;
+}

@@ -34,6 +34,7 @@ import { OnDeviceCard } from './components/OnDeviceCard';
 import { WebSpeechCard } from './components/WebSpeechCard';
 import { NativeDictationCard } from './components/NativeDictationCard';
 import { PrivacyDataCard } from './components/PrivacyDataCard';
+import { LicenseCard } from './components/LicenseCard';
 import type { LipiToolEntry } from '@/ipc';
 import styles from './SettingsProvider.module.css';
 
@@ -265,6 +266,13 @@ export function SettingsProvider() {
               toolSettings) and a privacy
               statement above the buttons. */}
           <PrivacyDataCard />
+          {/* Phase 2: license status + deactivate
+              action. The full activation flow
+              lives in `src/screens/License/`; this
+              card is the "manage existing
+              license" view (show fingerprint,
+              deactivate). */}
+          <LicenseCard />
           {/* 5a: danger zone — bulk-reset
               all tool settings (which
               tools are enabled, and their

@@ -23,3 +23,4 @@ export * from './haptics';
 export * from './nativeDictation';
 export * from './fsWatcher';
 export * from './workspaceSearch';
+export * from './licensing';

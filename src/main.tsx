@@ -8,6 +8,7 @@ import { useAppStore } from '@/shared/state/appStore';
 import { useAboutStore, aboutSelectors } from '@/shared/state/aboutStore';
 import { useFirstRunStore } from '@/shared/state/firstRunStore';
 import { useTourStore } from '@/shared/state/tourStore';
+import { useLicenseStore } from '@/shared/state/licenseStore';
 import {
   useWorkspaceStore,
   workspaceSelectors,
@@ -188,6 +189,14 @@ function AppRoot() {
     useWorkspaceStore.getState().hydrate();
     useFirstRunStore.getState().hydrate();
     useTourStore.getState().hydrate();
+    // Phase 2: hydrate the license store once on
+    // app start. The store's `hydrate` is
+    // idempotent (a second call is a no-op), so
+    // StrictMode's double-effect in dev is safe.
+    // The Rust side auto-generates a 14-day trial
+    // on first call, so the user always sees a
+    // non-null status after this resolves.
+    useLicenseStore.getState().hydrate();
     // F.3: dismiss the cold-start splash. The splash is a pure-CSS
     // surface in index.html that shows from page load until the
     // first React commit; setting the `splash-done` class on the

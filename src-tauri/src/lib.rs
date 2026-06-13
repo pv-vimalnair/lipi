@@ -57,6 +57,28 @@ pub use terminal::{
 mod secrets;
 pub use secrets::{delete_api_key as secrets_delete_rs, get_api_key as secrets_get_api_key_rs, has_api_key as secrets_has_rs, set_api_key as secrets_set_rs, SecretError};
 
+// Phase 2: offline-license signing + verification (the
+// first step of the "Lipi to Paid Public Launch" roadmap —
+// see HANDOFF §6 "Next:" and §9.24). The licensing module
+// is desktop-only (the design doc explicitly defers mobile
+// licensing to a later phase — the Apple Keychain
+// "shared keychain group" + receipt validation is a non-
+// trivial follow-up).
+//
+// The 4 IPC commands (`license_get_status`,
+// `license_activate`, `license_deactivate`,
+// `license_get_machine_fingerprint`) are gated
+// `#[cfg(not(mobile))]` so the iOS / Android builds don't
+// compile the licensing module. See
+// `docs/plans/prod-p2-licensing-design.md` for the full
+// design and the threat model.
+mod licensing;
+#[cfg(not(mobile))]
+pub use licensing::{
+    license_activate, license_deactivate, license_get_machine_fingerprint, license_get_status,
+    LicenseStatus,
+};
+
 mod ai;
 pub use ai::{get_configured_providers as ai_get_configured_providers_rs, list_providers as ai_list_providers_rs, provider_by_id, ProviderInfo};
 
@@ -1494,6 +1516,14 @@ pub fn run() {
             apply_template,
             haptic,
             get_native_dictation_contract,
+            #[cfg(not(mobile))]
+            license_get_status,
+            #[cfg(not(mobile))]
+            license_activate,
+            #[cfg(not(mobile))]
+            license_deactivate,
+            #[cfg(not(mobile))]
+            license_get_machine_fingerprint,
         ])
         .manage(Arc::new(TerminalState::new()))
         .menu(|app| menu::build_main_menu(app))

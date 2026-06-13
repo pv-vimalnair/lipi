@@ -121,6 +121,33 @@ keyring = { version = "3.6", default-features = false, features = ["windows-nati
 url = "2"
 # http (Phase 5c — synthetic response builder for unit tests).
 http = "1"
+# Phase 2 (offline licensing layer). Pure-Rust, no C deps, MSRV
+# 1.65+. See `docs/plans/prod-p2-licensing-design.md` for the
+# full design and `src/licensing.rs` for the impl.
+#
+# - ed25519-dalek v2: Ed25519 signing + verification for the
+#   license key. The 2.x line is the current major; the 1.x line
+#   is deprecated. We use the `pkcs8` feature for serialization
+#   (the offline `sign_license` CLI tool will need to load a
+#   PKCS#8-encoded private key from disk).
+# - sha2 v0.10: For the SHA-256 of `hostname || username ||
+#   mac_address` that forms the machine fingerprint. Already a
+#   transitive dep of gix, but we depend on it directly so the
+#   licensing module is self-contained.
+# - base64 v0.22: For the JWS-style base64url encoding of the
+#   license key. The 0.22 line is the current major.
+# - hostname v0.4: Cross-platform hostname via gethostname(2) /
+#   GetComputerNameExW. No system-specific code needed.
+# - whoami v1: Cross-platform OS username (USER / USERNAME /
+#   whoami(1) fallback). Used in the machine fingerprint.
+# - mac_address v1: Cross-platform MAC address. We use the first
+#   non-loopback MAC.
+ed25519-dalek = { version = "2", default-features = false, features = ["pkcs8", "std", "fast"] }
+sha2 = "0.10"
+base64 = "0.22"
+hostname = "0.4"
+whoami = "1"
+mac_address = "1"
 # M2c (on-device STT — whisper.cpp + cpal). See HANDOFF §9.7.
 #
 # Build strategy: in the dev / CI sandbox we don't have

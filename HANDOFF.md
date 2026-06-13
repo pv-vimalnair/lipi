@@ -275,6 +275,7 @@ on mobile — cannot be retrofitted in Week 8.
 | 73 | S3's snapshot primitive **tolerates a throwing `write`** (logs in DEV, continues the restore loop). | The alternative — let the throw propagate — would leave the user in a half-restored state. The v3 apply restores in reverse order, so a failing earlier restore on a less-recent store is reported and the loop moves on; a propagated throw would skip the more-recent stores. The DEV-mode `console.warn` is the breadcrumb; a production user would see the import error ("applying it failed") but their state would be either fully restored or partially restored (with the partial path always being "the last-written store"). | 2026-06-13 |
 | 74 | S3's import flow is **`parse → preview → confirm → apply`**, not `parse → confirm → apply`. | The v2 `window.confirm` was a black box ("this will overwrite everything, OK?"). The v3 preview shows the diff: "Workspace path: A → B; Recents: +1 new, -1 removed; Voice provider: stub → wispr; Tool X confirmation: per_call → always_confirm." A user who picks the wrong file sees "0 changes" and the Apply button is disabled. A user who picks the right file sees the change list and clicks Apply with eyes open. The "no changes" path is a feature, not an edge case. | 2026-06-13 |
 | 75 | S3's `applyLipiStateV3` restore for `toolSettings` uses a **direct `setState`**, not `applyImportedSettings`. | The apply is the destructive surface (it pushes a 5a undo entry). The restore is a "no questions asked, put the state back" — it must NOT push another undo entry. A 10-second-old import that the user wants to abort shouldn't leave a "Click to undo: restore state" toast that's actually re-restoring 10 seconds too late. The `toolSettings` write closure in the snapshot is a raw `setState({disabledToolNames, confirmationMode})`. | 2026-06-13 |
+| 76 | Decision #66 polish reuses the shared `Modal` primitive for both `InlineNameInput` and `ConfirmDestructiveModal` (rather than a custom modal per component). | Per Rule 4 (component reuse), `Modal` is the centralised overlay surface — its focus trap, ESC handling, backdrop click, and `aria-modal` semantics are the right defaults for any centered overlay. The "New file" and "Delete folder" modals are not new kinds of modal — they're existing-modal instances with different content. The only new piece is the `FileRowContextMenu`, which is a *floating* menu (anchored at a click point) — that one is genuinely a new kind and lives in its own component. | 2026-06-13 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -310,18 +311,16 @@ a Windows quirk, not a Lipi issue.
 
 ## 6. How to continue (next session checklist)
 
-**Current phase: Onboarding tour + settings v3 transactional import — SHIPPED (K + S3).** This two-phase batch closes two long-standing follow-ups: a first-run product tour that walks the user through the four panes, and a transactional settings import (snapshot all three stores, apply, restore on any failure) with a field-level diff preview before the user commits. K adds `useTourStore` (Zustand, `lipi:tour:dismissed:v1` localStorage persistence), a declarative 6-step list in `tourSteps.ts` (welcome → fileTree → sidePanel → aiVoice → commandPalette → outro), pure placement math in `placement.ts` (anchored with auto-flip + centered fallback, viewport clamping, body-length-driven callout sizing), an `OnboardingTour` overlay component mounted at the AppRoot level (backdrop + coach-mark callout with arrow, Back / Skip / Next / Finish, ← / → / Enter / Esc keyboard nav with input-target suppression, `useAnchorRect` hook for scroll/resize tracking), and a new "Restart onboarding tour" command palette entry in the Help group. Four `data-tour-target` anchors (`welcome.openFolder`, `fileTree`, `sidePanel`, `aiVoiceButton`) are added across the Welcome / Editor / AIPanel surfaces. S3 adds a cross-store snapshot primitive (`createStoreSnapshot` / `snapshotStores` / `restoreSnapshots` — reverse-order restore, DEV-mode logged-and-continued on a failing write), a `applyLipiStateV3` that snapshots all three stores before any write and restores on failure (same `ApplyLipiStateV2Result` shape as v2, so the UI doesn't change), a `computeLipiStateImportPreview` field-level diff (workspace path / recents / voice provider / disabled tools / per-tool confirmation mode, with `null` for added/removed keys), and rewires `PrivacyDataCard`'s import flow from `parse → confirm → apply` to `parse → preview → confirm → apply` (the preview is a list of `previewDiffLabel` rows above the Apply / Cancel pair; "No changes" disables Apply). The v2 `applyLipiStateV2` partial-on-error apply is preserved on disk as a documented fallback. 735/735 vitest tests pass (+84 for the batch: 25 tourStore + 15 tourSteps + 9 placement + 10 storeSnapshot + 6 v3 apply + 11 v3 preview + 8 previewDiffLabel = 84 — the previous total of 651 + 84 = 735); 194/194 cargo tests pass (unchanged — both phases are frontend-only). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (K — onboarding tour)" / "Added (S3 — settings v3 transactional import + preview)" for the full feature lists; see HANDOFF §9.19 / §9.20 for the per-phase writeups; see Decisions #70–#73 for the architectural calls.
+**Current phase: Decision #66 polish — file-tree right-click context menu — SHIPPED.** This is a one-shot polish that closes the only remaining v1 "ugly" UX surface in the file tree: the `window.prompt` / `window.confirm` calls used by the right-click action picker, the new-file name input, the rename name input, and the delete confirm. The polish replaces all 4 `window.prompt` calls and 2 `window.confirm` calls with 3 purpose-built components (`FileRowContextMenu` floating `<ul role="menu">` anchored at the click x/y with auto-flip + keyboard nav + outside-click dismissal; `InlineNameInput` modal that reuses the shared `Modal` primitive with a labelled text input, validation, and pre-selection of the basename on rename; `ConfirmDestructiveModal` modal that reuses `Modal` with a danger-variant Delete button and per-kind body copy). All 3 components are wired into `FileTreePane`'s `TreeNode` via 3 pieces of mutually-exclusive state (`menu` / `nameInput` / `confirm`). The pure helpers `validateFileName` (7 rules: non-empty, not `.` / `..`, no path separators or Windows-illegal chars, no reserved device names, case-insensitive collision check, length cap, trailing-dots/space strip) and `suggestNewFileName` (untitled.txt → untitled (1).txt → … → 10k bail-out with timestamped fallback) back the `InlineNameInput`. The `computeContextMenuPosition` pure helper handles the auto-flip math. 791/791 vitest tests pass (+56 for this phase: 24 fileNameValidation + 20 FileRowContextMenu + 8 InlineNameInput + 4 ConfirmDestructiveModal = 56; previous 735 + 56 = 791). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. See `CHANGELOG.md` "Added (Decision #66 polish — file-tree right-click context menu)" for the full feature list; see HANDOFF §9.21 for the per-phase writeup; see Decision #76 for the architectural call.
 
 **Previous phase (this session):** Workspace track — SHIPPED (File-tree mutations + File watcher + Workspace search). This three-phase batch closes the "what is in my workspace, what changed on disk, and how do I find anything" loop. FTM adds right-click New / Rename / Delete in `FileTreePane` (Rust `fs_create_file` / `fs_delete_entry` / `fs_rename_entry` IPC, JS `useFileTree` pure helpers `createInTree` / `deleteInTree` / `renameInTree` for testability). FW adds a real-time `notify`-backed watcher that emits `fs://changed` (Rust `fs_watch` / `fs_unwatch` with 75 ms debounce, JS `useFileTreeWatcher` with 150 ms JS-side debounce + a `decideFsChangeAction` pure helper that filters the event stream). WS adds a `SearchPanel` side-tab (Rust hand-rolled grep with `.git` / `node_modules` / `dist` / `build` ignores, 5 MB file-size cap, 1 000 result cap, 4096-byte binary-probe; JS `SearchPanel` with debounced query + case-insensitive toggle + clickable result rows that set `pendingReveal` in `editorControllerStore` for Monaco to consume on mount). 651/651 vitest tests pass (+60 for the batch: 4 fs IPC + 6 fsWatcher IPC + 7 workspaceSearch IPC + 7 fs unit + 8 fs_watcher unit + 13 workspace_search unit + 7 useFileTree + 9 SearchPanel store/hook); 157/157 cargo tests pass (+11 for the batch). `tsc -b` / `npx vitest run` / `cargo check` / `cargo test --lib` / `npm run build` all clean. See `CHANGELOG.md` "Added (File-tree mutations)" / "Added (File watcher)" / "Added (Workspace search)" for the full feature lists; see HANDOFF §9.16 / §9.17 / §9.18 for the per-phase writeups.
 
 (M2b is documented in detail in §9.4; M3 in §9.9; FTM/FW/WS in §9.16/§9.17/§9.18; K/S3 in §9.19/§9.20. The detailed "current phase" status lines from earlier sessions have been removed here in favour of the single live "current phase" line at the top; the CHANGELOG and §9 are the source of truth for what each shipped.)
 
-**Next:** With K + S3 shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
+**Next:** With Decision #66 shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
 - M3 follow-up — iOS Swift `SFSpeechRecognizer` and Android Kotlin `SpeechRecognizer` plugins. The `'nativeDictation'` factory stub exists; the actual Swift / Kotlin code awaits a future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+. The `useVoiceCapabilitiesStore` already returns `nativeDictation: true` on iOS / Android (set by `src-tauri/src/voice_platform.rs`), so the plugins drop in without JS changes.
 - M6 — Multi-workspace tabs (open 2+ workspaces side by side in the same window)
 - Several mobile-build follow-ups — full Swift / Kotlin plugin implementation, mobile haptics wiring, App Store / Play Store submission readiness
-- Decision #66 polish — file-tree right-click context menu (the current `window.prompt` / `window.confirm` placeholders are documented as v1; an inline row-editor + styled confirm modal are a small follow-up)
-- Phase 5f follow-ups — "Jump to chat" / per-row "Revert allow_always" inline button / undo toast on clear log (each is a one-session JS-only change; the row+column is already wired by 5e for the "Jump to chat" half)
 
 **Previous phase (M2a):** Voice capture foundation complete. The pipeline is plumbed end-to-end with a pluggable STT provider:
 - `src/shared/state/voiceStore.ts` — five-state machine (`idle` / `requesting` / `recording` / `transcribing` / `error`) + `durationMs` + `transcript` + `lastError`. Two pure helpers (`mergeTranscript`, `formatDuration`).
@@ -2998,6 +2997,442 @@ K's 10 storeSnapshot tests).
   from a known-good export. A v2 could
   add a 10-second "Click to undo import"
   toast that snapshots-and-restores.
+
+---
+
+### 9.21 Decision #66 polish - SHIPPED (file-tree right-click context menu, see CHANGELOG "Added (Decision #66 polish - file-tree right-click context menu)")
+
+A polish phase that
+replaces the v1
+`window.prompt` /
+`window.confirm`
+right-click flow
+in `FileTreePane`
+with 3 purpose-built
+components. The
+right-click action
+picker is now a
+floating
+`<ul role="menu">`
+with keyboard nav
+and outside-click
+dismissal; the new
+file / rename name
+input is a styled
+modal with
+validation; the
+delete confirm is
+a styled modal with
+a danger-variant
+Delete button.
+
+**Context menu** (new
+`FileRowContextMenu`,
+in
+`src/screens/EditorWorkspace/components/FileTreePane/FileRowContextMenu.tsx`).
+A floating
+`<ul role="menu">`
+positioned at the
+right-click's
+`e.clientX` /
+`e.clientY`. Each
+item is a
+`<li role="menuitem">`
+with a typed
+`action: 'new-file' |
+'rename' | 'delete'`
+and an optional
+`destructive`
+flag. The component:
+
+- Renders the menu
+  at
+  `position: fixed`
+  with `left` / `top`
+  computed by the
+  pure helper
+  `computeContextMenuPosition`
+  (auto-flips to
+  the left if the
+  click was near
+  the right edge;
+  auto-flips up if
+  the click was
+  near the bottom;
+  clamps both
+  axes to the
+  viewport right
+  edge so a click
+  far off the
+  right side
+  doesn't place
+  the menu off-screen).
+- Closes on
+  outside-click
+  (document-level
+  `mousedown`
+  listener; the
+  menu itself
+  stops
+  propagation on
+  its own items
+  so a click on
+  an item is
+  "inside" and
+  activates the
+  item, not
+  "outside" and
+  dismisses).
+- Closes on
+  Escape
+  (document-level
+  `keydown`
+  listener with
+  `stopPropagation`
+  so other
+  modals can
+  coexist).
+- Supports full
+  keyboard nav:
+  ArrowUp /
+  ArrowDown to
+  move the
+  focused item,
+  Enter or Space
+  to activate,
+  Home / End to
+  jump to the
+  first / last.
+  Disabled items
+  are skipped
+  when arrowing
+  past them.
+- Mouse hover
+  updates the
+  focused index
+  so the mouse
+  and keyboard
+  stay in
+  lockstep
+  (hovering item
+  3 then pressing
+  Enter activates
+  item 3).
+- Auto-focuses
+  the first
+  non-disabled
+  item on open
+  (via a
+  `useEffect`
+  that finds the
+  first
+  `:focusable`
+  in the menu and
+  calls `.focus()`).
+- The destructive
+  item carries
+  `data-destructive`
+  so the CSS can
+  paint the
+  label in the
+  danger colour
+  and the hover
+  state in the
+  danger-soft
+  background.
+
+**Inline name input**
+(new
+`InlineNameInput`,
+in
+`.../InlineNameInput.tsx`).
+A modal that
+reuses the shared
+`Modal` primitive,
+wrapping it with a
+labelled text
+input + Cancel /
+Submit buttons.
+The component:
+
+- Drives the
+  behaviour off
+  a `mode` prop
+  (`'new-file'` or
+  `'rename'`),
+  which sets the
+  title
+  ("New file" /
+  "Rename"), the
+  submit button
+  label
+  ("Create" /
+  "Rename"), and
+  the pre-selection
+  strategy
+  (whole value for
+  new-file,
+  basename-only
+  for rename).
+- Validates the
+  input on every
+  keystroke via
+  the pure helper
+  `validateFileName`.
+  The submit
+  button is
+  disabled when
+  the value is
+  invalid; an
+  inline error
+  message
+  appears below
+  the input once
+  the user has
+  touched it
+  (avoids the
+  "yelled at on
+  first open"
+  UX).
+- Re-validates
+  on submit
+  (defends
+  against a
+  paste + submit
+  in the same
+  frame, where
+  the keystroke
+  validation may
+  not have run
+  yet).
+- Resets its
+  internal state
+  (`value` and
+  `touched`) when
+  the `open` prop
+  flips to `true`,
+  syncing the
+  input back to
+  the new
+  `initialName`
+  the parent
+  passes.
+- Uses
+  `useId` for the
+  title id, so
+  multiple
+  modals in the
+  same tree
+  (a future
+  "New folder"
+  modal, e.g.)
+  don't clash on
+  `aria-labelledby`.
+
+**Confirm destructive
+modal** (new
+`ConfirmDestructiveModal`,
+in
+`.../ConfirmDestructiveModal.tsx`).
+A modal that
+reuses the shared
+`Modal` primitive,
+wrapping it with a
+title + body +
+Cancel / Delete
+button pair. The
+Delete button uses
+`Button`'s
+`variant="danger"`.
+The body varies
+based on `kind`:
+- `'file'` →
+  `Delete "foo.txt"? This cannot be undone.`
+- `'folder'` →
+  `Delete folder "bar" and all its contents? This cannot be undone.`
+
+The component is
+presentational —
+the parent owns
+the actual delete
+IPC call. The
+modal just
+renders + dispatches
+the parent's
+callbacks.
+
+**Pure helpers** (new
+`fileNameValidation.ts`).
+Two pure functions
+back the inline
+name input:
+
+- `validateFileName(name, existingNames)`
+  — a
+  discriminated
+  union: success
+  with the
+  trimmed /
+  cleaned name,
+  or failure with
+  a human-readable
+  reason. Rules
+  (7):
+  1. Not empty
+     after trim.
+  2. Not `.` or
+     `..`.
+  3. No path
+     separators
+     or other
+     Windows-illegal
+     characters
+     (`\ / : * ? " < > |`
+     and the
+     null char).
+  4. Not a
+     reserved
+     Windows
+     device name
+     (CON, PRN,
+     AUX, NUL,
+     COM1-9,
+     LPT1-9).
+  5. Not in
+     `existingNames`
+     (case-insensitive
+     collision
+     check —
+     Windows and
+     default-HFS+
+     macOS are
+     case-insensitive).
+  6. Length <=
+     `MAX_NAME_LENGTH`
+     (255, the
+     cross-platform
+     max).
+  7. Strips
+     trailing dots
+     / spaces
+     (Windows
+     refuses to
+     create files
+     whose names
+     end in them).
+- `suggestNewFileName(existingNames, extension)`
+  — returns
+  `untitled.txt`,
+  `untitled (1).txt`,
+  `untitled (2).txt`,
+  ... up to a
+  10k cap (after
+  which it bails
+  out with a
+  timestamped
+  fallback). The
+  extension
+  defaults to
+  `.txt` and the
+  caller can
+  pass any other
+  extension.
+
+**Pure helper**
+(`computeContextMenuPosition`).
+The position
+math (auto-flip
+near viewport
+edges, clamp
+both axes to the
+viewport right
+edge) is a
+4-case pure
+function
+exported from
+`FileRowContextMenu.tsx`
+and tested with 4
+edge cases (room
+available,
+near-right edge,
+near-bottom edge,
+far-past-right
+edge).
+
+**Wiring.** The
+state machine
+lives on
+`TreeNode` (the
+per-row component
+in `FileTreePane`)
+as 3 mutually-exclusive
+pieces of state:
+- `menu: { x, y, entry } | null`
+  — the floating
+  menu
+- `nameInput: { mode, initialName, existingNames, target } | null`
+  — the inline
+  name modal
+- `confirm: { kind, name, target } | null`
+  — the
+  destructive
+  confirm
+
+Only one is open
+at a time (by
+conditional render).
+The existing
+`runMutation` is
+the common path
+for surfacing
+errors next to the
+row. The
+`collectExistingNames`
+helper reads
+`useFileTreeStore.entriesByDir[parent]`
+to build the
+collision-check
+set on open.
+
+The 4
+`window.prompt`
+calls and 2
+`window.confirm`
+calls in the v1
+flow are gone.
+The
+`runMutation`
+function is
+unchanged (it
+already handled
+the try-catch +
+`setRowError`
+pattern); only
+its callers
+changed.
+
+**Verification.**
+
+- `npx tsc -b` —
+  clean
+- `npx vitest run`
+  — **791/791
+  pass** (was 735
+  before the #66
+  polish, +4 files
+  / +56 tests).
+- `npm run build`
+  — clean
+- `cargo check` —
+  clean (frontend-only
+  phase)
+
+**Known limitations.**
+
+- **No nested context menu.** A user who right-clicks a folder row can pick "New file in folder…", but they can't right-click a folder, open the menu, hover "New file", and have a submenu appear. A v2 could add a submenu with the same `computeContextMenuPosition` math.
+- **No keyboard shortcut to open the menu on the focused row.** A keyboard user can `Tab` to a row, but the only way to open the menu is a right-click. A v2 could add a `Shift+F10` or `ContextMenu` key handler on the row that opens the menu at the row's `getBoundingClientRect` centre.
+- **No animation.** The menu appears and disappears instantly. A v2 could add a CSS transition (`data-state="entering" / "exiting"`) and a 100ms fade.
+- **No new-folder action.** The menu only has New File, Rename, Delete. New Folder is a v2 (it would be a third `kind: 'folder'` row in the `ConfirmDestructiveModal`, plus a `mode: 'new-folder'` in `InlineNameInputMode`).
 
 ---
 

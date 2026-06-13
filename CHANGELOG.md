@@ -3469,6 +3469,365 @@ new tests**.
 - `npm run build` — clean
 - `cargo check` — clean
 
+### Added (Decision #66 polish — file-tree right-click context menu)
+
+The v1 file-tree
+right-click menu
+used `window.prompt`
+for new-file /
+rename name entry
+and `window.confirm`
+for the destructive
+delete gate. That
+flow was functional
+but visually jarring
+(native modal
+breaking the app's
+visual identity) and
+inaccessible (no
+keyboard nav, no
+focus trap, no ARIA
+roles). This phase
+replaces it with 3
+purpose-built
+components, all
+following Rule 4
+(component reuse)
+and Rule 7 (design
+tokens). Decision
+#66 in HANDOFF §4
+documents the
+"ship-the-feature-
+now, polish-later"
+tradeoff; this
+phase delivers the
+polish.
+
+**Context menu** (new
+`FileRowContextMenu`
+in
+`src/screens/EditorWorkspace/components/FileTreePane/FileRowContextMenu.tsx`):
+a floating
+`<ul role="menu">`
+anchored at the
+right-click
+`clientX` /
+`clientY`. Each item
+carries a typed
+`action: 'new-file' |
+'rename' | 'delete'`
+and an optional
+`destructive` flag
+(the Delete item).
+The menu:
+- Auto-flips to the
+  left / up when the
+  click was near the
+  right / bottom
+  edge of the
+  viewport (pure
+  helper
+  `computeContextMenuPosition`,
+  tested with 4
+  edge cases: room
+  available,
+  near-right edge,
+  near-bottom edge,
+  far-past-right
+  edge).
+- Closes on
+  outside-click
+  (document-level
+  `mousedown`),
+  Escape, or item
+  activation.
+- Supports
+  keyboard nav
+  (arrow up / down
+  to move, Enter
+  or Space to
+  activate, Home /
+  End to jump to
+  the first / last
+  item). Disabled
+  items are skipped
+  when arrowing
+  past them.
+- Mouse hover
+  updates the
+  focused index,
+  so the mouse and
+  keyboard stay in
+  lockstep (hovering
+  item 3 then
+  pressing Enter
+  activates item 3).
+- Renders a
+  `data-destructive`
+  attribute on
+  destructive
+  items so the CSS
+  can paint them
+  in the danger
+  colour.
+
+**Inline name input**
+(new
+`InlineNameInput`):
+a modal that
+reuses the shared
+`Modal` primitive,
+wrapping it with a
+labelled text
+input + Cancel /
+Submit buttons.
+Used for both
+"New File" and
+"Rename" actions
+(driven by the
+`mode: 'new-file' |
+'rename'` prop).
+Behaviour:
+- Pre-populates
+  with a sensible
+  default
+  (`suggestNewFileName(existingNames)`
+  for new-file, the
+  current name for
+  rename).
+- On `rename` mode,
+  pre-selects the
+  BASENAME (not the
+  extension) on
+  open, so the
+  user can type to
+  replace the name
+  without retyping
+  the extension.
+  On `new-file`
+  mode, pre-selects
+  the whole value.
+- Validates the
+  input on every
+  keystroke via
+  the pure helper
+  `validateFileName`
+  (see below).
+  The submit
+  button is
+  disabled when
+  the value is
+  invalid.
+- Shows the
+  inline error
+  message only
+  after the user
+  has touched the
+  input (avoids
+  the "yelled at
+  on first open"
+  UX).
+- Re-validates on
+  submit (defends
+  against a paste
+  + submit in the
+  same frame).
+
+**Confirm destructive
+modal** (new
+`ConfirmDestructiveModal`):
+a modal that
+reuses the shared
+`Modal` primitive,
+wrapping it with a
+title + body +
+Cancel / Delete
+button pair. Used
+for the delete
+gate. The Delete
+button uses
+`Button`'s
+`variant="danger"`.
+The body varies
+based on `kind`:
+- `'file'` →
+  `Delete "foo.txt"? This cannot be undone.`
+- `'folder'` →
+  `Delete folder "bar" and all its contents? This cannot be undone.`
+
+**Pure helpers**
+(new
+`fileNameValidation.ts`):
+- `validateFileName(name, existingNames)` —
+  a discriminated
+  union: success
+  with the trimmed
+  / cleaned name,
+  or failure with
+  a human-readable
+  reason. Rules:
+  1. Not empty
+     after trim.
+  2. Not `.` or
+     `..`.
+  3. No path
+     separators or
+     other Windows-illegal
+     characters
+     (the strictest
+     filesystem we
+     support; POSIX
+     is a subset).
+  4. Not a reserved
+     Windows device
+     name (CON, PRN,
+     AUX, NUL, COM1-9,
+     LPT1-9).
+  5. Not in
+     `existingNames`
+     (case-insensitive
+     collision
+     check — Windows
+     and default-HFS+
+     macOS are
+     case-insensitive).
+  6. Length <=
+     `MAX_NAME_LENGTH`
+     (255, the
+     cross-platform
+     max).
+  7. Strips
+     trailing dots
+     / spaces
+     (Windows
+     refuses to
+     create them).
+- `suggestNewFileName(existingNames, extension)` —
+  returns
+  `untitled.txt`,
+  `untitled (1).txt`,
+  `untitled (2).txt`,
+  ... up to a
+  10k cap (after
+  which it bails
+  out with a
+  timestamped
+  fallback). The
+  extension defaults
+  to `.txt` and the
+  caller can pass
+  any other
+  extension.
+
+**Wiring.**
+`FileTreePane`'s
+`TreeNode` is the
+only consumer.
+The 4
+`window.prompt`
+calls and the 2
+`window.confirm`
+calls are gone.
+The state machine
+is 3 pieces of
+state on
+`TreeNode`:
+- `menu: { x, y, entry } | null` — the floating menu
+- `nameInput: { mode, initialName, existingNames, target } | null` — the inline name modal
+- `confirm: { kind, name, target } | null` — the destructive confirm
+
+The 3 states are
+mutually exclusive
+(only one can be
+open at a time, by
+conditional
+render). The
+existing
+`runMutation` is
+the common path
+for surfacing
+errors next to the
+row.
+
+**Test surface
+(new tests, +56).**
+- `fileNameValidation.test.ts`
+  (24 tests) —
+  `validateFileName`
+  covers all 7
+  rules +
+  `suggestNewFileName`
+  covers the
+  collision counter
+  + the 10k bail-out.
+- `FileRowContextMenu.test.tsx`
+  (20 tests) —
+  `computeContextMenuPosition`
+  covers 4 edge
+  cases, the
+  component covers
+  rendering,
+  destructive
+  attribute, Enter
+  / Space
+  activation,
+  ArrowUp / Down
+  skipping
+  disabled items,
+  mousedown on
+  item vs.
+  outside, Escape
+  dismissal, Home
+  / End jumping.
+- `InlineNameInput.test.tsx`
+  (8 tests) —
+  `initialNameFor`
+  covers new-file
+  + rename + the
+  skip counter;
+  the component
+  covers title +
+  button label per
+  mode, initial
+  value
+  pre-population,
+  submit button
+  disabled when
+  invalid (empty
+  / collision),
+  inline error
+  hidden until
+  touched.
+- `ConfirmDestructiveModal.test.tsx`
+  (8 tests) —
+  title per kind,
+  body per kind
+  (with the
+  HTML-escaped
+  `&quot;` quotes),
+  the "cannot be
+  undone" warning,
+  Cancel / Delete
+  buttons, the
+  optional `detail`
+  line, the
+  `data-testid`
+  hooks.
+
+**Verification.**
+- `npx tsc -b` — clean
+- `npx vitest run` —
+  **791/791 pass**
+  (was 735 before
+  the #66 polish,
+  +4 files / +56
+  tests).
+- `npm run build` —
+  clean
+- `cargo check` —
+  clean (frontend-only
+  phase)
+
 ## [0.0.2] — 2026-06-09
 
 ### Added (Phase 5e — persistent per-decision activity log)

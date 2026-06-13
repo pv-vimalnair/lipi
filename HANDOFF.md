@@ -311,12 +311,14 @@ a Windows quirk, not a Lipi issue.
 
 ## 6. How to continue (next session checklist)
 
-**Current phase: M6a — Multi-workspace tabs: data model + tab strip — SHIPPED.** M6a is the first half of the M6 multi-workspace tabs plan. The pre-M6a `useWorkspaceStore` tracked a single `currentPath: string | null`; M6a replaces that with `workspaces: WorkspaceTab[]` (`{ id, path, addedAt }`) and `activeId: string | null`, plus a derived `useActivePath(state)` helper that consumers use to read the active tab's path. A new `useActivePathSelector()` hook subscribes to the store and re-renders on change. A v1 → v2 in-store migration wraps the old single `currentPath` in a `WorkspaceTab` on first hydrate, writes the v2 keys, and drops the v1 keys (only on success — the v1 keys are otherwise left in place, a defensive measure for users with both an old binary and a new binary running side-by-side). The new `<WorkspaceTabs />` component renders one pill per open tab between the titlebar and the file tree (click to switch, `×` to close, middle-click to close, `+` to add via the native folder picker; full a11y: `role="tablist"` / `role="tab"` / `aria-selected`). The file tree re-roots to the new active path when the user switches tabs (M6a is global expansion state; M6b will key it per tab). Recents are unchanged in shape but now `MAX_RECENTS`-capped strings, with "closed is not forgotten" semantics (closing a tab preserves its path in recents; re-opening from recents adds a new tab). The Command Palette's `workspace.open` and `workspace.close` commands now dispatch the new `open(path)` / `close(tabId?)` actions. 813/813 vitest tests pass (+22 from this phase: 21 in `workspaceStore.test.ts` covering the v1→v2 migration, `open` / `close` / `setActive` actions, and `useActivePath`; 6 in `WorkspaceTabs.test.tsx` for the strip rendering and a11y). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. Titlebar subtitle is now `dev · M6a`. See `CHANGELOG.md` "Added (M6a — Multi-workspace tabs: data model + tab strip)" for the full feature list; see HANDOFF §9.22 for the per-phase writeup; see Decisions #77–#80 for the architectural calls.
+**Current phase: M6b — Per-tab state keying + v4 settings export / import — SHIPPED.** M6b is the second half of the M6 multi-workspace tabs plan. With M6a shipping the data model + tab strip, M6b makes each tab a *full* workspace: per-tab state (file-tree expansion, selected row, open editor tabs, active editor tab) is persisted on the tab itself, and switching tabs rehydrates that state into the live stores (`useFileTreeStore`, `useEditorTabsStore`) via mirror-back effects. The settings export/import format is bumped to v4: the v3 single `workspace.currentPath` shape is replaced with a `workspace.workspaces[]` array of `{ id, path, addedAt, state: WorkspaceTabState }` rows; the v3→v4 import migration wraps any old `currentPath` into a single `WorkspaceTab` with empty per-tab state (auto-detected on parse, so existing v3 files continue to import seamlessly). The new `WorkspaceTabState` carries four fields (`expandedDirs: string[]`, `selectedPath: string | null`, `openEditorTabPaths: string[]`, `activeEditorTabPath: string | null`) plus three live-store actions (`setExpandedAndSelected` on `useFileTreeStore`, `replaceAll` on `useEditorTabsStore`, and `setTabState` / `replaceTabState` on `useWorkspaceStore`) that the mirror-back effects use to keep the two views in sync. PrivacyDataCard's v4 export/import is wired end-to-end: the export snapshot is `LipiStateV4Data` (with `version: 4`, `LIPI_STATE_V4_FORMAT`, and a per-tab `state` block), the import parser auto-detects v3 files (no `version`, or `version: 2/3` with a `currentPath` field) and migrates them in-memory, and a `.migrationNotice` UI block informs the user that their file was upgraded. The `applyLipiStateV4` function is transactional (snapshotStores → mutate → rollback on error), mirroring the S3 design. 874/874 vitest tests pass (+61 from this phase: 13 in `workspaceStore.test.ts` for per-tab state + persistence; 23 in `settingsIOv4.test.ts` for v4 schema + v3→v4 migration; 7 in `settingsIOv4.apply.test.ts` for transactional rollback; 13 in `settingsIOv4.preview.test.ts` for human-readable previews; 5 in `PrivacyDataCard.test.ts` rewritten for v4). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. Titlebar subtitle is now `dev · M6b`. See `CHANGELOG.md` "Added (M6b — Per-tab state keying + v4 settings export / import)" for the full feature list; see HANDOFF §9.23 for the per-phase writeup; see Decisions #81–#84 for the architectural calls.
+
+**Previous phase (M6a):** Multi-workspace tabs: data model + tab strip — SHIPPED. The pre-M6a `useWorkspaceStore` tracked a single `currentPath: string | null`; M6a replaced that with `workspaces: WorkspaceTab[]` (`{ id, path, addedAt }`) and `activeId: string | null`, plus a derived `useActivePath(state)` helper that consumers use to read the active tab's path. A new `useActivePathSelector()` hook subscribes to the store and re-renders on change. A v1 → v2 in-store migration wraps the old single `currentPath` in a `WorkspaceTab` on first hydrate, writes the v2 keys, and drops the v1 keys (only on success — the v1 keys are otherwise left in place, a defensive measure for users with both an old binary and a new binary running side-by-side). The new `<WorkspaceTabs />` component renders one pill per open tab between the titlebar and the file tree (click to switch, `×` to close, middle-click to close, `+` to add via the native folder picker; full a11y: `role="tablist"` / `role="tab"` / `aria-selected`). The file tree re-roots to the new active path when the user switches tabs (M6a is global expansion state; M6b keys it per tab). Recents are unchanged in shape but `MAX_RECENTS`-capped strings, with "closed is not forgotten" semantics (closing a tab preserves its path in recents; re-opening from recents adds a new tab). The Command Palette's `workspace.open` and `workspace.close` commands dispatch the new `open(path)` / `close(tabId?)` actions. 813/813 vitest tests pass (+22 from this phase: 21 in `workspaceStore.test.ts` covering the v1→v2 migration, `open` / `close` / `setActive` actions, and `useActivePath`; 6 in `WorkspaceTabs.test.tsx` for the strip rendering and a11y). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. See `CHANGELOG.md` "Added (M6a — Multi-workspace tabs: data model + tab strip)" for the full feature list; see HANDOFF §9.22 for the per-phase writeup; see Decisions #77–#80 for the architectural calls.
 
 **Previous phase (Decision #66 polish):** file-tree right-click context menu — SHIPPED. The pre-Decision-#66 `window.prompt` / `window.confirm` right-click flow in `FileTreePane` is replaced with 3 purpose-built components (`FileRowContextMenu` floating `<ul role="menu">` anchored at the click x/y with auto-flip + keyboard nav + outside-click dismissal; `InlineNameInput` modal that reuses the shared `Modal` primitive with a labelled text input, validation, and pre-selection of the basename on rename; `ConfirmDestructiveModal` modal that reuses `Modal` with a danger-variant Delete button and per-kind body copy). All 3 components are wired into `FileTreePane`'s `TreeNode` via 3 pieces of mutually-exclusive state (`menu` / `nameInput` / `confirm`). The pure helpers `validateFileName` (7 rules: non-empty, not `.` / `..`, no path separators or Windows-illegal chars, no reserved device names, case-insensitive collision check, length cap, trailing-dots/space strip) and `suggestNewFileName` (untitled.txt → untitled (1).txt → … → 10k bail-out with timestamped fallback) back the `InlineNameInput`. The `computeContextMenuPosition` pure helper handles the auto-flip math. 791/791 vitest tests pass (+56 for this phase: 24 fileNameValidation + 20 FileRowContextMenu + 8 InlineNameInput + 4 ConfirmDestructiveModal = 56; previous 735 + 56 = 791). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. See `CHANGELOG.md` "Added (Decision #66 polish — file-tree right-click context menu)" for the full feature list; see HANDOFF §9.21 for the per-phase writeup; see Decision #76 for the architectural call.
 
-**Next:** With M6a shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
-- **M6b** — Per-tab state keying (file tree expansion, open editor tabs, scroll position, focused row) + v4 settings export / import (the v3 `workspace.currentPath` shape extends to a `workspace.workspaces[]` array with per-tab state; the v3→v4 import migration wraps any old `currentPath` into a single `WorkspaceTab` with empty per-tab state). Same as M6a: pure frontend work, no Rust changes, but the data model + persistence migration + per-tab keying are non-trivial and warrant a dedicated design pass before code.
+**Next:** With M6b shipped, the candidate unbuilt-phases list (see top of conversation for the verified on-disk scan) is:
+- **M6c** — Per-tab UI polish: per-tab scroll position, per-tab font size / theme, per-tab recents, per-tab git / tool / voice settings. M6b deliberately ships the four core fields (`expandedDirs`, `selectedPath`, `openEditorTabPaths`, `activeEditorTabPath`); the polish fields are a M6c follow-up so the M6b data model can stabilise before the export shape is widened again. Each of these is "add a field to `WorkspaceTabState`, add a `validate…` helper, add a mirror-back effect in the relevant live store, add a test". Pure frontend, no Rust changes.
 - **M3 follow-up** — iOS Swift `SFSpeechRecognizer` and Android Kotlin `SpeechRecognizer` plugins. The `'nativeDictation'` factory stub exists; the actual Swift / Kotlin code awaits a future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+. The `useVoiceCapabilitiesStore` already returns `nativeDictation: true` on iOS / Android (set by `src-tauri/src/voice_platform.rs`), so the plugins drop in without JS changes.
 - Several mobile-build follow-ups — full Swift / Kotlin plugin implementation, mobile haptics wiring, App Store / Play Store submission readiness.
 
@@ -4012,34 +4014,121 @@ state should use DOM
 render, not
 `renderToStaticMarkup`.
 
-**M6b (next, when
-scheduled).** Per-tab
-state keying (file
-tree expansion, open
-editor tabs, scroll
-position, focused
-row, recent files
-list) + v4 settings
-export / import. The
-v3 export
-`workspace.currentPath`
-shape extends to a
-`workspace.workspaces[]`
-array of
-`{ id, path, addedAt, state: { expandedDirs, openEditorTabs, focusedPath, scrollPosition, recentFiles } }`;
-the v3 → v4 import
-migration wraps any
-old `currentPath` in
-a single `WorkspaceTab`
-with empty per-tab
-state. The data model
-is non-trivial —
-per-tab state is the
-largest single piece
-of new M6b code — and
-warrants a dedicated
-design pass before
-code.
+**M6b (SHIPPED).** See §9.23 below.
+
+### 9.23 M6b - SHIPPED (Per-tab state keying + v4 settings export / import, see CHANGELOG "Added (M6b — Per-tab state keying + v4 settings export / import)")
+
+The second half of the M6 multi-workspace tabs plan. M6a ships the data model + tab strip; M6b makes each tab a *full* workspace: per-tab state (file-tree expansion, selected row, open editor tabs, active editor tab) is persisted on the tab itself, and switching tabs rehydrates that state into the live stores (`useFileTreeStore`, `useEditorTabsStore`) via mirror-back effects. The settings export / import format is bumped to v4.
+
+**The data model change.** The M6a `WorkspaceTab` had three fields: `id`, `path`, `addedAt`. M6b adds a fourth field — `state: WorkspaceTabState` — that holds the per-tab UI state:
+
+```ts
+export interface WorkspaceTabState {
+  expandedDirs: string[];          // absolute paths of expanded directory rows
+  selectedPath: string | null;     // absolute path of the focused file-tree row
+  openEditorTabPaths: string[];    // absolute paths of open editor tabs, in display order
+  activeEditorTabPath: string | null; // absolute path of the active editor tab
+}
+
+export const EMPTY_TAB_STATE: WorkspaceTabState = {
+  expandedDirs: [],
+  selectedPath: null,
+  openEditorTabPaths: [],
+  activeEditorTabPath: null,
+};
+
+interface WorkspaceTab {
+  id: string;
+  path: string;
+  addedAt: number;
+  state: WorkspaceTabState;  // NEW in M6b
+}
+```
+
+The four fields were chosen by audit: they are the four pieces of state that "you switched to tab X last week, you came back to tab X today, and tab X should look exactly how you left it" demands. The four are deliberately the *minimum* — scroll position, per-tab font size, per-tab theme, per-tab recents, per-tab git / tool / voice settings are all out of scope for M6b and parked in M6c.
+
+`createWorkspaceTab(path, id, addedAt, state)` now takes an optional 4th argument defaulting to `EMPTY_TAB_STATE`. The `hydrate` step is defensive about pre-M6b tabs persisted under the v2 key: any tab row that lacks a `state` field (or has a partial / corrupt one) is normalised to `EMPTY_TAB_STATE` on read, so users with a pre-M6b binary plus an M6b binary side-by-side don't see a "selected row is `undefined`" crash. The three shape fields are still strictly validated (`id` string, `path` string, `addedAt` number); only the new `state` field is permissive (synthesise defaults, don't drop the tab).
+
+**The mirror-back architecture.** The `WorkspaceTab.state` is the *persisted source of truth* for per-tab UI state. The two live stores (`useFileTreeStore` for the file tree, `useEditorTabsStore` for the editor tabs) are the *live, transient view* of that state for the currently active tab. The two views stay in sync via two `useEffect` hooks (one in `useFileTree`, one in `useEditorTabs`):
+
+1. **Tab switch rehydration.** When the active workspace tab changes (the `activeId` in `useWorkspaceStore` updates), the new tab's `state` is read from `useWorkspaceStore.getState().workspaces[activeIndex].state` and pushed into the respective live stores. For the file tree, the live `useFileTreeStore.setExpandedAndSelected(expandedDirs, selectedPath)` action replaces the live expansion + selection; for editor tabs, the live `useEditorTabsStore.replaceAll(openEditorTabPaths, tabs, activeEditorTabPath)` action replaces the open-tab order, the open-tab record, and the active tab. The editor tab rehydration also re-reads each file from disk via the existing `readFile` IPC command (the file content is not in the persisted state — only the path is), so the editor's contents are guaranteed to be fresh.
+
+2. **Mutation mirror-back.** When user interactions (toggle a directory row, click a file row, open a new file in the editor, close an editor tab, activate a different editor tab) modify the live stores, those changes are immediately mirrored back to the active `WorkspaceTab.state` in `useWorkspaceStore` via dedicated actions: `useWorkspaceStore.setTabState(tabId, partial)` (a partial merge into the active tab's state) or `useWorkspaceStore.replaceTabState(tabId, state)` (a full replace). The mirror-back is a `useEffect` subscription (`useWorkspaceStore.subscribe((state, prev) => { ... })`) that fires on any change to the live store and forwards the new live values into the persisted `WorkspaceTab.state`.
+
+The two hooks are colocated with their respective live store — `useFileTree.ts` owns the file-tree rehydration + mirror-back, `useEditorTabs.ts` owns the editor-tab rehydration + mirror-back — and both hooks reuse the existing `useWorkspaceStore.subscribe` pattern that M6a uses for the active-path re-derive. The mirror-back is intentionally one-way on each side: the live store is "the current view", the persisted state is "what to write back", and the user interactions only ever flow into the live store (the persisted state is the long-term storage).
+
+The end result: a user can open tab A, expand a deep tree, open three editor tabs, switch to tab B (which has its own expansion + editor tabs), switch back to tab A, and the file tree + editor tabs are exactly how they left them. Persistence is automatic — every mutation writes to `localStorage` under the existing v2 keys (`lipi:workspace:workspaces:v1` is reused; the v2 data model is a superset of M6a's).
+
+**The v4 settings export / import format.** The v3 export shape had a single `workspace.currentPath: string | null`. v4 replaces that with a `workspace.workspaces[]` array of `{ id, path, addedAt, state: WorkspaceTabState }` rows:
+
+```ts
+export interface ExportedWorkspaceTabV4 {
+  id: string;
+  path: string;
+  addedAt: number;
+  state: WorkspaceTabState;
+}
+
+export interface ExportedWorkspaceV4 {
+  workspaces: ExportedWorkspaceTabV4[];
+  activeId: string | null;
+  recents: string[];
+}
+
+export interface LipiStateV4Data {
+  format: typeof LIPI_STATE_V4_FORMAT;  // 'lipi-state-v4'
+  version: 4;
+  workspace: ExportedWorkspaceV4;
+  voicePreferences: VoicePreferencesV2;
+  toolSettings: ToolSettingsExportV2;
+}
+
+export interface LipiStateV4File {
+  format: typeof LIPI_STATE_V4_FORMAT;
+  version: 4;
+  exportedAt: string;  // ISO 8601
+  data: LipiStateV4Data;
+}
+```
+
+The `format` + `version` fields are the v4 wire-format fingerprint. The `format` is `'lipi-state-v4'` (a separate constant from `version: 4` so a future `format: 'lipi-state-v5'` with `version: 4` is still detectable as a new format — see Decision #84). The `exportedAt` timestamp is the only new top-level field; everything else is a rename / restructure of v3's `data` block.
+
+The new module `src/shared/settingsIOv4.ts` defines the schema (`ExportedWorkspaceV4`, `LipiStateV4Data`, `LipiStateV4File`), the builder (`buildLipiStateV4`), the serializer (`serialiseLipiStateV4`), the filename suggester (`suggestLipiStateV4Filename`), the privacy checker (`serialisedFileLooksPrivateV4`), and the parser (`parseLipiStateV4`). The privacyDataCard's `snapshotStoresForExport` is refactored to produce a v4 snapshot, with each tab's state cloned per tab (so the snapshot is a deep copy, not a reference into the live store — see Decision #84).
+
+**The v3 → v4 in-memory migration.** `parseLipiStateV4` auto-detects v3 input by inspecting the `version` field: `version: 4` parses as v4, but `version: 2`, `version: 3`, no `version` field, or any input that has a `currentPath` (and no `workspaces[]`) is treated as v3 and migrated in-memory to v4 before validation. The migration (`migrateV3DataToV4`) wraps the v3 `currentPath` in a single `WorkspaceTab` with `EMPTY_TAB_STATE`:
+
+```ts
+// v3 input: { version: 3, workspace: { currentPath: '/x/y', recents: [...] }, ... }
+// v4 output: { version: 4, workspace: { workspaces: [{ id, path: '/x/y', addedAt, state: EMPTY_TAB_STATE }], activeId: <id if currentPath !== null else null>, recents: [...] }, ... }
+```
+
+A v3 `currentPath: null` becomes an empty `workspaces[]` and `activeId: null` (the pre-M6a "no workspace open" state). A v3 `currentPath: string` becomes a single tab with that path, `activeId` set to the new tab's id, and the same `recents` array. The v3→v4 migration is the *only* way to import a v3 file — there is no separate `parseLipiStateV3` / `applyLipiStateV3` v4 path — so a v3 file and a v4 file go through the same import code.
+
+The migration is detected + applied before validation, so the v3 schema is never validated by the v4 validator (which would reject `currentPath` as an unknown field). The v3 schema is validated by a dedicated `validateV3Workspace` function inside `settingsIOv4.ts`, which checks the v3 shape (`currentPath` + `recents`) directly without relying on `settingsIOv2.parseLipiStateV2` (which strictly enforces `version: 2` and rejects v3 input). This was the v3→v4 migration gotcha: `parseLipiStateV2` is too strict to validate v3 files, so the migration has its own validator.
+
+**The transactional apply (S3 design reused).** `src/shared/settingsIOv4.apply.ts` exports `applyLipiStateV4(data: LipiStateV4Data)`, which is the canonical "import a v4 settings file" function. It uses the same transactional design as the v3 apply (Decision #67): `snapshotStores()` → mutate the three target stores (`useWorkspaceStore`, `useVoicePreferencesStore`, `useToolSettingsStore`) → `restoreSnapshots()` on any error. The "any error" includes the validation errors thrown by the per-tab `validateWorkspaceTabState` + `validateWorkspaceTab` + `validateWorkspace` + `validateVoicePreferences` + `validateToolSettings` functions. A user who imports a corrupt v4 file gets an "Import failed" toast and their existing settings are unchanged.
+
+**The preview diff.** `src/shared/settingsIOv4.preview.ts` exports `computeLipiStateV4ImportPreview(current, incoming) → LipiStateV4ImportPreview` and `previewDiffLabelV4(diff) → string`. The preview breaks down the incoming changes into five sections: workspace tabs (added / removed / changed per tab), per-tab state (detailed diff of `expandedDirs` added / removed, `selectedPath` changed, `openEditorTabPaths` added / removed, `activeEditorTabPath` changed), active tab (displayed as a path, not an id), recents (added / removed), voice preferences (changed boolean / string fields), tool settings (changed confirmation mode per tool). The PrivacyDataCard's import preview block uses this function to render a human-readable diff.
+
+**PrivacyDataCard's UX changes.** The card now exports in v4 format (`LIPI_STATE_V4_FORMAT` shown in the format note), imports via the v4 parser (which auto-detects v3 files), and renders the v4 preview. If the imported file was a v3 file (auto-migrated), a `.migrationNotice` UI block appears under the format note explaining that the file was upgraded from v3 — "this file was exported from an earlier Lipi version; we'll import it as a v4 file with empty per-tab state." The format note shows `LIPI_STATE_V4_FORMAT` and `LIPI_STATE_V4_VERSION` as the canonical "this is what we export" reference. The `version: 4` field is in the data block (not the file wrapper), and the file wrapper's `version` is the *file format version* — for v4, they happen to be the same number, but a future v5 file could have `file.version: 5` + `data.version: 4` (see Decision #84).
+
+**No Rust changes.** `cargo check` / `cargo test` unchanged. M6b is a frontend-only phase.
+
+**Titlebar**: now `dev · M6b`.
+
+**Verification**:
+
+- `npx tsc -b` — clean, 0 errors.
+- `npx vitest run` — **874 / 874** pass (was 813).
+- `npm run build` — clean, 720 KB JS / 107 KB CSS, gzipped 203 KB / 18 KB.
+- `cargo check` — clean (no Rust changes).
+
+**Decisions** (the architectural calls):
+
+- **#81** — `WorkspaceTab.state` is the persisted source of truth for per-tab UI state. The live stores (`useFileTreeStore`, `useEditorTabsStore`) are the transient view, synced via mirror-back `useEffect` hooks. M6b's four core fields (`expandedDirs`, `selectedPath`, `openEditorTabPaths`, `activeEditorTabPath`) are the minimum set; per-tab scroll position, font size, theme, recents, git / tool / voice settings are parked in M6c.
+- **#82** — The v4 export shape extends v3's `workspace.currentPath` to a `workspace.workspaces[]` array of `{ id, path, addedAt, state }` rows. The v3 → v4 import migration is an in-memory transformation in `parseLipiStateV4` — the parser auto-detects v3 input by inspecting `version` and `currentPath` and migrates before validation. There is no separate `parseLipiStateV3`; v3 files go through the same v4 import path.
+- **#83** — The mirror-back is one-way: the live store is the current view, the persisted `WorkspaceTab.state` is the long-term storage, and user interactions only ever flow into the live store (the persisted state is the destination of the mirror-back). This is the opposite of the typical "live store hydrated from persistence on load" model; the persistence is a *shadow* of the live store, updated on every mutation. The benefit is that the live store stays simple (it doesn't need a persistence subscription), and the persisted state is always in sync (no debounce, no stale-write window).
+- **#84** — The `format` and `version` fields are separated: `format` is the wire-format fingerprint (`'lipi-state-v4'`), `version` is the in-file data version (`4`). For v4 they happen to match, but a future v5 file could have `format: 'lipi-state-v5'` with `version: 4` (a data-only change) or `format: 'lipi-state-v4'` with `version: 5` (a schema-only change). The v4 snapshot in `snapshotStoresForExport` is a deep clone (via `structuredClone`-equivalent for our shape) so the exported JSON is a true point-in-time snapshot, not a reference into the live store.
 
 ---
 

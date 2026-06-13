@@ -1,0 +1,266 @@
+/*
+ * OnboardingTour — K-phase
+ * coach-mark overlay.
+ *
+ * Layout:
+ *   - `.backdrop` is a
+ *     fixed-positioned
+ *     full-viewport layer
+ *     with a dark semi-
+ *     transparent fill. The
+ *     callout is positioned
+ *     absolutely INSIDE the
+ *     backdrop, at the
+ *     (left, top) computed by
+ *     `placement.ts`.
+ *   - `.callout` is the
+ *     card surface. The
+ *     callout has a small
+ *     `data-side` attribute
+ *     (top / bottom / left /
+ *     right / center) that
+ *     selects the arrow
+ *     pseudo-element.
+ *
+ * Animation:
+ *   The v1 has no animation.
+ *   A v2 polish could add a
+ *   fade-in via CSS keyframes
+ *   (120ms ease-out). The
+ *   current instant-appear
+ *   is the right v1 trade-off:
+ *   a 6-step tour with
+ *   120ms-per-step animation
+ *   delays the user 720ms
+ *   total; for a tool where
+ *   the tour is meant to be
+ *   "5 seconds to get
+ *   oriented," that's a
+ *   noticeable cost.
+ *
+ * Z-index:
+ *   `--z-modal` is 200. The
+ *   command palette uses
+ *   `--z-modal` too. The
+ *   tour should not show on
+ *   top of an open command
+ *   palette (the palette is
+ *   a focused-task UI, the
+ *   tour is an orientation
+ *   UI). The tour's auto-start
+ *   effect is gated on
+ *   `currentPath !== null`,
+ *   so the tour only starts
+ *   in the editor, not on
+ *   the Welcome screen. The
+ *   user can also ESC out of
+ *   the tour. The
+ *   command-palette is
+ *   reachable from inside
+ *   the tour via Cmd-Shift-P;
+ *   when the user invokes a
+ *   command, the tour's
+ *   `next` / `prev`
+ *   keyboard listeners do
+ *   NOT fire (the palette
+ *   input swallows
+ *   keystrokes). The
+ *   z-index collision is
+ *   therefore a non-issue.
+ */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+
+.callout {
+  position: absolute;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  cursor: auto;
+  pointer-events: auto;
+  /* The callout has its own
+   * click target so a click
+   * inside the callout does
+   * NOT bubble to the
+   * backdrop (which would
+   * dismiss the tour). The
+   * backdrop's onClick
+   * checks
+   * `e.target === e.currentTarget`
+   * to enforce this. */
+}
+
+/* Arrow pseudo-element. The
+ * `data-side` attribute on the
+ * callout selects which side
+ * the arrow renders on. The
+ * default (no `data-side`) is
+ * "center" — no arrow. */
+.callout::before {
+  content: '';
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  /* Centered steps don't have
+   * an arrow. The defaults
+   * below position the arrow
+   * for each side; a
+   * `data-side="center"`
+   * attribute hides it. */
+}
+
+.callout[data-side='top']::before {
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 8px 8px 0 8px;
+  border-color: var(--color-border-strong) transparent
+    transparent transparent;
+}
+.callout[data-side='top']::after {
+  /* Inner arrow to mask the
+   * outer arrow's border. */
+  content: '';
+  position: absolute;
+  bottom: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 7px 7px 0 7px;
+  border-color: var(--color-bg-elevated) transparent
+    transparent transparent;
+}
+
+.callout[data-side='bottom']::before {
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 0 8px 8px 8px;
+  border-color: transparent transparent var(--color-border-strong)
+    transparent;
+}
+.callout[data-side='bottom']::after {
+  content: '';
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 7px 7px 7px;
+  border-color: transparent transparent var(--color-bg-elevated)
+    transparent;
+}
+
+.callout[data-side='left']::before {
+  right: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-width: 8px 0 8px 8px;
+  border-color: transparent transparent transparent
+    var(--color-border-strong);
+}
+.callout[data-side='left']::after {
+  content: '';
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 7px 0 7px 7px;
+  border-color: transparent transparent transparent
+    var(--color-bg-elevated);
+}
+
+.callout[data-side='right']::before {
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-width: 8px 8px 8px 0;
+  border-color: transparent var(--color-border-strong) transparent
+    transparent;
+}
+.callout[data-side='right']::after {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 7px 7px 7px 0;
+  border-color: transparent var(--color-bg-elevated) transparent
+    transparent;
+}
+
+.body {
+  padding: var(--space-4);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.stepCounter {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+  line-height: var(--line-height-tight);
+}
+
+.body2 {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.actions {
+  margin-top: var(--space-1);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.keyHint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  margin-top: var(--space-1);
+}
+
+.keyHintLabel {
+  margin: 0 var(--space-1);
+}
+
+.keyHintSeparator {
+  margin: 0 var(--space-1);
+  color: var(--color-text-muted);
+}

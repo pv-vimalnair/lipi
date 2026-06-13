@@ -19,3 +19,4 @@ export * from './FirstRunOnboarding';
 export * from './AboutModal';
 export * from './VoiceButton';
 export * from './VoiceAnnouncer';
+export * from './OnboardingTour';

@@ -92,6 +92,7 @@ import { useAboutStore } from '@/shared/state/aboutStore';
 import { useAiStore } from '@/screens/EditorWorkspace/state/aiStore';
 import { useDeviceEmulatorStore } from '@/dev/state/deviceEmulatorStore';
 import { useFirstRunStore } from '@/shared/state/firstRunStore';
+import { useTourStore } from '@/shared/state/tourStore';
 import { useToolDecisionLogStore } from '@/shared/state/toolDecisionLogStore';
 import { useToolSettingsStore } from '@/shared/state/toolSettingsStore';
 import { useCustomToolsStore } from '@/shared/state/customToolsStore';
@@ -307,6 +308,48 @@ export const COMMANDS: readonly Command[] = [
       if (path !== null) {
         useWorkspaceStore.getState().close();
       }
+    },
+  },
+
+  // -- K (onboarding tour) ------------------------------------
+  // The tour is auto-shown
+  // the first time the user
+  // opens a workspace. This
+  // command is the "show it
+  // again" entry point —
+  // useful when the user
+  // dismissed the tour
+  // halfway through, or when
+  // a returning user wants
+  // to refresh their memory
+  // of where things are.
+  //
+  // The command always
+  // starts the tour from
+  // step 0 (even if the
+  // previous run was on
+  // step 3). The v1 step
+  // cursor is not persisted,
+  // so the user always
+  // restarts from the top.
+  {
+    id: 'tour.restart',
+    title: 'Restart onboarding tour',
+    subtitle: 'Show the welcome tour again (walks through the four panes)',
+    group: 'Help',
+    keywords: [
+      'tour',
+      'onboarding',
+      'walkthrough',
+      'guide',
+      'show',
+      'me',
+      'around',
+      'help',
+      'tutorial',
+    ],
+    run: () => {
+      useTourStore.getState().start();
     },
   },
 

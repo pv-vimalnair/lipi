@@ -47,7 +47,11 @@ export function SidePanelPane() {
   }
 
   return (
-    <div className={styles.root} style={{ gridArea: 'side' }}>
+    <div
+      className={styles.root}
+      style={{ gridArea: 'side' }}
+      data-tour-target="sidePanel"
+    >
       <div className={styles.tabBar} role="tablist" aria-label="Side panel">
         <TabButton
           active={tab === 'git'}

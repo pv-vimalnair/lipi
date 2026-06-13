@@ -1164,6 +1164,7 @@ function Composer({ status, disabled, onSend, onStop }: ComposerProps) {
       <span
         className={styles.voiceCluster}
         title="Toggle voice (Ctrl/Cmd+Shift+V)"
+        data-tour-target="aiVoiceButton"
       >
         <VoiceButton
           disabled={voiceDisabled}

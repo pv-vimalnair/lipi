@@ -7,6 +7,7 @@ import { Welcome } from '@/screens/Welcome';
 import { useAppStore } from '@/shared/state/appStore';
 import { useAboutStore, aboutSelectors } from '@/shared/state/aboutStore';
 import { useFirstRunStore } from '@/shared/state/firstRunStore';
+import { useTourStore } from '@/shared/state/tourStore';
 import {
   useWorkspaceStore,
 } from '@/shared/state/workspaceStore';
@@ -15,6 +16,7 @@ import {
   AboutModal,
   CommandPaletteModal,
   FirstRunOnboarding,
+  OnboardingTour,
   VoiceAnnouncer,
 } from '@/shared/components';
 import {
@@ -180,6 +182,7 @@ function AppRoot() {
   useEffect(() => {
     useWorkspaceStore.getState().hydrate();
     useFirstRunStore.getState().hydrate();
+    useTourStore.getState().hydrate();
     // F.3: dismiss the cold-start splash. The splash is a pure-CSS
     // surface in index.html that shows from page load until the
     // first React commit; setting the `splash-done` class on the
@@ -210,6 +213,16 @@ function AppRoot() {
           Welcome screen, AND the editor - same isolation rule
           as CommandPaletteModal. */}
       <AboutModal open={aboutOpen} onClose={hideAbout} />
+      {/* K: onboarding tour. Mounted at the AppRoot
+          level so the overlay can highlight editor
+          features. The auto-start effect (inside
+          OnboardingTour) reads both the tour store
+          and the workspace store; it starts the
+          tour only when both have hydrated AND the
+          user has a workspace open AND they
+          haven't dismissed the tour on a previous
+          launch. */}
+      <OnboardingTour />
     </>
   );
 }

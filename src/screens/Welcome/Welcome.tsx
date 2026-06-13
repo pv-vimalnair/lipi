@@ -176,6 +176,7 @@ export function Welcome({
             }}
             loading={isOpening}
             aria-keyshortcuts="Control+Shift+O Meta+Shift+O"
+            data-tour-target="welcome.openFolder"
           >
             Open Folder
           </Button>

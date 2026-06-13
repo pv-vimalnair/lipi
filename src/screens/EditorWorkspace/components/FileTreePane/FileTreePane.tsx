@@ -61,21 +61,23 @@ export function FileTreePane() {
         )
       }
     >
-      {status.kind === 'idle' || status.kind === 'opening' ? (
-        <div className={styles.placeholder}>
-          <p>No folder open.</p>
-          <Button variant="primary" size="sm" onClick={openFolder}>
-            Open folder…
-          </Button>
-        </div>
-      ) : status.kind === 'error' ? (
-        <div className={styles.placeholder} role="alert">
-          <p>Couldn't read folder:</p>
-          <code>{status.message}</code>
-        </div>
-      ) : (
-        <TreeRoot rootPath={status.rootPath ?? rootPath ?? ''} />
-      )}
+      <div data-tour-target="fileTree" style={{ height: '100%' }}>
+        {status.kind === 'idle' || status.kind === 'opening' ? (
+          <div className={styles.placeholder}>
+            <p>No folder open.</p>
+            <Button variant="primary" size="sm" onClick={openFolder}>
+              Open folder…
+            </Button>
+          </div>
+        ) : status.kind === 'error' ? (
+          <div className={styles.placeholder} role="alert">
+            <p>Couldn't read folder:</p>
+            <code>{status.message}</code>
+          </div>
+        ) : (
+          <TreeRoot rootPath={status.rootPath ?? rootPath ?? ''} />
+        )}
+      </div>
     </PaneShell>
   );
 }

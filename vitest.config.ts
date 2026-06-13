@@ -34,5 +34,21 @@ export default defineConfig({
     environment: 'jsdom',
     globals: false,
     include: ['src/**/*.test.{ts,tsx}'],
+    // The `IS_REACT_ACT_ENVIRONMENT` global
+    // tells React that we're inside an
+    // act()-aware test runner. Without
+    // this, React logs
+    // "The current testing environment is
+    // not configured to support act(...)"
+    // warnings on every state update.
+    // The setting is read at import time,
+    // so it has to be set before any React
+    // import — which means it has to be
+    // set in the config, not in a
+    // `setupFiles` script. (Vitest exposes
+    // a `setupFiles` option, but the env
+    // flag is read earlier than the
+    // `setupFiles` hooks fire.)
+    setupFiles: ['./vitest.setup.ts'],
   },
 });

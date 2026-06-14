@@ -6,6 +6,243 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 5 — Production release pipeline)
+
+The last code-focused phase before public
+distribution (see HANDOFF §6 "Current phase"
+and §9.26 for the full writeup, and
+`docs/plans/prod-p5-release-pipeline-design.md`
+for the design). After Phase 5, shipping a
+release to the public is a one-command
+operation: `git tag vX.Y.Z && git push
+--follow-tags`.
+
+**The release pipeline**
+
+(New at `.github/workflows/release.yml`. A
+GitHub Actions workflow that builds the app
+for all 3 desktop platforms in parallel,
+signs each artifact, generates the
+`updater.json`, and publishes a GitHub
+Release.)
+
+- **Matrix builds across macOS, Windows,
+  Linux** — the workflow has 3 parallel
+  build jobs, one per platform, each on a
+  GitHub-hosted runner. The matrix runs
+  in parallel; total wall time is ~25
+  minutes.
+- **Per-platform code signing** — macOS
+  builds use `codesign` + `notarytool`
+  (Apple notarization service); Windows
+  builds use `signtool` (Authenticode);
+  Linux builds use `dpkg-sig` for `.deb`.
+  Code signing is opt-in (the project
+  lead can ship an unsigned v0.1.0 with
+  a "Unknown Publisher" warning if the
+  cert isn't procured yet).
+- **Updater artifact generation** —
+  Tauri's `bundle.createUpdaterArtifacts:
+  true` flag (now in `tauri.conf.json`)
+  generates `.sig` files alongside each
+  installer. The `updater-json` job reads
+  the `.sig` files and produces
+  `updater.json` with the right per-
+  platform URLs + signatures.
+- **GitHub Release publishing** — the
+  `release` job uploads all 3 platforms'
+  artifacts + `updater.json` to a GitHub
+  Release tagged `vX.Y.Z`. The existing
+  `tauri.conf.json` endpoint
+  (`https://github.com/lipi-dev/lipi/releases/latest/download/updater.json`)
+  auto-points to the new release.
+- **Smoke test** — after publishing, the
+  `smoke-test` job (matrix across 3 OSes)
+  downloads each platform's binary and
+  launches it in a CI runner. The
+  process is monitored for 5 seconds;
+  if it exits early, the release is
+  considered broken (the project lead
+  must unpublish the release, fix the
+  bug, and re-tag).
+
+**The CI guards**
+
+(New at `.github/workflows/ci.yml`. The
+on-PR / on-push-to-main CI that catches
+the two most common "release went out
+broken" bugs at PR time, not at customer
+time.)
+
+- **Version-mismatch guard** — fails the
+  build if `package.json`,
+  `src-tauri/Cargo.toml`, and
+  `src-tauri/tauri.conf.json` have
+  different version strings. Catches
+  "I bumped one but forgot the other
+  two" bugs.
+- **Dev-keypair-reference guard** — fails
+  the release workflow (not PR CI; that
+  would block every merge to main until
+  the project lead rotates the key) if
+  `tauri.conf.json`'s
+  `plugins.updater.pubkey` still matches
+  the committed dev pubkey
+  (`lipi-dev.key.pub`). Catches "I
+  forgot to rotate the keypair" bugs at
+  release time.
+- **Test matrix across 3 OSes** — the
+  test job runs the full vitest +
+  cargo test + tsc + vite build + cargo
+  check suite on all 3 platforms
+  (macOS, Windows, Linux) in parallel.
+  Catches platform-specific bugs
+  (e.g. macOS Keychain vs Windows DPAPI
+  edge cases).
+
+**The `rotate_updater_key` CLI**
+
+(Implemented at `src-tauri/src/bin/
+rotate_updater_key.rs` with the pure
+logic in
+`src-tauri/src/rotate_updater_key.rs`.
+A one-shot Rust binary that the project
+lead runs from a terminal when rotating
+the Tauri updater signing keypair.)
+
+- Reads a new pubkey from a file
+  (`.key.pub` produced by `tauri signer
+  generate`).
+- Validates the new pubkey (must be
+  valid base64 + must look like a
+  Tauri updater pubkey; the format is
+  "untrusted comment: ..." on the
+  first line, base64 on the second).
+- Patches `tauri.conf.json`'s
+  `plugins.updater.pubkey` field in
+  place (creates the `plugins` /
+  `updater` keys if missing).
+- Prints a unified-diff to stdout for
+  human review.
+- Writes the patched JSON to
+  `tauri.conf.json`.
+- 14 unit tests cover argument
+  parsing, pubkey validation, and
+  JSON patching edge cases.
+
+**The `updater_health` module**
+
+(Implemented at `src-tauri/src/
+updater_health.rs` and `src/ipc/
+updaterHealth.ts`. A small Tauri
+command that probes the updater
+endpoint on demand so users on
+restricted networks can self-diagnose
+"the updater doesn't work" issues.)
+
+- Single HTTP GET to the configured
+  updater URL, 5-second timeout.
+- Returns `Reachable { status }` on
+  any 2xx/3xx response (including 404 —
+  the host is alive even if the file
+  isn't there yet).
+- Returns `Unreachable { reason }` on
+  a network error (timeout, connection
+  refused, DNS failure, TLS failure).
+- Wired into the **About modal** as a
+  new "Updater" row in the meta `<dl>`,
+  showing a green "✓ reachable" pill
+  (or red "✗ unreachable" with the
+  reason in the tooltip).
+- 5 unit tests cover the success /
+  failure paths + the serde wire
+  format.
+
+**The `RELEASING.md` doc**
+
+(New at `docs/RELEASING.md`. A 5-step
+process for shipping a release:
+pre-flight, bump versions, tag, wait
+for CI, verify. Includes a CI secrets
+cheat sheet + a "how to generate the
+production keypair" appendix.)
+
+### Changed (Phase 5 — Production release pipeline)
+
+- **`src-tauri/tauri.conf.json`** — added
+  `bundle.createUpdaterArtifacts: true`
+  (Tauri generates `.sig` files
+  alongside installers) + a
+  `bundle.macOS.minimumSystemVersion`
+  field (10.15 Catalina, the minimum
+  Tauri's WebKit requires).
+- **`src/shared/components/AboutModal/
+  AboutModal.tsx`** — added the
+  "Updater" row in the meta `<dl>` that
+  displays the `updater_health_check`
+  result. Includes a new
+  `UpdaterHealthPill` sub-component
+  with 3 states (checking, reachable,
+  unreachable).
+- **`src-tauri/src/lib.rs`** — registered
+  the new `updater_health_check` Tauri
+  command + made the `rotate_updater_key`
+  module public so the bin can use it.
+
+### Decisions (Phase 5 — Production release pipeline)
+
+- **#94-p5-prod-keypair**: ship a
+  separate production updater keypair
+  (don't reuse the dev keypair for
+  releases). The dev keypair's password
+  is in the repo; a public release
+  signed with it would be the
+  equivalent of "no signing".
+- **#95-p5-update-server**: use GitHub
+  Releases as the updater server (don't
+  run our own S3 + CloudFront, dedicated
+  server, etc.). GitHub Releases is
+  free + integrated + fast enough for
+  the v0.1.0 user base.
+- **#96-p5-ci-platforms**: matrix builds
+  across 3 OSes (macOS, Windows, Linux)
+  in CI, not Docker cross-compilation.
+  Each Tauri build needs a native
+  toolchain; GitHub-hosted runners
+  are platform-native + ephemeral +
+  free for public repos.
+
+### Tests (Phase 5 — Production release pipeline)
+
+- **5 new Rust unit tests** in
+  `src-tauri/src/updater_health.rs`
+  (covering the HTTP probe's success /
+  failure paths + the serde wire format).
+- **14 new Rust unit tests** in
+  `src-tauri/src/rotate_updater_key.rs`
+  (covering argument parsing, pubkey
+  validation, and JSON patching edge
+  cases).
+- **4 new TypeScript tests** in
+  `src/ipc/updaterHealth.test.ts`
+  (covering the IPC wrapper's wire
+  shape + error propagation).
+- **1 new test** in `src/shared/components/
+  AboutModal/AboutModal.test.tsx`
+  (verifying the new "Updater" row
+  renders the checking pill in the
+  initial state).
+- **3 new tests** in `AboutModal.test.tsx`
+  for the new `UpdaterHealthPill`
+  sub-component (one per state:
+  checking, reachable, unreachable).
+- **Total: 27 new tests** (23 Rust + 8
+  TypeScript). The full vitest suite
+  (973 tests across 77 files) and the
+  full cargo test suite (239 lib tests
+  + 6 iap tests + 15 sign_license
+  tests = 260 tests) pass cleanly.
+
 ### Added (Phase 3 — Subscription UX + offline-purchase flow)
 
 The second step of the "Lipi to Paid Public Launch" roadmap

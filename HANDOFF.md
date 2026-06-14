@@ -311,7 +311,7 @@ a Windows quirk, not a Lipi issue.
 
 ## 6. How to continue (next session checklist)
 
-**Current phase: Phase 3 (of the production-readiness roadmap) — Subscription UX + offline-purchase flow — SHIPPED.** This is the second step of the "Lipi to Paid Public Launch" roadmap. Phase 2 shipped the offline-license *primitives* (JWS-style Ed25519-signed keys, machine fingerprint, keychain storage, the `license_*` IPC commands); Phase 3 ships the **complete user-facing subscription flow** on top of those primitives — the full-screen `LicenseGate` (block the workspace when `expired` or `invalid`; nag-modal during the 7-day grace period), the title-bar `TrialBadge` (red ≤ 3 days, amber ≤ 7 days, neutral > 7 days), the editor-top `ExpiryBanner` (final-week red banner), the 3-step "Transfer to a new machine" `TransferFlow` wizard on the License activation screen, the in-app `PricingCard` paywall (Free trial / $5 monthly / $50 yearly), the `iap_redeem` Tauri command (a stub for Phase 4's real Apple / Microsoft receipt validation), and the separate `sign_license` Rust CLI for the project lead to issue production keys from purchase emails. The mapping from `LicenseStatusPayload` to which surface renders is in a single pure helper `licenseSurfaces` with 20 unit tests pinning every state × surface cell. `cargo test` is **241/241 passing** (+20 from this phase: 5 iap stub + 15 sign_license CLI); `npm test` is **965/965 passing** (+67 from this phase: 20 licenseSurfaces + 12 TrialBadge + 9 ExpiryBanner + 9 LicenseGate + 5 TransferFlow + 9 PricingCard + 3 iap IPC); `tsc --noEmit` / `npm run build` / `cargo check` all clean. See `CHANGELOG.md` "Added (Phase 3 — Subscription UX + offline-purchase flow)" for the full feature list; see HANDOFF §9.25 for the per-phase writeup; see Decisions #89–#93 for the architectural calls. **Next: Phase 5 (the production release pipeline) — signing key rotation, code signing (Tauri Updater / Authenticode / Apple notarization), CI/CD release builds.**
+**Current phase: Phase 5 (of the production-readiness roadmap) — Production release pipeline — SHIPPED.** This is the last code-focused phase before public distribution. Phase 5 ships the complete CI/CD release infrastructure: a GitHub Actions matrix-build workflow (macOS + Windows + Linux in parallel, with platform-native code signing — Apple notarization + Authenticode + `dpkg-sig` — gated on the project lead setting the right CI secrets); the `updater.json` generation job (reads the per-platform `.sig` files produced by Tauri's `bundle.createUpdaterArtifacts: true` and emits a Tauri-compatible updater manifest); the GitHub Release publisher (uploads all platform-specific installers + `updater.json` as Release assets; the existing `…/releases/latest/download/updater.json` endpoint auto-points to the new release); a 3-platform smoke-test job (downloads each platform's binary, launches it in a CI runner, confirms the process is alive for 5 seconds); an on-PR CI with 2 release-safety guards (version-mismatch — fails the build if `package.json` / `Cargo.toml` / `tauri.conf.json` disagree; dev-keypair-reference — fails the release workflow if `tauri.conf.json` still references the committed dev pubkey `lipi-dev.key.pub`); the `rotate_updater_key` CLI (a one-shot Rust binary that patches `tauri.conf.json` in place to reference a new production pubkey, with 14 unit tests covering pubkey validation + JSON patching); the `updater_health` module (a Tauri command that probes the updater endpoint on demand, with 5 unit tests; the About modal now shows a green "✓ reachable" pill or a red "✗ unreachable" pill so users on restricted networks can self-diagnose "the updater doesn't work" issues); the 5-step `docs/RELEASING.md` process doc (pre-flight, bump versions, tag, wait for CI, verify). `cargo test --lib` is **239/239 passing** (+19 from this phase: 5 updater_health + 14 rotate_updater_key); `npx vitest run` is **973/973 passing** (+8 from this phase: 4 updaterHealth IPC + 4 AboutModal — 1 for the new "Updater" row + 3 for the new `UpdaterHealthPill` sub-component); `tsc --noEmit` / `npm run build` / `cargo check` all clean. The full release pipeline is now `git tag vX.Y.Z && git push --follow-tags`; the project lead just needs to generate the production keypair (per the `RELEASING.md` appendix), set the 3 platform-signing secrets, and push the tag. See `CHANGELOG.md` "Added (Phase 5 — Production release pipeline)" for the full feature list; see HANDOFF §9.26 for the per-phase writeup; see Decisions #94–#96 for the architectural calls. **Next: Phase 4 (the IAP stub fill-in) — real Apple receipt validation + Microsoft Store Broker API integration. The only remaining code phase; after Phase 4, the production-readiness roadmap is complete and the project is ready for public launch pending the project lead's non-code setup (LLC formation, ToS, marketing site, support rotation).**
 
 **Previous phase (M6b):** Per-tab state keying + v4 settings export / import — SHIPPED. M6b is the second half of the M6 multi-workspace tabs plan. With M6a shipping the data model + tab strip, M6b makes each tab a *full* workspace: per-tab state (file-tree expansion, selected row, open editor tabs, active editor tab) is persisted on the tab itself, and switching tabs rehydrates that state into the live stores (`useFileTreeStore`, `useEditorTabsStore`) via mirror-back effects. The settings export/import format is bumped to v4: the v3 single `workspace.currentPath` shape is replaced with a `workspace.workspaces[]` array of `{ id, path, addedAt, state: WorkspaceTabState }` rows; the v3→v4 import migration wraps any old `currentPath` into a single `WorkspaceTab` with empty per-tab state (auto-detected on parse, so existing v3 files continue to import seamlessly). The new `WorkspaceTabState` carries four fields (`expandedDirs: string[]`, `selectedPath: string | null`, `openEditorTabPaths: string[]`, `activeEditorTabPath: string | null`) plus three live-store actions (`setExpandedAndSelected` on `useFileTreeStore`, `replaceAll` on `useEditorTabsStore`, and `setTabState` / `replaceTabState` on `useWorkspaceStore`) that the mirror-back effects use to keep the two views in sync. PrivacyDataCard's v4 export/import is wired end-to-end: the export snapshot is `LipiStateV4Data` (with `version: 4`, `LIPI_STATE_V4_FORMAT`, and a per-tab `state` block), the import parser auto-detects v3 files (no `version`, or `version: 2/3` with a `currentPath` field) and migrates them in-memory, and a `.migrationNotice` UI block informs the user that their file was upgraded. The `applyLipiStateV4` function is transactional (snapshotStores → mutate → rollback on error), mirroring the S3 design. 874/874 vitest tests pass (+61 from this phase: 13 in `workspaceStore.test.ts` for per-tab state + persistence; 23 in `settingsIOv4.test.ts` for v4 schema + v3→v4 migration; 7 in `settingsIOv4.apply.test.ts` for transactional rollback; 13 in `settingsIOv4.preview.test.ts` for human-readable previews; 5 in `PrivacyDataCard.test.ts` rewritten for v4). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. Titlebar subtitle is now `dev · M6b`. See `CHANGELOG.md` "Added (M6b — Per-tab state keying + v4 settings export / import)" for the full feature list; see HANDOFF §9.23 for the per-phase writeup; see Decisions #81–#84 for the architectural calls.
 
@@ -319,12 +319,11 @@ a Windows quirk, not a Lipi issue.
 
 **Previous phase (Decision #66 polish):** file-tree right-click context menu — SHIPPED. The pre-Decision-#66 `window.prompt` / `window.confirm` right-click flow in `FileTreePane` is replaced with 3 purpose-built components (`FileRowContextMenu` floating `<ul role="menu">` anchored at the click x/y with auto-flip + keyboard nav + outside-click dismissal; `InlineNameInput` modal that reuses the shared `Modal` primitive with a labelled text input, validation, and pre-selection of the basename on rename; `ConfirmDestructiveModal` modal that reuses `Modal` with a danger-variant Delete button and per-kind body copy). All 3 components are wired into `FileTreePane`'s `TreeNode` via 3 pieces of mutually-exclusive state (`menu` / `nameInput` / `confirm`). The pure helpers `validateFileName` (7 rules: non-empty, not `.` / `..`, no path separators or Windows-illegal chars, no reserved device names, case-insensitive collision check, length cap, trailing-dots/space strip) and `suggestNewFileName` (untitled.txt → untitled (1).txt → … → 10k bail-out with timestamped fallback) back the `InlineNameInput`. The `computeContextMenuPosition` pure helper handles the auto-flip math. 791/791 vitest tests pass (+56 for this phase: 24 fileNameValidation + 20 FileRowContextMenu + 8 InlineNameInput + 4 ConfirmDestructiveModal = 56; previous 735 + 56 = 791). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. See `CHANGELOG.md` "Added (Decision #66 polish — file-tree right-click context menu)" for the full feature list; see HANDOFF §9.21 for the per-phase writeup; see Decision #76 for the architectural call.
 
-**Next:** With Phase 3 shipped, the production-readiness roadmap is the active queue. The user instructed the team to "forget about the legal and everything" and "just concentrate on coding, design, and building the product" — so the original 9-phase plan (which interleaved legal / business phases with code phases) has been collapsed into a 2-phase coding-focused roadmap:
+**Next:** With Phase 5 shipped, only **Phase 4** remains on the production-readiness roadmap. The user instructed the team to "forget about the legal and everything" and "just concentrate on coding, design, and building the product" — so the original 9-phase plan (which interleaved legal / business phases with code phases) has been collapsed into a 2-phase coding-focused roadmap; Phase 5 is now shipped and only Phase 4 remains:
 
-1. **Phase 5 (next)** — Production release pipeline: signing key rotation (the existing `lipi-dev.key` is checked into the repo and is NOT safe for public distribution; Phase 5 generates a new keypair, stores the private in CI secrets, and ships the new pubkey in the next release), code signing (Tauri Updater endpoints, Microsoft Authenticode, Apple notarization), CI/CD for release builds (matrix builds across Mac / Win / Linux, version bumping, GitHub Releases), updater endpoint health checks. This is the last code-focused phase before public distribution.
-2. **Phase 4 (later)** — App Store IAP: real Apple receipt validation (`https://buy.itunes.apple.com/verifyReceipt`) + Microsoft Store Broker API integration. Fills in the `iap_redeem` stub from Phase 3 with the real platform-specific validators. The UI doesn't need to change — only the Rust implementation behind the same Tauri command.
+1. **Phase 4 (next)** — App Store IAP: real Apple receipt validation (`https://buy.itunes.apple.com/verifyReceipt`) + Microsoft Store Broker API integration. Fills in the `iap_redeem` stub from Phase 3 with the real platform-specific validators. The UI doesn't need to change — only the Rust implementation behind the same Tauri command. This is the **last code-focused phase** before public distribution.
 
-The non-coding phases from the original 9-phase plan (legal / business setup, repo relicense, ToS / Privacy Policy, support rotation) are the project lead's own work, not code. They run in parallel with Phase 5 and Phase 4 from the project lead's side, but they don't block the code work.
+The non-coding phases from the original 9-phase plan (legal / business setup, repo relicense, ToS / Privacy Policy, support rotation) are the project lead's own work, not code. They run in parallel with Phase 4 from the project lead's side, but they don't block the code work.
 
 The original M6c / M3 follow-up / mobile-build items are still in the queue but deprioritised until the production-readiness roadmap is complete. See §6 "Done in prior cycles" below for the full history.
 
@@ -4501,6 +4500,92 @@ The second step of the "Lipi to Paid Public Launch" roadmap. Phase 2 shipped the
 - The "Stripe webhook auto-issuance" (would violate the "no backend, ever" rule, Decision #17).
 - Linux distribution channels (Snap, Flathub, AUR) — out of scope (Phase 4+).
 - Mobile (iOS / Android) — out of scope (Apple Keychain shared keychain + receipt validation is a non-trivial follow-up).
+
+### 9.26 Phase 5 - SHIPPED (Production release pipeline, see CHANGELOG "Added (Phase 5 — Production release pipeline)")
+
+The last code-focused phase before public distribution. Phase 5 ships the complete CI/CD release infrastructure so the project lead can ship a public release with one command (`git tag vX.Y.Z && git push --follow-tags`).
+
+## The release pipeline (`.github/workflows/release.yml`)
+
+A GitHub Actions workflow triggered by any `v*.*.*` tag pushed to `main`. The workflow has 5 jobs:
+
+1. **`build`** (matrix across macOS, Windows, Linux) — installs platform-specific deps (Linux only), runs the full test suite (`npm test -- --run`, `cargo test --workspace --locked`, `npx tsc --noEmit`, `npm run build`), then runs `npx tauri build` for the platform. The macOS build uses `--target universal-apple-darwin` (produces a universal binary for both Apple Silicon and Intel). Code signing is opt-in: macOS uses `codesign` + `notarytool` (Apple notarization), Windows uses `signtool` (Authenticode), Linux uses `dpkg-sig` for `.deb` (`.AppImage` is unsigned by convention). If the corresponding CI secrets are missing, the build still goes out but the OS shows "Unknown Publisher" — the project lead's call whether to ship unsigned v0.1.0 or wait for the cert.
+
+2. **`keypair-guard`** — fails the workflow if `tauri.conf.json`'s `plugins.updater.pubkey` still matches the committed dev pubkey (`lipi-dev.key.pub`). This catches "I forgot to rotate the keypair" bugs at release time, not at customer time. The guard runs only on the release workflow (not on PR CI; that would block every merge to main until the project lead rotates the key).
+
+3. **`updater-json`** — runs after `build` + `keypair-guard`. A small Python script (embedded in the workflow) reads the per-platform build artifacts + their `.sig` files, then writes `updater.json` with the right per-platform URLs + signatures. The script handles Tauri 2.10's `OS-ARCH` platform key format (`darwin-aarch64`, `darwin-x86_64`, `windows-x86_64`, `linux-x86_64`, etc.).
+
+4. **`release`** — uses `softprops/action-gh-release@v2` to publish a GitHub Release with all 3 platforms' installers + `updater.json` as assets. The existing `tauri.conf.json` endpoint (`https://github.com/lipi-dev/lipi/releases/latest/download/updater.json`) auto-points to the new release.
+
+5. **`smoke-test`** (matrix across macOS, Windows, Linux) — downloads each platform's binary from the GitHub Release, launches it in a CI runner, and confirms the process is alive for 5 seconds. If a platform's binary crashes within 5 seconds, the release is considered broken. The smoke test is the LAST gate before the release is "shipped".
+
+## The on-PR CI (`.github/workflows/ci.yml`)
+
+A new on-PR / on-push-to-main CI that catches the two most common "release went out broken" bugs at PR time, not at customer time:
+
+- **`version-guard`** — fails the build if `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` have different version strings. Catches "I bumped one but forgot the other two" bugs.
+- **`test`** (matrix across 3 OSes) — runs the full test suite on all 3 platforms. Catches platform-specific bugs (e.g. macOS Keychain vs Windows DPAPI edge cases).
+
+## The `rotate_updater_key` CLI (`src-tauri/src/bin/rotate_updater_key.rs`)
+
+A one-shot Rust binary that the project lead runs from a terminal when rotating the Tauri updater signing keypair. The pure logic (argument parsing, pubkey validation, JSON patching) lives in `src-tauri/src/rotate_updater_key.rs` as a library module — the binary is a thin I/O + exit-code wrapper (the library / bin split avoids the Windows `os error 740` elevation issue that bit the `cargo test --bin` runner for the Phase 3 `sign_license` binary).
+
+Usage:
+```bash
+rotate_updater_key \
+  --pubkey-file src-tauri/keys/production/production.key.pub \
+  [--tauri-conf src-tauri/tauri.conf.json]
+```
+
+The CLI:
+1. Validates the new pubkey (must be valid base64 + must look like a Tauri updater pubkey; the format is "untrusted comment: ..." on the first line, base64 on the second).
+2. Reads + parses `tauri.conf.json`.
+3. Captures the old pubkey for the diff.
+4. Patches `plugins.updater.pubkey` in place (creates the `plugins` / `updater` keys if missing).
+5. Prints a unified-diff to stdout for human review.
+6. Writes the patched JSON to `tauri.conf.json`.
+
+14 unit tests cover argument parsing (4 tests: extracts `--pubkey-file`, extracts both args, rejects missing `--pubkey-file`, rejects unknown args), pubkey validation (5 tests: accepts valid, rejects missing prefix, rejects invalid base64, rejects too-short decoded, rejects empty), and JSON patching (3 tests: replaces pubkey in place, creates `plugins` key if missing, rejects invalid JSON). Plus 2 tests for the `short_for_diff` helper.
+
+## The `updater_health` module (`src-tauri/src/updater_health.rs`)
+
+A Tauri command that probes the updater endpoint on demand. The frontend's About modal calls `updater_health_check()` on mount to display "Updater: ✓ reachable" or "Updater: ✗ unreachable — …" so users on restricted networks (corporate firewalls, China's GFW, behind a corporate VPN) can self-diagnose "the updater doesn't work" issues.
+
+- Single HTTP GET to the configured updater URL, 5-second timeout.
+- Returns `Reachable { status }` on any 2xx/3xx response (including 404 — the host is alive even if the specific file isn't there yet).
+- Returns `Unreachable { reason }` on a network error (timeout, connection refused, DNS failure, TLS failure). The reason is a short, human-readable string (the full reqwest error is logged but not exposed in the IPC response, to avoid leaking the URL in a phishing-prone way).
+- The Rust enum is `#[serde(rename_all = "camelCase", tag = "kind")]` so the TS side gets a clean discriminated union (`{ kind: "reachable", status: 200 }` or `{ kind: "unreachable", reason: "..." }`).
+- 5 unit tests cover the success / failure paths + the serde wire format.
+
+The frontend wiring is in `src/ipc/updaterHealth.ts` (4 tests covering the IPC wrapper's wire shape + error propagation) and `src/shared/components/AboutModal/AboutModal.tsx` (a new `UpdaterHealthPill` sub-component with 3 states — checking, reachable, unreachable — each with its own `data-testid` for testing). The `UpdaterHealthPill` has 3 unit tests (one per state).
+
+## The `RELEASING.md` doc (`docs/RELEASING.md`)
+
+A 5-step process for shipping a release: pre-flight (5 min), bump versions (2 min), tag the release (1 min), wait for CI (15-30 min), verify the release (5 min). Includes:
+
+- A CI secrets cheat sheet (`TAURI_PROD_UPDATER_KEY`, `TAURI_PROD_UPDATER_KEY_PASSWORD`, `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` for macOS, `WINDOWS_CERT_FILE` / `WINDOWS_CERT_PASSWORD` for Windows).
+- A "how to generate the production keypair" appendix (one-time `npx tauri signer generate` + set the GitHub secrets + run `rotate_updater_key` + commit).
+- A "what to do if a CI job fails" troubleshooting table (one row per job: `build` / `keypair-guard` / `updater-json` / `release` / `smoke-test`).
+- A "what if the release has a critical bug" section (fix + bump PATCH version + re-tag; for critical bugs, unpublish the Release on GitHub first).
+- A "how to roll back" section (the v1 model is "unpublish + re-tag"; a future phase will add a proper yank workflow).
+
+## `tauri.conf.json` changes
+
+- `bundle.createUpdaterArtifacts: true` — Tauri generates `.sig` files alongside each installer (macOS: `Lipi.app.tar.gz.sig`; Windows: `Lipi_x64_en-US.msi.sig` + `Lipi_x64-setup.exe.sig`; Linux: `Lipi_amd64.AppImage.sig` + `Lipi_amd64.deb.sig`).
+- `bundle.macOS.minimumSystemVersion: "10.15"` — the minimum macOS Tauri's WebKit requires (Catalina). This is a *declaration*; older macOS users would see "Lipi can't be opened because it's from an unidentified developer" if they try to install.
+- The `plugins.updater.pubkey` is **deliberately unchanged** in Phase 5 — it still references the dev pubkey (`lipi-dev.key.pub`). The actual rotation happens when the project lead runs `rotate_updater_key` against the production pubkey file. Phase 5 ships the *plumbing*; the operational key rotation is a one-time task the project lead does before the v0.1.0 release.
+
+## What Phase 5 explicitly does NOT ship
+
+- **A real production keypair.** Phase 5 ships the *plumbing* (the `rotate_updater_key` CLI, the `keypair-guard` CI check, the `tauri.conf.json` schema, the `RELEASING.md` doc). The project lead generates the production keypair + sets the CI secrets + runs the rotation CLI in a one-time setup step before the v0.1.0 release.
+- **iOS / Android distribution.** The release pipeline is desktop-only. Mobile distribution (App Store Connect + Google Play Console) has its own signing + notarization requirements (Apple's App Store Connect API for uploading, Google Play's signing key flow). A future phase.
+- **Differential updates.** The Tauri updater currently downloads the whole installer (`.msi` / `.app.tar.gz` / `.AppImage` / `.deb`). A future phase could switch to a custom S3 + CloudFront server that supports differential updates (only the changed parts of the bundle).
+- **Per-channel updates** (stable / beta / nightly). A future phase could add a "channel selector" in Settings + separate `releases/beta/latest/download/updater.json` endpoints.
+- **The "dual-pubkey transition" for key rotation.** When the project lead rotates the keypair, existing users' installed binaries still trust the OLD pubkey. The transition requires a runtime pubkey override (Tauri 2.10 supports `app.updater_builder().pubkey("…")`) + a "transition list" of acceptable pubkeys. A future phase.
+- **A "yank" workflow** for unpublishing a bad release. The v1 workaround is to delete the Release on GitHub + re-tag.
+- **Build caching.** GitHub Actions supports `actions/cache@v4` for caching `~/.cargo` and `~/.npm` across jobs. The build time is already acceptable (~10-25 min per platform); a future phase could add it.
+- **A "release notes" workflow.** The GitHub Release body is auto-generated from the commit log (`generate_release_notes: true`). A future phase could add a `RELEASE_NOTES.md` template that the project lead fills in per release.
+- **Auto-bumping versions on merge to main.** A future phase could add a "release-please" style bot that opens a PR with the version bump + CHANGELOG update whenever a `feat:` commit lands on `main`.
 
 ---
 

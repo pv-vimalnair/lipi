@@ -148,6 +148,35 @@ pub const PLAN_TRIAL: &str = "trial";
 pub const PLAN_MONTHLY: &str = "monthly";
 pub const PLAN_YEARLY: &str = "yearly";
 
+/// Key-id values for the `LicensePayload.kid` field.
+/// Identifies which pubkey to use to verify the
+/// signature. The verifier dispatches on this value
+/// (see `verify_license`).
+///
+/// - `KID_TRIAL` — the embedded trial pubkey
+///   (`TRIAL_PUBKEY`). Used for auto-generated
+///   trials.
+/// - `KID_OFFLINE` — the embedded production
+///   pubkey (`PROD_PUBKEY`). Used for
+///   `LIP1...` keys from purchase emails
+///   (signed by the project lead's
+///   `sign_license` CLI).
+/// - `KID_IAP_LOCAL` — the per-machine
+///   Ed25519 pubkey stored in the keychain
+///   (under `KEYCHAIN_USER_IAP_PUBKEY`).
+///   Used for IAP-generated licenses
+///   (signed with the per-machine privkey
+///   generated on first IAP redemption).
+///
+/// Phase 4 introduced the `kid` field. Older
+/// v0.0.x licenses (without `kid`) are treated
+/// as `KID_TRIAL` by the verifier for
+/// backward-compat (the original v0.0.x
+/// license format was trial-only).
+pub const KID_TRIAL: &str = "trial";
+pub const KID_OFFLINE: &str = "offline";
+pub const KID_IAP_LOCAL: &str = "iap-local";
+
 /// The grace period (in seconds) after expiry. A license that
 /// is past `exp` but within the grace period is `GracePeriod`,
 /// not `Expired`. After the grace period elapses, the status
@@ -162,7 +191,17 @@ pub const TRIAL_DURATION_SECS: i64 = 14 * 24 * 60 * 60;
 /// `secrets.rs` (Decision #23 — the service name = the bundle
 /// ID). The keychain namespaces by service, so a service rename
 /// would not migrate existing entries.
-const KEYCHAIN_SERVICE: &str = "app.lipi.ide";
+pub(crate) const KEYCHAIN_SERVICE: &str = "app.lipi.ide";
+
+/// `pub(crate)` accessor for the keychain service
+/// name. The `iap_keypair` module re-uses the same
+/// service for its per-machine IAP privkey +
+/// pubkey entries, so they all live under the
+/// same `app.lipi.ide` namespace.
+#[allow(dead_code)] // The const is referenced from `iap_keypair::service_name` test.
+pub(crate) fn keychain_service() -> &'static str {
+    KEYCHAIN_SERVICE
+}
 
 /// The keychain user-name for the license key string.
 /// We store the full `LIP1.payload.signature` key here;
@@ -177,6 +216,32 @@ const KEYCHAIN_SERVICE: &str = "app.lipi.ide";
 /// discusses it under "Persistence". We deferred
 /// this because the verify is already cheap.)
 const KEYCHAIN_USER_LICENSE: &str = "license";
+
+/// Keychain username for the per-machine IAP private
+/// key. 64 lowercase hex chars (32 bytes), generated
+/// on first IAP redemption. Used by `iap_keypair`.
+/// Private to this module; `iap_keypair` re-imports
+/// it via a `pub(crate)` accessor in the same crate.
+const KEYCHAIN_USER_IAP_PRIVKEY: &str = "iap-privkey";
+
+/// Keychain username for the per-machine IAP public
+/// key. 64 lowercase hex chars (32 bytes), the
+/// Ed25519 pubkey corresponding to the privkey.
+/// Used by `verify_license` to verify IAP-signed
+/// licenses.
+const KEYCHAIN_USER_IAP_PUBKEY: &str = "iap-pubkey";
+
+/// `pub(crate)` accessors so the `iap_keypair` module
+/// can read / write the IAP privkey + pubkey
+/// keychain entries without re-declaring the
+/// constants.
+pub(crate) fn keychain_user_iap_privkey() -> &'static str {
+    KEYCHAIN_USER_IAP_PRIVKEY
+}
+
+pub(crate) fn keychain_user_iap_pubkey() -> &'static str {
+    KEYCHAIN_USER_IAP_PUBKEY
+}
 
 // --- The payload ---------------------------------------------------
 
@@ -212,6 +277,22 @@ pub struct LicensePayload {
 
     /// Random per-license id (16 random hex chars).
     pub jti: String,
+
+    /// Key id — identifies which pubkey to use to
+    /// verify the signature. One of `KID_TRIAL`,
+    /// `KID_OFFLINE`, or `KID_IAP_LOCAL`. Optional
+    /// for backward-compat with v0.0.x licenses
+    /// (which predate the `kid` field); missing
+    /// `kid` is treated as `KID_TRIAL` by the
+    /// verifier.
+    ///
+    /// Phase 4 added this field. The IAP receipt
+    /// validator sets it to `KID_IAP_LOCAL`; the
+    /// project lead's `sign_license` CLI sets it
+    /// to `KID_OFFLINE`; the auto-generated trial
+    /// sets it to `KID_TRIAL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kid: Option<String>,
 }
 
 impl LicensePayload {
@@ -257,6 +338,13 @@ impl LicensePayload {
             return Err(LicenseError::InvalidShape {
                 detail: format!("exp {} is not after iat {}", self.exp, self.iat),
             });
+        }
+        if let Some(kid) = &self.kid {
+            if kid != KID_TRIAL && kid != KID_OFFLINE && kid != KID_IAP_LOCAL {
+                return Err(LicenseError::InvalidShape {
+                    detail: format!("unknown kid {:?} (expected one of {:?}, {:?}, {:?})", kid, KID_TRIAL, KID_OFFLINE, KID_IAP_LOCAL),
+                });
+            }
         }
         Ok(())
     }
@@ -352,6 +440,17 @@ pub enum LicenseError {
 
     #[error("keychain error: {detail}")]
     Platform { detail: String },
+
+    /// The IAP-issued license references a per-machine
+    /// pubkey (kid = "iap-local"), but the keychain
+    /// entry is missing. This happens when the user
+    /// has an IAP-generated license on a machine whose
+    /// keychain has been wiped (e.g. OS reinstall,
+    /// keychain corruption, new user account). The
+    /// recovery is to re-run the IAP flow (the user's
+    /// Apple / Microsoft subscription is unchanged).
+    #[error("IAP-local pubkey missing from keychain: {detail}")]
+    MissingLocalPubkey { detail: String },
 }
 
 impl From<keyring::Error> for LicenseError {
@@ -441,14 +540,27 @@ pub fn parse_key(key: &str) -> Result<(LicensePayload, Vec<u8>), LicenseError> {
 /// verified with the trial pubkey; everything else with the
 /// production pubkey.
 pub fn verify_license(key: &str) -> Result<LicensePayload, LicenseError> {
+    verify_license_with_pubkey_resolver(key, resolve_pubkey_for_kid)
+}
+
+/// Verify a license using a custom pubkey resolver. The
+/// default resolver (`resolve_pubkey_for_kid`) handles
+/// `KID_TRIAL` + `KID_OFFLINE` (embedded pubkeys) and
+/// `KID_IAP_LOCAL` (per-machine pubkey from the
+/// keychain). Tests pass a stub resolver to bypass the
+/// keychain.
+pub fn verify_license_with_pubkey_resolver<F>(
+    key: &str,
+    resolve_pubkey: F,
+) -> Result<LicensePayload, LicenseError>
+where
+    F: Fn(&str) -> Result<[u8; 32], LicenseError>,
+{
     let (payload, signature_bytes) = parse_key(key)?;
-    let pubkey_bytes: &[u8; 32] = if payload.plan == PLAN_TRIAL {
-        &TRIAL_PUBKEY
-    } else {
-        &PROD_PUBKEY
-    };
-    let verifying_key = VerifyingKey::from_bytes(pubkey_bytes).map_err(|e| LicenseError::InvalidShape {
-        detail: format!("invalid embedded pubkey: {e}"),
+    let kid = payload.kid.as_deref().unwrap_or(KID_TRIAL);
+    let pubkey_bytes = resolve_pubkey(kid)?;
+    let verifying_key = VerifyingKey::from_bytes(&pubkey_bytes).map_err(|e| LicenseError::InvalidShape {
+        detail: format!("invalid pubkey for kid {kid:?}: {e}"),
     })?;
     let signature = Signature::from_bytes(signature_bytes.as_slice().try_into().map_err(|_| LicenseError::InvalidShape {
         detail: "signature is not 64 bytes".to_string(),
@@ -464,9 +576,27 @@ pub fn verify_license(key: &str) -> Result<LicensePayload, LicenseError> {
     verifying_key
         .verify(signing_input.as_bytes(), &signature)
         .map_err(|_| LicenseError::InvalidShape {
-            detail: "signature verification failed".to_string(),
+            detail: format!("signature verification failed for kid {kid:?}"),
         })?;
     Ok(payload)
+}
+
+/// Default pubkey resolver. Maps a `kid` string to the
+/// corresponding 32-byte pubkey. For embedded kids
+/// (`KID_TRIAL`, `KID_OFFLINE`), returns the compiled-in
+/// pubkey. For `KID_IAP_LOCAL`, reads the per-machine
+/// pubkey from the keychain.
+fn resolve_pubkey_for_kid(kid: &str) -> Result<[u8; 32], LicenseError> {
+    match kid {
+        KID_TRIAL => Ok(TRIAL_PUBKEY),
+        KID_OFFLINE => Ok(PROD_PUBKEY),
+        KID_IAP_LOCAL => crate::iap_keypair::load_iap_pubkey().ok_or(LicenseError::MissingLocalPubkey {
+            detail: "the IAP-issued license is for this machine, but the per-machine pubkey is missing from the keychain. Re-run the IAP flow to regenerate the keypair.".to_string(),
+        }),
+        other => Err(LicenseError::InvalidShape {
+            detail: format!("unknown kid {other:?}"),
+        }),
+    }
 }
 
 // --- Machine fingerprint ----------------------------------------
@@ -604,6 +734,7 @@ pub fn generate_trial_license() -> Result<(LicensePayload, String), LicenseError
         exp: now + TRIAL_DURATION_SECS,
         sub: machine_fingerprint(),
         jti: random_jti(),
+        kid: Some(KID_TRIAL.to_string()),
     };
     payload.validate_shape()?;
     let key = sign_payload(&payload, &TRIAL_PRIVKEY)?;
@@ -645,6 +776,17 @@ fn entry_for(user: &str) -> Result<std::sync::Arc<keyring::Entry>, LicenseError>
     let arc = std::sync::Arc::new(entry);
     cache.insert(user.to_string(), arc.clone());
     Ok(arc)
+}
+
+/// `pub(crate)` accessor for the keychain entry
+/// cache. The `iap_keypair` module uses the same
+/// cached entry handles to avoid repeated
+/// Credential Manager lookups for the per-machine
+/// privkey / pubkey. Errors are mapped to
+/// `LicenseError::Platform` to match the licensing
+/// module's error model.
+pub(crate) fn entry_for_pub(user: &str) -> Result<std::sync::Arc<keyring::Entry>, LicenseError> {
+    entry_for(user)
 }
 
 /// Save the license key string to the keychain. Overwrites any
@@ -854,6 +996,7 @@ mod tests {
             exp,
             sub: sub.to_string(),
             jti: "0123456789abcdef".to_string(),
+            kid: Some(KID_TRIAL.to_string()),
         }
     }
 
@@ -871,7 +1014,7 @@ mod tests {
         // (it's a const), so we use the trial flow for the
         // round-trip (the trial pubkey is paired with the
         // trial privkey, both embedded).
-        let key = sign_payload(&payload, &TRIAL_PRIVKEY).unwrap();
+        let _unused_key = sign_payload(&payload, &TRIAL_PRIVKEY).unwrap();
         // The trial plan is required for the trial pubkey
         // branch.
         let mut trial_payload = payload.clone();

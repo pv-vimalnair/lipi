@@ -136,4 +136,43 @@ describe('humanizeInvalidReason', () => {
     const msg = humanizeInvalidReason('something-weird-happened');
     expect(msg).toMatch(/something-weird-happened/);
   });
+
+  // Phase 4: IAP-specific reason codes. Each
+  // `iap-` reason maps to a user-friendly message
+  // that explains what went wrong and what to do
+  // next.
+  it('iap-receipt-format-unrecognized mentions "license key" as the fallback', () => {
+    const msg = humanizeInvalidReason('iap-receipt-format-unrecognized: unknown format');
+    expect(msg).toMatch(/license key/i);
+  });
+
+  it('iap-sandbox-not-supported explains the sandbox-vs-production distinction', () => {
+    const msg = humanizeInvalidReason('iap-sandbox-not-supported: this receipt is a TestFlight / sandbox receipt');
+    expect(msg).toMatch(/sandbox|TestFlight/i);
+  });
+
+  it('iap-product-id-mismatch mentions "matching Restore button"', () => {
+    const msg = humanizeInvalidReason('iap-product-id-mismatch: expected "app.lipi.ide.monthly", got "app.lipi.ide.yearly"');
+    expect(msg).toMatch(/matching Restore|monthly|yearly/i);
+  });
+
+  it('iap-expired mentions "renew"', () => {
+    const msg = humanizeInvalidReason('iap-expired: the subscription expired at unix 1700000000');
+    expect(msg).toMatch(/renew|expired/i);
+  });
+
+  it('iap-network-error mentions "receipt server"', () => {
+    const msg = humanizeInvalidReason('iap-network-error: connection refused');
+    expect(msg).toMatch(/receipt server|try again/i);
+  });
+
+  it('iap-keychain-error mentions "keychain"', () => {
+    const msg = humanizeInvalidReason('iap-keychain-error: keychain entry cache lock poisoned');
+    expect(msg).toMatch(/keychain/i);
+  });
+
+  it('iap-not-yet-implemented (backward-compat) is still humanized', () => {
+    const msg = humanizeInvalidReason('iap-not-yet-implemented: coming in a future update');
+    expect(msg).toMatch(/coming|future update|license key/i);
+  });
 });

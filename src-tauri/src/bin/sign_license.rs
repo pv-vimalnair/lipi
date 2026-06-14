@@ -62,7 +62,7 @@ use base64::Engine as _;
 use ed25519_dalek::SigningKey;
 
 use lipi_lib::licensing::{
-    sign_payload, LicensePayload, LICENSE_FORMAT_V1, PLAN_MONTHLY, PLAN_YEARLY,
+    sign_payload, LicensePayload, KID_OFFLINE, LICENSE_FORMAT_V1, PLAN_MONTHLY, PLAN_YEARLY,
     TRIAL_DURATION_SECS,
 };
 
@@ -223,6 +223,7 @@ fn run() -> Result<(), String> {
         exp: now + duration,
         sub: args.machine.clone(),
         jti: random_jti_hex(),
+        kid: Some(KID_OFFLINE.to_string()),
     };
     let key = sign_payload(&payload, &secret).map_err(|e| format!("sign_payload: {e}"))?;
 

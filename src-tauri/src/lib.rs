@@ -116,6 +116,12 @@ pub use licensing::{
 #[cfg(not(mobile))]
 mod iap;
 #[cfg(not(mobile))]
+mod iap_apple;
+#[cfg(not(mobile))]
+mod iap_keypair;
+#[cfg(not(mobile))]
+mod iap_microsoft;
+#[cfg(not(mobile))]
 pub use iap::iap_redeem;
 
 // Phase 5: the updater endpoint health check. See

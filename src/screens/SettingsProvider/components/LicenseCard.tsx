@@ -199,6 +199,59 @@ export function humanizeInvalidReason(reason: string): string {
   if (reason.includes('empty key')) {
     return 'No license key was provided.';
   }
+  // IAP-specific reasons (Phase 4). The `iap-` prefix is the convention;
+  // the rest of the reason is a short code that maps to a user-friendly
+  // message. The fallback ("License invalid — <reason>") is the last
+  // resort; we aim to cover every iap-* reason in the ifs above.
+  if (reason.includes('iap-receipt-format-unrecognized')) {
+    return "We couldn't recognize the receipt format. Please paste a license key instead (the receipt format depends on the App Store / Microsoft Store; the easiest path is to email licensing@lipi.ide to get a key).";
+  }
+  if (reason.includes('iap-malformed-response')) {
+    return 'The receipt server returned an unexpected response. Please try again, or paste a license key instead.';
+  }
+  if (reason.includes('iap-sandbox-not-supported')) {
+    return 'This receipt is a TestFlight / sandbox receipt. Phase 4 only supports production receipts. Please request a production license key from licensing@lipi.ide.';
+  }
+  if (reason.includes('iap-rejected-by-apple') || reason.includes('iap-rejected-by-microsoft')) {
+    return 'The receipt was rejected by the store. Please contact support with the receipt details.';
+  }
+  if (reason.includes('iap-no-purchase-found')) {
+    return "The receipt is valid but has no in-app purchases. Did you mean to paste a license key?";
+  }
+  if (reason.includes('iap-product-id-mismatch') || reason.includes('iap-plan-mismatch')) {
+    return 'This receipt is for a different plan. Use the matching Restore button (e.g. if you have a yearly receipt, click "Restore yearly").';
+  }
+  if (reason.includes('iap-product-id-unknown')) {
+    return "Internal error: the receipt's product ID doesn't match any known plan. Please file a bug.";
+  }
+  if (reason.includes('iap-expired')) {
+    return 'Your subscription has expired. Please renew at the pricing page, or paste a license key instead.';
+  }
+  if (reason.includes('iap-future-purchase')) {
+    return "The receipt's purchase date is in the future. Please check your system clock and try again.";
+  }
+  if (reason.includes('iap-network-error')) {
+    return "Couldn't reach the receipt server. Please try again, or paste a license key instead.";
+  }
+  if (reason.includes('iap-shared-secret-missing') || reason.includes('iap-azure-credentials-missing')) {
+    return 'IAP is not configured in this build. Please paste a license key instead (request one from licensing@lipi.ide).';
+  }
+  if (reason.includes('iap-oauth-failed')) {
+    return 'Microsoft Store authentication failed. Please try again, or paste a license key instead.';
+  }
+  if (reason.includes('iap-unknown-plan')) {
+    return "Unknown plan. Use 'monthly' or 'yearly'.";
+  }
+  if (reason.includes('iap-keychain-error')) {
+    return "Couldn't access the keychain. Please check the OS keychain permissions for Lipi.";
+  }
+  if (reason.includes('iap-sign-failed') || reason.includes('iap-save-failed') || reason.includes('license-shape-invalid')) {
+    return 'Internal error during IAP redemption. Please file a bug with the receipt details.';
+  }
+  if (reason.includes('iap-not-yet-implemented')) {
+    // Backward-compat with the Phase 3 stub.
+    return 'IAP is coming in a future update. For now, please paste a license key (request one from licensing@lipi.ide).';
+  }
   return `License invalid — ${reason}`;
 }
 

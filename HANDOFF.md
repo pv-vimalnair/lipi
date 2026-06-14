@@ -311,7 +311,7 @@ a Windows quirk, not a Lipi issue.
 
 ## 6. How to continue (next session checklist)
 
-**Current phase: Phase 2 (of the production-readiness roadmap) — Offline licensing layer — SHIPPED.** This is the first step of the "Lipi to Paid Public Launch" roadmap (the 9-phase plan the project lead drafted when the goal shifted from "open-source IDE" to "downloadable + paid product"; see the bottom of this section for the full roadmap). Phase 2 ships the offline-verifiable subscription: a license key is a JWS-style compact signed document (`LIP1.<base64url(payload)>.<base64url(signature)>`) using Ed25519. The Rust side embeds the production public key + the trial public key as `const [u8; 32]` arrays, and verifies the signature offline — no server round-trip, no phone-home, no revocation list (per Decision #17 "no backend, ever" and the user's choice to keep license validation offline for the paid-public-launch roadmap). A 14-day free trial is auto-generated on first run and signed with the trial private key (also embedded — a deliberate trade-off: 14-day max `exp` bounds the worst case; the production private key is NOT embedded). Four Tauri commands are registered (`license_get_status`, `license_activate`, `license_deactivate`, `license_get_machine_fingerprint`); a Zustand store caches the status in memory (hydrate once at app start, refresh on activate / deactivate, load machine fingerprint on demand); an activation screen (`src/screens/License/License.tsx`) and a settings card (`src/screens/SettingsProvider/components/LicenseCard.tsx`) are the user-facing surfaces. The license payload binds to a specific machine via the `sub` claim (SHA-256 of `hostname || "\n" || username || "\n" || mac_address`, hex-encoded to 64 chars), so a license key for machine A fails verification on machine B (returns `Invalid { reason: "machine-mismatch" }` — a tamper attempt on the keychain entry fails the same way). Re-verification on every status call means a tampered keychain entry is caught on the next read. `cargo test licensing` is **21/21 passing**; `npm test` is **898/898 passing** (+38 from this phase: 10 licenseStore, 17 LicenseCard helpers, plus the 21 Rust tests); `tsc --noEmit` / `npm run build` / `cargo check` all clean. See `CHANGELOG.md` "Added (Phase 2 — Offline licensing layer)" for the full feature list; see HANDOFF §9.24 for the per-phase writeup; see Decisions #85–#88 for the architectural calls. **The full-screen gate (block the workspace when unactivated / past grace) and the title-bar trial badge are Phase 3.**
+**Current phase: Phase 3 (of the production-readiness roadmap) — Subscription UX + offline-purchase flow — SHIPPED.** This is the second step of the "Lipi to Paid Public Launch" roadmap. Phase 2 shipped the offline-license *primitives* (JWS-style Ed25519-signed keys, machine fingerprint, keychain storage, the `license_*` IPC commands); Phase 3 ships the **complete user-facing subscription flow** on top of those primitives — the full-screen `LicenseGate` (block the workspace when `expired` or `invalid`; nag-modal during the 7-day grace period), the title-bar `TrialBadge` (red ≤ 3 days, amber ≤ 7 days, neutral > 7 days), the editor-top `ExpiryBanner` (final-week red banner), the 3-step "Transfer to a new machine" `TransferFlow` wizard on the License activation screen, the in-app `PricingCard` paywall (Free trial / $5 monthly / $50 yearly), the `iap_redeem` Tauri command (a stub for Phase 4's real Apple / Microsoft receipt validation), and the separate `sign_license` Rust CLI for the project lead to issue production keys from purchase emails. The mapping from `LicenseStatusPayload` to which surface renders is in a single pure helper `licenseSurfaces` with 20 unit tests pinning every state × surface cell. `cargo test` is **241/241 passing** (+20 from this phase: 5 iap stub + 15 sign_license CLI); `npm test` is **965/965 passing** (+67 from this phase: 20 licenseSurfaces + 12 TrialBadge + 9 ExpiryBanner + 9 LicenseGate + 5 TransferFlow + 9 PricingCard + 3 iap IPC); `tsc --noEmit` / `npm run build` / `cargo check` all clean. See `CHANGELOG.md` "Added (Phase 3 — Subscription UX + offline-purchase flow)" for the full feature list; see HANDOFF §9.25 for the per-phase writeup; see Decisions #89–#93 for the architectural calls. **Next: Phase 5 (the production release pipeline) — signing key rotation, code signing (Tauri Updater / Authenticode / Apple notarization), CI/CD release builds.**
 
 **Previous phase (M6b):** Per-tab state keying + v4 settings export / import — SHIPPED. M6b is the second half of the M6 multi-workspace tabs plan. With M6a shipping the data model + tab strip, M6b makes each tab a *full* workspace: per-tab state (file-tree expansion, selected row, open editor tabs, active editor tab) is persisted on the tab itself, and switching tabs rehydrates that state into the live stores (`useFileTreeStore`, `useEditorTabsStore`) via mirror-back effects. The settings export/import format is bumped to v4: the v3 single `workspace.currentPath` shape is replaced with a `workspace.workspaces[]` array of `{ id, path, addedAt, state: WorkspaceTabState }` rows; the v3→v4 import migration wraps any old `currentPath` into a single `WorkspaceTab` with empty per-tab state (auto-detected on parse, so existing v3 files continue to import seamlessly). The new `WorkspaceTabState` carries four fields (`expandedDirs: string[]`, `selectedPath: string | null`, `openEditorTabPaths: string[]`, `activeEditorTabPath: string | null`) plus three live-store actions (`setExpandedAndSelected` on `useFileTreeStore`, `replaceAll` on `useEditorTabsStore`, and `setTabState` / `replaceTabState` on `useWorkspaceStore`) that the mirror-back effects use to keep the two views in sync. PrivacyDataCard's v4 export/import is wired end-to-end: the export snapshot is `LipiStateV4Data` (with `version: 4`, `LIPI_STATE_V4_FORMAT`, and a per-tab `state` block), the import parser auto-detects v3 files (no `version`, or `version: 2/3` with a `currentPath` field) and migrates them in-memory, and a `.migrationNotice` UI block informs the user that their file was upgraded. The `applyLipiStateV4` function is transactional (snapshotStores → mutate → rollback on error), mirroring the S3 design. 874/874 vitest tests pass (+61 from this phase: 13 in `workspaceStore.test.ts` for per-tab state + persistence; 23 in `settingsIOv4.test.ts` for v4 schema + v3→v4 migration; 7 in `settingsIOv4.apply.test.ts` for transactional rollback; 13 in `settingsIOv4.preview.test.ts` for human-readable previews; 5 in `PrivacyDataCard.test.ts` rewritten for v4). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. Titlebar subtitle is now `dev · M6b`. See `CHANGELOG.md` "Added (M6b — Per-tab state keying + v4 settings export / import)" for the full feature list; see HANDOFF §9.23 for the per-phase writeup; see Decisions #81–#84 for the architectural calls.
 
@@ -319,16 +319,12 @@ a Windows quirk, not a Lipi issue.
 
 **Previous phase (Decision #66 polish):** file-tree right-click context menu — SHIPPED. The pre-Decision-#66 `window.prompt` / `window.confirm` right-click flow in `FileTreePane` is replaced with 3 purpose-built components (`FileRowContextMenu` floating `<ul role="menu">` anchored at the click x/y with auto-flip + keyboard nav + outside-click dismissal; `InlineNameInput` modal that reuses the shared `Modal` primitive with a labelled text input, validation, and pre-selection of the basename on rename; `ConfirmDestructiveModal` modal that reuses `Modal` with a danger-variant Delete button and per-kind body copy). All 3 components are wired into `FileTreePane`'s `TreeNode` via 3 pieces of mutually-exclusive state (`menu` / `nameInput` / `confirm`). The pure helpers `validateFileName` (7 rules: non-empty, not `.` / `..`, no path separators or Windows-illegal chars, no reserved device names, case-insensitive collision check, length cap, trailing-dots/space strip) and `suggestNewFileName` (untitled.txt → untitled (1).txt → … → 10k bail-out with timestamped fallback) back the `InlineNameInput`. The `computeContextMenuPosition` pure helper handles the auto-flip math. 791/791 vitest tests pass (+56 for this phase: 24 fileNameValidation + 20 FileRowContextMenu + 8 InlineNameInput + 4 ConfirmDestructiveModal = 56; previous 735 + 56 = 791). `tsc -b` / `npx vitest run` / `cargo check` / `npm run build` all clean. See `CHANGELOG.md` "Added (Decision #66 polish — file-tree right-click context menu)" for the full feature list; see HANDOFF §9.21 for the per-phase writeup; see Decision #76 for the architectural call.
 
-**Next:** With Phase 2 shipped, the production-readiness roadmap is the active queue. The 9-phase plan was drafted in late May 2026 when the project lead decided to pivot from "open-source IDE" to "downloadable + paid product" (the goal is "people download and pay us"):
+**Next:** With Phase 3 shipped, the production-readiness roadmap is the active queue. The user instructed the team to "forget about the legal and everything" and "just concentrate on coding, design, and building the product" — so the original 9-phase plan (which interleaved legal / business phases with code phases) has been collapsed into a 2-phase coding-focused roadmap:
 
-1. **Phase 0** (user work, not code) — Legal & business setup: LLC formation, tax ID, business bank account, business email + domain. The project lead runs this in parallel with Phase 2; it's the long-pole on the public launch timeline.
-2. **Phase 1** — Repo relicense + business assets: swap the `MIT` LICENSE for a proprietary one, add a trademark notice, make the public repo private (or move to a `lipi-internal` org for development + a public `lipi-ide/lipi-docs` repo for marketing + help). This is a docs-only / repo-config phase; no code changes.
-3. **Phase 3** — Subscription UX: the full-screen gate (block the workspace when unactivated / past the 7-day grace period), the title-bar trial-progress badge, the expiry banner / nag modal, the "Activate on another machine" flow with copy-to-clipboard, the "Receipt" link, and the in-app paywall. Builds on Phase 2's primitives.
-4. **Phase 4** — App store packaging + IAP: Microsoft Store + Mac App Store. The IAP receipt is converted to a Lipi license at runtime (the receipt is verified locally against the store's certificate; the resulting license is signed with the production private key and stored in the keychain). Also: the `sign_license` CLI tool (a Rust binary that takes a `--plan`, `--machine`, and `--out` and emits a license key) for the project lead to issue keys from purchase emails.
-5. **Phase 5** — Production release pipeline: signing key rotation (the existing `lipi-dev.key` is checked into the repo and is NOT safe for public distribution; Phase 5 generates a new keypair, stores the private in CI secrets, and ships the new pubkey in the next release), code signing (Tauri Updater endpoints, Microsoft Authenticode, Apple notarization), CI/CD for release builds, versioning policy.
-6. **Phase 6** — Legal assets + support: ToS, Privacy Policy, EULA, refund policy, support email + status page. The license store's `loadMachineFingerprint` is the foundation for the support workflow.
-7. **Phase 7** — Soft launch: a small group of beta users (5-10), gather feedback, fix bugs, write help docs.
-8. **Phase 8** — Public launch: store listings live, marketing push, support rotation.
+1. **Phase 5 (next)** — Production release pipeline: signing key rotation (the existing `lipi-dev.key` is checked into the repo and is NOT safe for public distribution; Phase 5 generates a new keypair, stores the private in CI secrets, and ships the new pubkey in the next release), code signing (Tauri Updater endpoints, Microsoft Authenticode, Apple notarization), CI/CD for release builds (matrix builds across Mac / Win / Linux, version bumping, GitHub Releases), updater endpoint health checks. This is the last code-focused phase before public distribution.
+2. **Phase 4 (later)** — App Store IAP: real Apple receipt validation (`https://buy.itunes.apple.com/verifyReceipt`) + Microsoft Store Broker API integration. Fills in the `iap_redeem` stub from Phase 3 with the real platform-specific validators. The UI doesn't need to change — only the Rust implementation behind the same Tauri command.
+
+The non-coding phases from the original 9-phase plan (legal / business setup, repo relicense, ToS / Privacy Policy, support rotation) are the project lead's own work, not code. They run in parallel with Phase 5 and Phase 4 from the project lead's side, but they don't block the code work.
 
 The original M6c / M3 follow-up / mobile-build items are still in the queue but deprioritised until the production-readiness roadmap is complete. See §6 "Done in prior cycles" below for the full history.
 
@@ -4421,6 +4417,90 @@ trade-off to the user before writing code.
 | Build / toolchain | Vite + Tauri. Mainstream, well-maintained. No experimental builds. |
 | Distribution | Auto-updater + per-platform package channels. |
 | Testing (later) | Vitest + Playwright. Mainstream, fast, plays well with Vite. |
+
+---
+
+### 9.25 Phase 3 - SHIPPED (Subscription UX + offline-purchase flow, see CHANGELOG "Added (Phase 3 — Subscription UX + offline-purchase flow)")
+
+The second step of the "Lipi to Paid Public Launch" roadmap. Phase 2 shipped the offline-license *primitives* (JWS-style Ed25519-signed keys, machine fingerprint, keychain storage, the `license_*` IPC commands); Phase 3 ships the **complete user-facing subscription flow** on top of those primitives.
+
+## The four new UI surfaces
+
+(All implemented in `src/shared/components/{LicenseGate,TrialBadge,ExpiryBanner}/` and `src/screens/License/components/{TransferFlow,PricingCard}/`. The mapping from `LicenseStatus` to which surface renders is in `src/shared/components/LicenseGate/licenseSurfaces.ts`, a single pure function with 20 unit tests pinning every state × surface cell. See Decision #89 for the rationale.)
+
+1. **`LicenseGate`** — a full-screen block (when the status is `expired` or `invalid`) or a dismissable nag modal (when the status is `gracePeriod`). Mounted at the AppRoot level so it overlays every screen. The gate's dismissal state is in `sessionStorage` (per-session, not persisted), so the nag reappears on next launch. The hard-block / nag-modal / nothing decision is in `licenseSurfaces(status).gate`; the component itself is a thin wrapper. See Decision #91 for the "grace period is a nag, not a hard block" rationale.
+2. **`TrialBadge`** — a small pill in the title bar's right slot showing the current status. Three tones (red / amber / neutral) mapped to design tokens. Renders nothing for the "good standing" states (active > 7 days, unactivated). The tone thresholds are: red ≤ 3 days trial or any grace period; amber ≤ 7 days trial or active; neutral otherwise. See Decision #90 for the threshold rationale.
+3. **`ExpiryBanner`** — a red horizontal banner between the title bar and the workspace tabs. Renders for the final-week trial (≤ 3 days remaining) and the grace period. Dismissable per-session via a "Got it" button; the "Activate now →" link navigates to the License activation screen.
+4. **"Transfer to a new machine"** — a 3-step wizard on the License activation screen (and a "Transfer" button on the LicenseCard in Settings) that deactivates the license on this machine and generates a pre-formatted email to send to the project lead for re-issuing on a new machine. The wizard is `TransferFlow.tsx` with three steps: `confirm` (deactivate warning), `running` (IPC call), `result` (email body with both fingerprints + the plan name).
+5. **In-app paywall** — a 3-tier pricing card (Free trial, $5/month, $50/year) above the activation form. The paid tiers open the project website via the system browser (plain `<a target="_blank">`); the trial tier is non-interactive (the trial is auto-generated). The prices are in a single `PRICING_TIERS` const in `src/screens/License/components/PricingCard/pricing.ts` so they can be updated without touching the component.
+
+## The `iap_redeem` stub
+
+(Implemented in `src-tauri/src/iap.rs` and `src/ipc/iap.ts`. The stub returns `LicenseStatus::Invalid { reason: "iap-not-yet-implemented: ..." }` for any input. See Decision #93 for the "stub now, real later" rationale.)
+
+- New Tauri command `iap_redeem(receipt, plan)` that the UI's "Restore from App Store" flow calls. Phase 4 will fill in the real Apple / Microsoft receipt validation behind the same command signature; the UI doesn't need to change.
+- The stub has 5 Rust unit tests covering empty receipt, non-empty receipt, monthly plan, yearly plan, and unknown plan.
+- The TS wrapper `iapRedeem(receipt, plan)` in `src/ipc/iap.ts` has 3 unit tests pinning the wire shape (`invoke('iap_redeem', { receipt, plan })`) and the "not yet implemented" reason.
+
+## The `sign_license` CLI
+
+(Implemented in `src-tauri/src/bin/sign_license.rs` and a `[[bin]]` entry in `src-tauri/Cargo.toml`. See Decision #92 for the "separate CLI for production key issuance" rationale.)
+
+- A separate Rust binary that the project lead runs from a terminal to issue production license keys from purchase emails. Takes `--plan <monthly|yearly>`, `--machine <64-char hex fingerprint>`, and `--out <path/to/license.txt>`. Reads the production private key from `TAURI_PROD_LICENSE_KEY_HEX` (32 hex chars) at invocation time — the key is never in source control.
+- Builds a `LicensePayload`, signs it with the same `licensing::sign_payload` function as the trial-generation flow, and writes the `LIP1.…` key to `--out`. Returns 0 on success, non-zero (1-5) on failure.
+- The CLI has 15 unit tests pinning the plan duration table (30 days for monthly, 365 days for yearly), the machine fingerprint validation (64 lowercase hex chars, reject uppercase / non-hex / wrong length), the plan validation (only "monthly" or "yearly"), and the random JTI generation (32 hex chars, unique per call).
+- Operational note: the production private key is in the project lead's CI secret store (GitHub Actions encrypted secrets) AND a local encrypted USB drive the lead keeps offline. Quarterly rotation is Phase 5b.
+
+## The new `'license'` route
+
+(In `src/shared/state/appStore.ts` and `src/main.tsx`.)
+
+- A new `Screen` variant `'license'` (added to the union `'editor' | 'settings' | 'welcome' | 'license'`). The License activation screen is now an overlay reachable from any screen via `useAppStore.getState().setActiveScreen('license')`. Same isolation rule as Settings.
+
+## The Command Palette entry
+
+(In `src/shared/commands/commands.ts`.)
+
+- A new `license.openActivation` command in the "License" group. Reachable via `Cmd-Shift-P` (or `Ctrl-Shift-P`). Navigates to the License activation screen. The `Command.group` union now includes `'License'` (the `commands.test.ts` test pins the new union member).
+
+## Test coverage
+
+(67 new vitest tests + 20 new Rust tests = 87 new tests. Total project: 965 vitest + 246 Rust = 1211 tests, all passing.)
+
+- 20 unit tests for `licenseSurfaces` (every state × surface cell).
+- 12 unit tests for `TrialBadge`.
+- 9 unit tests for `ExpiryBanner`.
+- 9 unit tests for `LicenseGate`.
+- 5 unit tests for `TransferFlow`.
+- 9 unit tests for `PricingCard`.
+- 3 unit tests for the `iapRedeem` TS wrapper.
+- 5 Rust unit tests for `iap::iap_redeem`.
+- 15 Rust unit tests for `sign_license`.
+
+## Verification
+
+- `npm test` — 965/965 passing.
+- `npm run typecheck` (`tsc --noEmit`) — clean.
+- `npm run build` (`tsc -b && vite build`) — clean.
+- `cargo check` — clean (0 warnings).
+- `cargo test` — 241/241 passing.
+- `cargo test --bin sign_license` — 15/15 passing.
+
+## What ships vs. what doesn't
+
+**What Phase 3 ships:**
+- All 5 UI surfaces (gate, badge, banner, transfer flow, paywall).
+- The new `iap_redeem` Tauri command (stub).
+- The `sign_license` CLI.
+- The `'license'` route + Command Palette entry.
+
+**What Phase 3 explicitly does NOT ship:**
+- Real Apple / Microsoft IAP receipt validation (Phase 4).
+- The "team / volume / per-seat" license format (future).
+- The "auto-renewal" feature (future, would require a server-side subscription state).
+- The "Stripe webhook auto-issuance" (would violate the "no backend, ever" rule, Decision #17).
+- Linux distribution channels (Snap, Flathub, AUR) — out of scope (Phase 4+).
+- Mobile (iOS / Android) — out of scope (Apple Keychain shared keychain + receipt validation is a non-trivial follow-up).
 
 ---
 

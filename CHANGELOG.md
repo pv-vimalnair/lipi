@@ -6,6 +6,180 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 3 — Subscription UX + offline-purchase flow)
+
+The second step of the "Lipi to Paid Public Launch" roadmap
+(see HANDOFF §6 "Current phase" and §9.25 for the full
+writeup, and `docs/plans/prod-p3-subscription-ux-design.md`
+for the design). Phase 2 shipped the offline-license
+*primitives*; Phase 3 ships the **complete user-facing
+subscription flow** on top of those primitives.
+
+**The four new UI surfaces**
+
+(All implemented in
+`src/shared/components/{LicenseGate,TrialBadge,ExpiryBanner}/`
+and `src/screens/License/components/{TransferFlow,PricingCard}/`.
+The mapping from `LicenseStatus` to which surface renders
+is in `src/shared/components/LicenseGate/licenseSurfaces.ts`,
+a single pure function with 20 unit tests pinning every
+state × surface cell.)
+
+- **`LicenseGate`** — a full-screen block (when the status
+  is `expired` or `invalid`) or a dismissable nag modal
+  (when the status is `gracePeriod`). Mounted at the
+  AppRoot level so it overlays every screen. The
+  gate's dismissal state is in `sessionStorage` (per-
+  session, not persisted), so the nag reappears on next
+  launch.
+- **`TrialBadge`** — a small pill in the title bar's right
+  slot showing the current status. Three tones (red /
+  amber / neutral) mapped to design tokens. Renders
+  nothing for the "good standing" states (active > 7 days,
+  unactivated).
+- **`ExpiryBanner`** — a red horizontal banner between
+  the title bar and the workspace tabs. Renders for the
+  final-week trial (≤ 3 days remaining) and the grace
+  period. Dismissable per-session.
+- **"Transfer to a new machine"** — a 3-step wizard on
+  the License activation screen (and a "Transfer" button
+  on the LicenseCard in Settings) that deactivates the
+  license on this machine and generates a pre-formatted
+  email to send to the project lead for re-issuing on a
+  new machine.
+- **In-app paywall** — a 3-tier pricing card (Free trial,
+  $5/month, $50/year) above the activation form. The
+  paid tiers open the project website via the system
+  browser (plain `<a target="_blank">`); the trial tier
+  is non-interactive (the trial is auto-generated).
+
+**The `iap_redeem` stub**
+
+(Implemented in `src-tauri/src/iap.rs` and
+`src/ipc/iap.ts`. The stub returns
+`LicenseStatus::Invalid { reason:
+"iap-not-yet-implemented: ..." }` for any input.)
+
+- New Tauri command `iap_redeem(receipt, plan)` that the
+  UI's "Restore from App Store" flow calls. Phase 4 will
+  fill in the real Apple / Microsoft receipt validation
+  behind the same command signature; the UI doesn't
+  need to change.
+
+**The `sign_license` CLI**
+
+(Implemented in `src-tauri/src/bin/sign_license.rs` and
+`[[bin]]` entry in `src-tauri/Cargo.toml`.)
+
+- A separate Rust binary that the project lead runs from
+  a terminal to issue production license keys from
+  purchase emails. Takes `--plan <monthly|yearly>`,
+  `--machine <64-char hex fingerprint>`, and
+  `--out <path/to/license.txt>`. Reads the production
+  private key from `TAURI_PROD_LICENSE_KEY_HEX` (32 hex
+  chars) at invocation time — the key is never in
+  source control. Builds a `LicensePayload`, signs it
+  with the same `licensing::sign_payload` function as
+  the trial-generation flow, and writes the
+  `LIP1.…` key to `--out`. Returns 0 on success,
+  non-zero (1-5) on failure.
+
+**The "Activate a license" Command Palette entry**
+
+(In `src/shared/commands/commands.ts`.)
+
+- A new `license.openActivation` command in the
+  "License" group. Reachable via `Cmd-Shift-P` (or
+  `Ctrl-Shift-P`). Navigates to the License activation
+  screen.
+
+**The `'license'` route**
+
+(In `src/shared/state/appStore.ts` and `src/main.tsx`.)
+
+- A new `Screen` variant `'license'`. The License
+  activation screen is now an overlay reachable from
+  any screen (same isolation rule as Settings).
+
+### Changed (Phase 3 — Subscription UX + offline-purchase flow)
+
+- **`src/main.tsx`** — the `AppRoot` now mounts
+  `<LicenseGate />` (so the gate overlays every screen)
+  and the router has a new `activeScreen === 'license'`
+  branch (renders `<License />`).
+- **`src/screens/EditorWorkspace/EditorWorkspace.tsx`** —
+  the editor now renders `<ExpiryBanner />` between the
+  TitleBar and the WorkspaceTabs.
+- **`src/screens/EditorWorkspace/components/TitleBar/TitleBar.tsx`** —
+  the title bar now renders `<TrialBadge />` in its
+  right slot.
+- **`src/screens/License/License.tsx`** — the activation
+  screen now renders `<PricingCard />` above the form
+  and `<TransferFlow />` below the fingerprint section.
+- **`src/screens/SettingsProvider/components/LicenseCard.tsx`** —
+  the settings card now has a "Transfer to a new
+  machine" button that navigates to the License screen.
+- **`src/shared/commands/commands.ts`** — the `Command.group`
+  union now includes `'License'`. The
+  `commands.test.ts` test pins the new union member.
+
+### Decisions (Phase 3 — Subscription UX + offline-purchase flow)
+
+- **#89** — A single pure `licenseSurfaces` helper maps
+  `LicenseStatus` to UI surfaces. The 4 new components
+  (gate, badge, banner, transfer flow) are thin
+  render-only wrappers.
+- **#90** — Trial badge tone thresholds: red ≤ 3 days,
+  amber ≤ 7 days, neutral > 7 days. Active with > 7
+  days shows no badge.
+- **#91** — Grace period is a dismissable nag modal, NOT
+  a hard block. The hard block is reserved for `expired`
+  and `invalid`. The nag's dismissal state is in
+  `sessionStorage`.
+- **#92** — A separate Rust `sign_license` CLI for
+  production key issuance. The production private key
+  is read from `TAURI_PROD_LICENSE_KEY_HEX` at
+  invocation time (never in source control).
+- **#93** — Ship the IAP `iap_redeem` command as a stub
+  in Phase 3; Phase 4 fills in the real Apple / Microsoft
+  receipt validation.
+
+### Tests (Phase 3 — Subscription UX + offline-purchase flow)
+
+- 20 unit tests for `licenseSurfaces` (every
+  state × surface cell).
+- 12 unit tests for `TrialBadge` (renders nothing for
+  the "default" states, renders the right tone / label
+  for each, click navigates to the License screen).
+- 9 unit tests for `ExpiryBanner` (renders for trial ≤
+  3 days + grace period; dismissable; "Activate now"
+  navigates).
+- 9 unit tests for `LicenseGate` (renders nothing for
+  the "default" states, hard block for expired /
+  invalid, nag for grace period, dismissal works, "I' do
+  it later" click hides the nag).
+- 5 unit tests for `TransferFlow` (initial step renders,
+  confirm calls `deactivate` IPC, success step shows the
+  email body, cancel returns to initial, grace-period
+  plan shows in the email body).
+- 9 unit tests for `PricingCard` (3 tiers, trial is
+  non-clickable, monthly + yearly are clickable
+  `<a target="_blank">` with the correct href).
+- 3 unit tests for the `iapRedeem` TS wrapper (wire
+  shape, "not yet implemented" reason, plan type
+  narrowing).
+- 5 Rust unit tests for `iap::iap_redeem` (empty
+  receipt, non-empty receipt, monthly plan, yearly
+  plan, unknown plan).
+- 15 Rust unit tests for `sign_license` (plan duration
+  for monthly / yearly / unknown, machine fingerprint
+  validation for 64 / 63 / 65 / uppercase / non-hex /
+  empty chars, plan validation, random JTI uniqueness).
+
+Phase 3 total: **67 vitest tests + 20 Rust tests = 87
+new tests.** Total project test count: 965 vitest + 246
+Rust = 1211 tests, all passing.
+
 ### Added (Phase 2 — Offline licensing layer)
 
 The first step of the "Lipi to Paid Public Launch" roadmap

@@ -926,6 +926,35 @@ pub fn license_get_machine_fingerprint() -> String {
     machine_fingerprint()
 }
 
+/// Get the `kid` (key id) of the current
+/// license. The UI uses this to determine if
+/// the license is IAP-issued (so it can show
+/// the "Refresh from IAP" button) vs trial
+/// or offline-purchase.
+///
+/// Phase 4.1 (IAP v1.1 follow-ups). Returns
+/// `None` if there is no license in the
+/// keychain, or the license fails to
+/// verify (the UI treats both cases as
+/// "not IAP-issued" and hides the refresh
+/// button).
+///
+/// The function never returns the key
+/// material — only the `kid` string (one
+/// of `"trial"`, `"offline"`, `"iap-local"`).
+#[tauri::command]
+pub fn license_get_kid() -> Option<String> {
+    let key = match load_license() {
+        Ok(Some(k)) => k,
+        _ => return None,
+    };
+    let payload = match verify_license(&key) {
+        Ok(p) => p,
+        Err(_) => return None,
+    };
+    payload.kid.or_else(|| Some(KID_TRIAL.to_string()))
+}
+
 // --- Tests -------------------------------------------------------
 //
 // The unit tests install the Mock keychain (per the

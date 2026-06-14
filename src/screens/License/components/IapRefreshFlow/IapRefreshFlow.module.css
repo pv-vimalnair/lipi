@@ -1,0 +1,92 @@
+/* IapRefreshFlow — Phase 4.1 (IAP v1.1 follow-ups).
+ *
+ * A self-contained wizard section on the License
+ * activation screen. Three steps (paste, running,
+ * result), each rendered as a `<section>` with a
+ * consistent visual style: a title, a lede paragraph,
+ * and a row of actions. The paste step additionally
+ * shows a `<textarea>` + `<select>` for the receipt
+ * + plan.
+ *
+ * The wizard is rendered as a sibling of the
+ * activation form and the TransferFlow (not inside
+ * either), so the user can paste a key, transfer to
+ * a new machine, AND refresh from IAP from the
+ * same screen.
+ *
+ * The CSS mirrors TransferFlow.module.css for visual
+ * consistency. The new `.receiptInput` and
+ * `.planSelect` classes extend the standard
+ * `.flow` + `.lede` pattern with form-control
+ * styling.
+ */
+
+.flow {
+  margin-block-start: 24px;
+  padding: 20px;
+  background: var(--color-bg-elevated, #1a1a1a);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+}
+
+.title {
+  margin: 0 0 8px;
+  font-size: var(--font-size-md, 14px);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-text);
+  line-height: 1.3;
+}
+
+.lede {
+  margin: 0 0 16px;
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text);
+  background: var(--color-bg-elevated, #1a1a1a);
+  border-left: 2px solid var(--color-danger-strong, #e06c75);
+  border-radius: 0 4px 4px 0;
+}
+
+.fieldLabel {
+  display: block;
+  margin: 12px 0 4px;
+  font-size: var(--font-size-sm, 12px);
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--color-text);
+}
+
+.receiptInput {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  font-family: var(--font-family-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text);
+  background: var(--color-bg-sunken, #161616);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  resize: vertical;
+}
+
+.planSelect {
+  display: block;
+  margin-bottom: 16px;
+  padding: 6px 10px;
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text);
+  background: var(--color-bg-sunken, #161616);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+}
+
+.actions {
+  align-items: center;
+}

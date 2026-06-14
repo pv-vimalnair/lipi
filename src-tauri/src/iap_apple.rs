@@ -343,7 +343,6 @@ impl AppleError {
 /// - `AppleError::InvalidResponse` on deserialization failure.
 /// - `AppleError::RejectedByApple` /
 ///   `AppleError::NoPurchaseFound` / etc. on validation failure.
-#[allow(dead_code)] // Future entry point for the raw-receipt case (Phase 4 ships the parsed-response path).
 pub async fn verify_apple_receipt(
     receipt_b64: &str,
     plan: &str,

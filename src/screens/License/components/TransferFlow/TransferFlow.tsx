@@ -21,12 +21,25 @@
  * The wizard is a pure React component; the actual
  * deactivation goes through `useLicenseStore.deactivate`
  * (which calls the Phase 2 `license_deactivate` IPC).
+ *
+ * Phase 4.1 (IAP v1.1 follow-ups): if the current
+ * license is IAP-issued (kid === "iap-local"), the
+ * wizard shows a different message in the result
+ * step: IAP licenses can't be transferred (they're
+ * bound to a single machine). The user is told
+ * to cancel their IAP subscription on this
+ * machine and re-subscribe on the new one. The
+ * email-generation step is skipped (no email to
+ * send). The deactivation still happens (so the
+ * IAP local keypair is cleared), but the result
+ * step shows the IAP-specific message.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { Button } from '@/shared/components/Button';
 import { Stack } from '@/shared/components/Stack/Stack';
 import { useLicenseStore, licenseSelectors } from '@/shared/state/licenseStore';
+import { licenseGetKid } from '@/ipc/licensing';
 
 import styles from './TransferFlow.module.css';
 
@@ -39,6 +52,28 @@ export function TransferFlow(): JSX.Element {
   const machineFingerprint = useLicenseStore(licenseSelectors.machineFingerprint);
   const loadFingerprint = useLicenseStore((s) => s.loadMachineFingerprint);
   const deactivate = useLicenseStore((s) => s.deactivate);
+  // Phase 4.1: track the `kid` of the current
+  // license. If it's `iap-local`, the result
+  // step shows the IAP-specific message.
+  const [licenseKid, setLicenseKid] = useState<
+    'trial' | 'offline' | 'iap-local' | null
+  >(null);
+
+  // Re-fetch the kid on mount + after every
+  // status change. The status change covers
+  // the deactivation-after-confirm case.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const kid = await licenseGetKid();
+      if (!cancelled) {
+        setLicenseKid(kid);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
 
   const handleStart = useCallback((): void => {
     setStep('confirm');
@@ -118,6 +153,47 @@ export function TransferFlow(): JSX.Element {
   }
 
   // step === 'result'
+  //
+  // Phase 4.1: for IAP-issued licenses, show a
+  // different message — IAP licenses can't be
+  // transferred (the IAP receipt was paid on
+  // this machine's Apple ID, not the new
+  // machine's). The user is told to cancel
+  // their IAP subscription on this machine and
+  // re-subscribe on the new one. No email to
+  // send (the project lead can't help with
+  // IAP transfers).
+  if (licenseKid === 'iap-local') {
+    return (
+      <section className={styles.flow} aria-labelledby="lipi-transfer-iap-result-title">
+        <h2 id="lipi-transfer-iap-result-title" className={styles.title}>
+          IAP licenses can't be transferred
+        </h2>
+        <p className={styles.lede}>
+          Your license has been removed from this machine. IAP licenses are
+          bound to a single machine, so you can't re-activate on a new
+          machine via transfer. To use Lipi on a new machine, please
+          cancel your IAP subscription on this machine (the subscription
+          will remain active until the end of the paid period), then
+          subscribe again on the new machine.
+        </p>
+        <p className={styles.lede}>
+          Your local license on this machine is no longer valid. If you'd
+          like to keep using Lipi on this machine until the end of the
+          paid period, please re-activate by pasting a license key (request
+          one from <a href="mailto:licensing@lipi.ide">licensing@lipi.ide</a>).
+        </p>
+        <Stack direction="row" gap={2} className={styles.actions}>
+          <Button variant="ghost" size="sm" onClick={handleStart}>
+            Done
+          </Button>
+        </Stack>
+      </section>
+    );
+  }
+
+  // For trial / offline licenses, the existing
+  // email-body flow applies.
   const fp = machineFingerprint ?? '<loading fingerprint>';
   const plan = status?.kind === 'active' || status?.kind === 'gracePeriod' || status?.kind === 'expired'
     ? status.plan

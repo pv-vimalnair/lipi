@@ -40,7 +40,7 @@
  * "deactivate then re-open" is the v1
  * "transfer to another machine" flow).
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { Button } from '@/shared/components/Button';
 import { Stack } from '@/shared/components/Stack/Stack';
@@ -50,6 +50,7 @@ import {
 } from '@/shared/state/licenseStore';
 import { useAppStore } from '@/shared/state/appStore';
 import type { LicenseStatusPayload } from '@/ipc/licensing';
+import { licenseGetKid } from '@/ipc/licensing';
 
 import styles from './LicenseCard.module.css';
 
@@ -62,6 +63,32 @@ export function LicenseCard(): JSX.Element {
   const [showFingerprint, setShowFingerprint] = useState(false);
   const [confirmingDeactivate, setConfirmingDeactivate] = useState(false);
   const [deactivateError, setDeactivateError] = useState<string | null>(null);
+  // Phase 4.1: the `kid` of the current
+  // license. `null` means "no license" or
+  // "failed to verify"; the UI hides the
+  // Refresh from IAP button in those cases.
+  // We only care about the value `"iap-local"`
+  // for the button visibility.
+  const [licenseKid, setLicenseKid] = useState<
+    'trial' | 'offline' | 'iap-local' | null
+  >(null);
+  const [iapRefreshError, setIapRefreshError] = useState<string | null>(null);
+
+  // Fetch the `kid` on mount + whenever the
+  // status changes (e.g. after a deactivate /
+  // activate cycle).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const kid = await licenseGetKid();
+      if (!cancelled) {
+        setLicenseKid(kid);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [status]);
 
   const handleShowFingerprint = useCallback(async (): Promise<void> => {
     setShowFingerprint(true);
@@ -84,6 +111,17 @@ export function LicenseCard(): JSX.Element {
   // the card) because the wizard needs a multi-
   // step layout that doesn't fit a settings card.
   const handleTransfer = useCallback((): void => {
+    setActiveScreen('license');
+  }, [setActiveScreen]);
+
+  // Phase 4.1: navigate to the License
+  // activation screen's IAP refresh flow.
+  // The full refresh wizard (paste the new
+  // receipt, see the new expiration, confirm)
+  // lives on the License screen for the same
+  // reason as the transfer flow.
+  const handleRefreshIap = useCallback((): void => {
+    setIapRefreshError(null);
     setActiveScreen('license');
   }, [setActiveScreen]);
 
@@ -145,6 +183,23 @@ export function LicenseCard(): JSX.Element {
             Transfer to a new machine
           </Button>
         )}
+        {/* Phase 4.1: "Refresh from IAP" button.
+            Only visible for IAP-issued licenses
+            (kid === "iap-local"). The full
+            refresh wizard (paste the new
+            receipt, see the new expiration,
+            confirm) lives on the License
+            activation screen. This button
+            navigates there. */}
+        {licenseKid === 'iap-local' && status.kind === 'active' && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleRefreshIap}
+          >
+            Refresh from IAP
+          </Button>
+        )}
       </Stack>
 
       {showFingerprint && (
@@ -161,6 +216,12 @@ export function LicenseCard(): JSX.Element {
       {deactivateError && (
         <p className={styles.error} role="alert">
           {deactivateError}
+        </p>
+      )}
+
+      {iapRefreshError && (
+        <p className={styles.error} role="alert">
+          {iapRefreshError}
         </p>
       )}
     </section>
@@ -251,6 +312,27 @@ export function humanizeInvalidReason(reason: string): string {
   if (reason.includes('iap-not-yet-implemented')) {
     // Backward-compat with the Phase 3 stub.
     return 'IAP is coming in a future update. For now, please paste a license key (request one from licensing@lipi.ide).';
+  }
+  // Phase 4.1 (IAP v1.1 follow-ups): reasons
+  // specific to the `iap_refresh_license`
+  // command.
+  if (reason.includes('iap-refresh-not-applicable')) {
+    return 'The "Refresh from IAP" command only works for IAP-issued licenses. For trial or offline-purchase licenses, use the existing license activation flow (paste a license key).';
+  }
+  if (reason.includes('iap-refresh-no-extension')) {
+    return "The new receipt's expiration is not later than the current license's. The license was not updated. If you renewed, please wait a few minutes for the receipt to propagate and try again.";
+  }
+  if (reason.includes('iap-license-missing')) {
+    return 'No license found in the keychain. Use the Restore from IAP button to redeem a fresh receipt.';
+  }
+  if (reason.includes('iap-license-invalid')) {
+    return 'The existing license is invalid (signature mismatch or corrupted). Please deactivate and re-activate.';
+  }
+  if (reason.includes('iap-license-load-failed')) {
+    return "Couldn't read the existing license from the keychain. Please check the OS keychain permissions for Lipi.";
+  }
+  if (reason.includes('iap-refresh-failed')) {
+    return 'The new receipt did not produce an active license. Please try again, or paste a license key instead.';
   }
   return `License invalid — ${reason}`;
 }

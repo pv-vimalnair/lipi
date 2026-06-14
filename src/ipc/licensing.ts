@@ -118,3 +118,31 @@ export async function licenseDeactivate(): Promise<LicenseStatusPayload> {
 export async function licenseGetMachineFingerprint(): Promise<string> {
   return invoke<string>('license_get_machine_fingerprint');
 }
+
+/**
+ * Get the `kid` (key id) of the current
+ * license. The UI uses this to determine if
+ * the license is IAP-issued (so it can show
+ * the "Refresh from IAP" button) vs trial or
+ * offline-purchase.
+ *
+ * Phase 4.1 (IAP v1.1 follow-ups). Returns
+ * `null` if there is no license in the
+ * keychain, or the license fails to verify
+ * (the UI treats both cases as "not
+ * IAP-issued" and hides the refresh button).
+ *
+ * The `kid` is one of:
+ * - `"trial"` — auto-generated 14-day trial
+ * - `"offline"` — purchased via the
+ *   project lead's `sign_license` CLI
+ * - `"iap-local"` — redeemed via
+ *   in-app purchase (App Store / Microsoft
+ *   Store); the license is bound to a
+ *   per-machine keypair
+ */
+export async function licenseGetKid(): Promise<
+  'trial' | 'offline' | 'iap-local' | null
+> {
+  return invoke<'trial' | 'offline' | 'iap-local' | null>('license_get_kid');
+}

@@ -175,4 +175,36 @@ describe('humanizeInvalidReason', () => {
     const msg = humanizeInvalidReason('iap-not-yet-implemented: coming in a future update');
     expect(msg).toMatch(/coming|future update|license key/i);
   });
+
+  // --- Phase 4.1: iap_refresh_license reasons ---
+
+  it('iap-refresh-not-applicable explains the command only works for IAP licenses', () => {
+    const msg = humanizeInvalidReason('iap-refresh-not-applicable: the current license is not IAP-issued (kid = "trial")');
+    expect(msg).toMatch(/Refresh from IAP|only works for IAP-issued/i);
+  });
+
+  it('iap-refresh-no-extension explains the new receipt is not later', () => {
+    const msg = humanizeInvalidReason('iap-refresh-no-extension: the new receipt expires at 1700000000 which is not later than the current license\'s expiration 1800000000');
+    expect(msg).toMatch(/not later|expiration|wait/i);
+  });
+
+  it('iap-license-missing tells the user to use the Restore from IAP button', () => {
+    const msg = humanizeInvalidReason('iap-license-missing: no license found in the keychain');
+    expect(msg).toMatch(/Restore from IAP|no license found/i);
+  });
+
+  it('iap-license-invalid tells the user to deactivate and re-activate', () => {
+    const msg = humanizeInvalidReason('iap-license-invalid: signature mismatch');
+    expect(msg).toMatch(/deactivate|re-activate|invalid/i);
+  });
+
+  it('iap-license-load-failed mentions keychain permissions', () => {
+    const msg = humanizeInvalidReason('iap-license-load-failed: keychain read error');
+    expect(msg).toMatch(/keychain|permission/i);
+  });
+
+  it('iap-refresh-failed suggests trying again or pasting a license key', () => {
+    const msg = humanizeInvalidReason('iap-refresh-failed: the new receipt did not produce an active license');
+    expect(msg).toMatch(/try again|license key/i);
+  });
 });

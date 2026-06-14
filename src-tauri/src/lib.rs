@@ -122,7 +122,13 @@ mod iap_keypair;
 #[cfg(not(mobile))]
 mod iap_microsoft;
 #[cfg(not(mobile))]
+mod iap_oauth;
+#[cfg(not(mobile))]
 pub use iap::iap_redeem;
+#[cfg(not(mobile))]
+pub use iap::iap_refresh_license;
+#[cfg(not(mobile))]
+pub use licensing::license_get_kid;
 
 // Phase 5: the updater endpoint health check. See
 // `src-tauri/src/updater_health.rs` for the full

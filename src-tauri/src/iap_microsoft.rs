@@ -428,16 +428,17 @@ pub async fn verify_microsoft_receipt(
     if MS_CLIENT_ID.is_none() || MS_CLIENT_SECRET.is_none() || MS_TENANT_ID.is_none() {
         return Err(MicrosoftError::AzureCredentialsMissing);
     }
-    // Phase 4: we use a static token (from
-    // LIPI_MS_IAP_BEARER_TOKEN) for simplicity.
-    // The full OAuth client-credentials flow
-    // (token exchange + refresh) is a v1.1
-    // follow-up; see the design doc.
-    let bearer = std::env::var("LIPI_MS_IAP_BEARER_TOKEN").map_err(|_| {
-        MicrosoftError::OAuthFailed {
-            detail: "LIPI_MS_IAP_BEARER_TOKEN env var is not set (set it to a valid Microsoft Store Broker API bearer token, or implement the OAuth client-credentials flow as a v1.1 follow-up)".to_string(),
-        }
-    })?;
+    // Phase 4.1: use the OAuth client-credentials
+    // flow (with in-memory cache) instead of the
+    // static LIPI_MS_IAP_BEARER_TOKEN. The
+    // `iap_oauth` module transparently falls
+    // back to the static token if the OAuth env
+    // vars are unset (dev escape hatch).
+    let bearer = crate::iap_oauth::get_access_token(now_unix_secs)
+        .await
+        .map_err(|e| MicrosoftError::OAuthFailed {
+            detail: e.to_string(),
+        })?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()

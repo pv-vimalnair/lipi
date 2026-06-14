@@ -153,3 +153,69 @@ export async function iapRedeem(
 ): Promise<LicenseStatusPayload> {
   return invoke<LicenseStatusPayload>('iap_redeem', { receipt, plan });
 }
+
+/**
+ * Re-validate the IAP-issued license and
+ * extend its `exp` if the user has renewed
+ * their subscription.
+ *
+ * Phase 4.1 (IAP v1.1 follow-ups). This
+ * command is **only** applicable to
+ * IAP-issued licenses (those with
+ * `kid = "iap-local"`). For trial or
+ * offline-purchase licenses, the Rust
+ * side returns
+ * `Invalid { reason: "iap-refresh-not-applicable: ..." }`.
+ *
+ * The flow is the same as `iapRedeem` for
+ * the receipt-validation step, but the
+ * command additionally:
+ *
+ * 1. Loads the current license from the
+ *    keychain and verifies its signature.
+ * 2. Checks the `kid` field — only
+ *    `kid = "iap-local"` licenses are
+ *    refreshable.
+ * 3. Compares the new receipt's `exp` to
+ *    the current license's `exp`. If the
+ *    new `exp` is not later, returns
+ *    `iap-refresh-no-extension` (don't
+ *    downgrade).
+ * 4. Builds a new `LicensePayload` with
+ *    the new `exp` and saves it.
+ *
+ * # Error reasons (additional to iapRedeem's)
+ *
+ * - `iap-license-missing` — no license in
+ *   the keychain.
+ * - `iap-license-invalid` — the existing
+ *   license failed verification.
+ * - `iap-license-load-failed` — keychain
+ *   read error.
+ * - `iap-refresh-not-applicable` — the
+ *   current license is not IAP-issued.
+ *   UI: "this command only works for
+ *   IAP-issued licenses. For trial or
+ *   offline-purchase licenses, use the
+ *   existing license activation flow."
+ * - `iap-refresh-no-extension` — the new
+ *   receipt's `exp` is not later than the
+ *   current license's `exp`. UI: "the
+ *   new receipt's expiration is not
+ *   later than the current license's.
+ *   The license was not updated."
+ * - `iap-refresh-failed` — the new
+ *   receipt did not produce an active
+ *   license (sanity check).
+ *
+ * @param receipt - The new IAP receipt
+ *   string (same format as `iapRedeem`).
+ * @param plan - The plan the user has
+ *   renewed (`monthly` or `yearly`).
+ */
+export async function iapRefreshLicense(
+  receipt: string,
+  plan: 'monthly' | 'yearly',
+): Promise<LicenseStatusPayload> {
+  return invoke<LicenseStatusPayload>('iap_refresh_license', { receipt, plan });
+}

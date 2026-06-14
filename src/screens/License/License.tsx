@@ -50,6 +50,7 @@ import {
 import { humanizeInvalidReason, statusLine } from './helpers';
 import { PricingCard } from './components/PricingCard/PricingCard';
 import { TransferFlow } from './components/TransferFlow/TransferFlow';
+import { IapRefreshFlow } from './components/IapRefreshFlow/IapRefreshFlow';
 
 import styles from './License.module.css';
 
@@ -193,6 +194,14 @@ export function License({ renderActions }: LicenseProps): JSX.Element {
             project lead for re-issuing on a new
             machine. */}
         <TransferFlow />
+
+        {/* Phase 4.1: the refresh-from-IAP
+            wizard. A 3-step flow (paste →
+            running → result) that re-validates
+            an IAP-issued license and extends
+            its expiration. Only useful for
+            users with IAP-issued licenses. */}
+        <IapRefreshFlow />
       </main>
     </div>
   );

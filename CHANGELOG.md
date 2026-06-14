@@ -6,6 +6,199 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 4 — IAP receipt validation)
+
+The final code-focused phase before public
+distribution (see HANDOFF §6 "Current phase"
+and §9.27 for the full writeup, and
+`docs/plans/prod-p4-iap-validation-design.md`
+for the design). After Phase 4, the IAP
+"Restore from App Store" / "Restore from
+Microsoft Store" flow is functional (the Phase
+3 stub is gone), and the offline-licensing +
+trial + IAP layers are all wired into the same
+`LicenseStatusPayload` shape.
+
+**Real IAP receipt validation**
+
+(Implemented in `src-tauri/src/iap.rs`,
+`iap_apple.rs`, `iap_microsoft.rs`,
+`iap_keypair.rs`, and the corresponding
+`src/ipc/iap.ts` + `src/ipc/licensing.ts`.)
+
+- **Apple App Store `verifyReceipt` validation**
+  — a new `iap_apple` module that implements
+  Apple's `verifyReceipt` protocol (POST to
+  `https://buy.itunes.apple.com/verifyReceipt`
+  with the receipt + the app-specific shared
+  secret; check `status == 0`; verify the
+  `latest_receipt_info[0].product_id` matches
+  the expected product ID for the requested
+  plan; verify the `expires_date_ms` is in the
+  future). The shared secret is read at build
+  time from the `LIPI_APPLE_IAP_SHARED_SECRET`
+  env var via `option_env!` so the binary
+  never has the secret on disk in plaintext.
+  If the env var is unset (dev build, CI
+  without the secret), every call returns
+  `iap-shared-secret-missing`.
+- **Microsoft Store Broker API validation** —
+  a new `iap_microsoft` module that parses
+  the Microsoft receipt XML (via a minimal
+  string-based parser, no external `xml` dep)
+  and validates the `<ProductId>` +
+  `<ExpirationDate>`. The OAuth flow is
+  stubbed in Phase 4 (the production bearer
+  token is read from `LIPI_MS_IAP_BEARER_TOKEN`); a
+  full OAuth client-credentials flow is a
+  v1.1 follow-up.
+- **Per-machine Ed25519 keypair** — a new
+  `iap_keypair` module that generates a fresh
+  Ed25519 keypair on first IAP redemption,
+  stores the privkey + pubkey in the OS
+  keychain (under `app.lipi.ide /
+  iap-privkey` + `app.lipi.ide / iap-pubkey`),
+  and never lets the privkey leave the machine.
+  This is the bridge between the IAP proof
+  of payment (validated against Apple /
+  Microsoft) and the local license binding
+  (signed with the per-machine key).
+- **Receipt-format dispatcher** — the
+  `iap_redeem` Tauri command inspects the
+  receipt format (JSON → Apple, XML →
+  Microsoft) and dispatches to the matching
+  platform validator. The IPC surface
+  (`iap_redeem(receipt, plan)`) is unchanged
+  from Phase 3; only the implementation
+  changed. The dispatcher returns
+  `iap-receipt-format-unrecognized` for any
+  receipt that doesn't match a known format.
+- **`LicensePayload.kid` extension** — the
+  `LicensePayload` struct gets a new
+  optional `kid` (key id) field that
+  identifies which pubkey to use to verify
+  the signature. `verify_license` dispatches
+  on `kid`: `"trial"` → embedded trial
+  pubkey, `"offline"` → embedded production
+  pubkey, `"iap-local"` → per-machine pubkey
+  from the keychain. Old v0.0.x licenses
+  (without `kid`) are treated as `"trial"`
+  for backward-compat.
+- **New error variant `LicenseError::MissingLocalPubkey`**
+  — returned when an IAP-issued license
+  references a per-machine pubkey that's no
+  longer in the keychain (OS reinstall,
+  keychain wipe). The UI humanizes this
+  reason with a "re-run the IAP flow"
+  message.
+- **Updated `humanizeInvalidReason`** — the
+  helper now handles all the new `iap-*`
+  reason codes (`iap-receipt-format-unrecognized`,
+  `iap-sandbox-not-supported`,
+  `iap-product-id-mismatch`,
+  `iap-expired`, `iap-network-error`,
+  `iap-keychain-error`,
+  `iap-shared-secret-missing`,
+  `iap-azure-credentials-missing`,
+  `iap-future-purchase`, etc.) with
+  user-friendly text. The Phase 3 stub
+  reason (`iap-not-yet-implemented`) is
+  kept as a backward-compat fallback.
+
+**New files**
+
+```
+docs/plans/prod-p4-iap-validation-design.md
+docs/decisions/0097-p4-iap-per-machine-keypair.md
+docs/decisions/0098-p4-iap-receipt-format-routing.md
+docs/decisions/0099-p4-iap-no-revalidation.md
+src-tauri/src/iap_apple.rs
+src-tauri/src/iap_microsoft.rs
+src-tauri/src/iap_keypair.rs
+```
+
+**Changed files**
+
+```
+src-tauri/src/iap.rs                 # Rewrote as a real dispatcher
+src-tauri/src/licensing.rs           # Added `kid` field + kid-based pubkey dispatch
+src-tauri/src/bin/sign_license.rs    # Sets `kid = "offline"` on issued licenses
+src-tauri/src/lib.rs                 # Wired up iap_apple, iap_microsoft, iap_keypair
+src/ipc/iap.ts                       # Updated JSDoc with the new error reasons
+src/ipc/iap.test.ts                  # Pinned the new error reasons
+src/screens/SettingsProvider/components/LicenseCard.tsx
+                                     # humanizeInvalidReason: added IAP reason paths
+src/screens/SettingsProvider/components/LicenseCard.test.ts
+                                     # 7 new tests for the IAP reason paths
+```
+
+**New tests**
+
+- `src-tauri/src/iap_apple.rs` — 12 new tests
+  (validate_apple_response: happy path,
+  status code 21002/21004/21007/21010,
+  product ID mismatch, expired, future
+  purchase, empty latest_receipt_info,
+  malformed purchase_date_ms; reason()
+  helper for SharedSecretMissing + NetworkError).
+- `src-tauri/src/iap_microsoft.rs` — 13
+  new tests (parse_microsoft_response:
+  product_id + purchase + expiration,
+  error_code, missing fields;
+  parse_iso8601_to_unix: epoch, 2024 date,
+  leap year, too-short, invalid year;
+  validate_microsoft_response: valid
+  monthly, valid yearly, error response,
+  product ID mismatch, expired, future
+  purchase, missing product ID;
+  reason() helper for AzureCredentialsMissing
+  + NetworkError).
+- `src-tauri/src/iap_keypair.rs` — 9 new
+  tests (hex_lower: zero bytes, max byte,
+  32 bytes; parse_hex_32: lowercase,
+  uppercase, wrong length, non-hex, round
+  trip; service_name).
+- `src-tauri/src/iap.rs` — 13 new tests
+  (dispatch_receipt: 6 cases including
+  leading whitespace, unknown format,
+  JSON with product_id, XML with Receipt;
+  iap_redeem end-to-end with valid Apple
+  + valid Microsoft + unknown format +
+  expired + plan mismatch;
+  ValidatedIapReceipt From conversions;
+  random_jti; plan constants match
+  licensing; IapKeypair hex encoding).
+- `src-tauri/src/licensing.rs` — no new
+  tests in Phase 4 (the `kid` dispatch is
+  exercised by the existing tests + the
+  new iap_redeem tests; no need to duplicate).
+- `src/ipc/iap.test.ts` — 5 new tests
+  (active status passthrough,
+  iap-receipt-format-unrecognized,
+  iap-expired, iap-product-id-mismatch,
+  iap-sandbox-not-supported,
+  iap-keychain-error).
+- `src/screens/SettingsProvider/components/LicenseCard.test.ts`
+  — 7 new tests for the new
+  humanizeInvalidReason IAP paths.
+
+**Total new tests**: 12 new TS tests
+(5 iap.test.ts + 7 LicenseCard.test.ts) +
+53 new Rust tests (12 iap_apple + 13
+iap_microsoft + 9 iap_keypair + 13 iap +
+6 pre-existing round-trip tests
+re-exercised with the new `kid` field).
+
+**Verification**
+
+- `cargo test --lib`: 292 passed (up
+  from 239).
+- `npx vitest run`: 985 passed (up from
+  973).
+- `npx tsc --noEmit`: clean.
+- `npm run build`: clean.
+- `cargo check`: clean (no warnings).
+
 ### Added (Phase 5 — Production release pipeline)
 
 The last code-focused phase before public

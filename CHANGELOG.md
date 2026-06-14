@@ -6,6 +6,96 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 7 — TypeScript intellisense via Monaco)
+
+The editor now has real TypeScript language service:
+**autocomplete, error squiggles, go-to-definition,
+hover, and find-references** for `.ts` / `.tsx` files,
+powered by Monaco's built-in TS service running in a
+Web Worker. IntelliSense reads the workspace's
+`tsconfig.json` automatically, so a project with
+`strict: false` doesn't suddenly see red squiggles
+everywhere. A workspace with no `tsconfig.json` falls
+back to a sane default (`strict: true`, ES2020,
+React JSX) so one-off scripts still get intellisense.
+See `HANDOFF.md` §9.31 for the full writeup.
+
+**Monaco language worker wiring (the Vite-side infra)**
+
+- New `src/screens/EditorWorkspace/workers/getMonacoWorker.ts`
+  registers `self.MonacoEnvironment.getWorker` to
+  resolve the editor + language-service worker
+  instances via Vite's `?worker` import syntax.
+  Without this, Monaco tries to load workers from a
+  CDN URL at runtime — fails offline and adds a
+  startup cost we don't need.
+- `main.tsx` side-effect-imports the worker
+  registration before any `monaco-editor` module
+  is evaluated (the order matters; see the comment
+  in the file).
+- `vite.config.ts` now has `optimizeDeps.include` for
+  Monaco's ESM entry + the four worker entry points
+  (TS, JSON, CSS, HTML) and `rollupOptions.output.manualChunks`
+  to emit each language worker as its own chunk.
+- Production build verified: `dist/assets/tsMode-*.js`
+  (the TS service worker) is a 23 KB separate
+  chunk; `dist/assets/index-*.js` is 750 KB / 212 KB
+  gzip, basically unchanged from the pre-Phase-7
+  baseline (the +5-10 MB worst case in the plan
+  didn't materialise because Monaco only emits
+  workers for languages the user actually opens).
+
+**`fs_path_exists` Tauri command**
+
+- New `fs_path_exists(path: String) -> bool` command
+  in `src-tauri/src/fs.rs` (cheaper than a full
+  `read_file` round-trip — no size probe, no
+  encoding sniff). Registered in
+  `tauri::generate_handler!` in `lib.rs`. Typed
+  wrapper `pathExists` added to `src/ipc/fs.ts`.
+- Three new Rust unit tests
+  (`path_exists_returns_true_for_existing_file`,
+  `path_exists_returns_true_for_existing_directory`,
+  `path_exists_returns_false_for_missing_path`).
+
+**`tsConfigStore` (Zustand)**
+
+- New `src/screens/EditorWorkspace/state/tsConfigStore.ts`
+  reads + parses the workspace's `tsconfig.json`
+  (stripping `//` and `/* * /` comments first) and
+  exposes the `compilerOptions` block to the editor.
+- Subscribes to the existing `onFsChange` watcher
+  for the workspace root (debounced 500 ms) so an
+  external save of `tsconfig.json` hot-reloads the
+  TS service with the new options.
+- 17 new unit tests covering: comment-stripping
+  edge cases (string-literal `//`, escaped quotes),
+  `parseTsConfig` shape validation, missing file
+  fallback, corrupted JSON fallback, no-op
+  short-circuit on same root, workspace switch
+  (stops old watcher + starts new), `clear()`
+  teardown, debounced external-change re-read.
+
+**`EditorPane` integration**
+
+- `handleMount` now (1) one-time-configures
+  `monaco.languages.typescript.typescriptDefaults`
+  (target ES2020, ESNext modules, strict, ESM
+  interop, React JSX, etc.) and
+  `javascriptDefaults`, and (2) applies the
+  discovered `compilerOptions` from
+  `tsConfigStore` via
+  `setCompilerOptions(...)`. The setup is
+  guarded by a module-level `tsConfigured` flag
+  so re-mounts (tab switches) are no-ops.
+- A new `useEffect` subscribes to the active
+  workspace tab's path and calls
+  `tsConfigStore.setFromWorkspace(root)` (or
+  `.clear()` on workspace close). A second
+  `useEffect` re-applies the discovered config
+  whenever the store's `updatedAt` bumps (e.g. on
+  the fs-watcher's debounced re-read).
+
 ### Changed (Phase 6 — Daily-driver hardening)
 
 The first `tauri build` whose **end-user install

@@ -272,6 +272,23 @@ fn tmp_path(p: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Phase 7: cheap "does this path exist" check, used by the
+/// `tsConfigStore` to detect whether the workspace has a
+/// `tsconfig.json` (and whether to fall back to defaults).
+///
+/// We don't differentiate between files and directories, and we
+/// don't surface permission errors — both are "exists = false" from
+/// the caller's perspective. The call site only needs a yes/no
+/// answer to decide whether to read the file.
+///
+/// Backed by `Path::exists` (which itself uses `stat`-style syscalls
+/// under the hood). Order of magnitude cheaper than a `read_file`
+/// round-trip because there's no 5 MB size probe and no encoding
+/// sniffing.
+pub fn path_exists(path: &Path) -> bool {
+    path.exists()
+}
+
 pub(crate) fn looks_like_text(bytes: &[u8]) -> bool {
     let probe = &bytes[..bytes.len().min(TEXT_PROBE_BYTES)];
     !probe.contains(&0)
@@ -476,5 +493,30 @@ mod tests {
         assert_eq!(fs::read_to_string(&from).unwrap(), "x");
         assert_eq!(fs::read_to_string(&to).unwrap(), "y");
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn path_exists_returns_true_for_existing_file() {
+        let dir = unique_tmpdir("exists-file");
+        let file = dir.join("present.txt");
+        fs::write(&file, "x").unwrap();
+        assert!(path_exists(&file));
+        // And false after we delete it.
+        fs::remove_file(&file).unwrap();
+        assert!(!path_exists(&file));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn path_exists_returns_true_for_existing_directory() {
+        let dir = unique_tmpdir("exists-dir");
+        assert!(path_exists(&dir));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn path_exists_returns_false_for_missing_path() {
+        let missing = Path::new("Z:/definitely/not/a/real/path/abc123.txt");
+        assert!(!path_exists(missing));
     }
 }

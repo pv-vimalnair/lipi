@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import type { OnMount } from '@monaco-editor/react';
 import Editor, { loader } from '@monaco-editor/react';
+import * as monaco from 'monaco-editor';
 
 import { useKeyboardShortcut } from '@/shared/hooks';
 import { KeyHint } from '@/shared/components/KeyHint';
@@ -13,7 +14,77 @@ import {
 } from '../../state/editorTabsStore';
 import { useEditorTabs } from '../../hooks/useEditorTabs';
 import { useEditorControllerStore } from '../../state/editorControllerStore';
+import { useTsConfigStore } from '../../state/tsConfigStore';
+import {
+  useWorkspaceStore,
+} from '@/shared/state/workspaceStore';
 import styles from './EditorPane.module.css';
+
+// Phase 7: module-level guard for the one-time
+// TypeScript service configuration. Monaco keeps a
+// single TS service for the whole renderer process;
+// calling `setCompilerOptions` / `setDiagnosticsOptions`
+// is global and idempotent but not free (it re-emits
+// diagnostics for every model in the project). We do
+// it once on the first `handleMount` invocation and
+// then never touch `typescriptDefaults` /
+// `javascriptDefaults` again — subsequent `tsconfig.json`
+// changes (workspace switch, external edit) are applied
+// via the `applyDiscoveredTsConfig` function below, which
+// only swaps the compiler options without re-touching
+// the diagnostic toggles.
+let tsServiceConfigured = false;
+function configureTsServiceOnce() {
+  if (tsServiceConfigured) return;
+  tsServiceConfigured = true;
+  monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+    target: monaco.languages.typescript.ScriptTarget.ES2020,
+    module: monaco.languages.typescript.ModuleKind.ESNext,
+    moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+    strict: true,
+    esModuleInterop: true,
+    skipLibCheck: true,
+    allowNonTsExtensions: true,
+    allowJs: true,
+    jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+  });
+  monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: false,
+    noSyntaxValidation: false,
+    noSuggestionDiagnostics: false,
+  });
+  monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
+    target: monaco.languages.typescript.ScriptTarget.ES2020,
+    allowJs: true,
+    checkJs: false,
+  });
+}
+
+// Phase 7: apply the workspace's discovered
+// `compilerOptions` (or `null` to reset to the
+// defaults installed by `configureTsServiceOnce`).
+// Called on every `handleMount` AND on every
+// `tsConfigStore` change (the `useEffect` in
+// `ActiveEditor` subscribes to `updatedAt`).
+function applyDiscoveredTsConfig() {
+  const { compilerOptions } = useTsConfigStore.getState();
+  if (compilerOptions) {
+    // The store hands us the raw `compilerOptions`
+    // object from the user's `tsconfig.json`. Monaco's
+    // type expects a fully-typed shape, but it
+    // actually only checks the fields it cares
+    // about — passing the raw object is the
+    // documented escape hatch for "I don't want to
+    // model every TS compiler option".
+    monaco.languages.typescript.typescriptDefaults.setCompilerOptions(
+      compilerOptions as monaco.languages.typescript.CompilerOptions,
+    );
+  }
+  // If `compilerOptions` is `null` (no tsconfig in
+  // workspace), we leave the defaults in place —
+  // they were installed by `configureTsServiceOnce`
+  // and are correct for "no project config".
+}
 
 // Tell the monaco-react loader where the bundled monaco lives. Without
 // this, it tries to fetch from a CDN at runtime, which fails offline
@@ -67,6 +138,29 @@ export function EditorPane() {
   );
 
   const dirty = activeTab ? isDirty(activeTab) : false;
+
+  // Phase 7: feed the active workspace root into
+  // `tsConfigStore` whenever the user switches
+  // workspace tabs (or opens / closes one). The store
+  // reads + parses `tsconfig.json` (or falls back to
+  // defaults) and the `handleMount` callback below
+  // applies the resulting `compilerOptions` to
+  // Monaco. On workspace close, the store is cleared.
+  //
+  // The selector returns `null` when no tab is active
+  // — the store's `setFromWorkspace` is short-circuited
+  // on a no-op and `clear` is the explicit teardown
+  // path for "no workspace".
+  const activeWorkspaceRoot = useWorkspaceStore((s) =>
+    s.activeId ? s.workspaces.find((w) => w.id === s.activeId)?.path ?? null : null,
+  );
+  useEffect(() => {
+    if (activeWorkspaceRoot) {
+      void useTsConfigStore.getState().setFromWorkspace(activeWorkspaceRoot);
+    } else {
+      useTsConfigStore.getState().clear();
+    }
+  }, [activeWorkspaceRoot]);
 
   return (
     <PaneShell
@@ -171,6 +265,18 @@ function ActiveEditor({
     // monaco-agnostic; consumers cast at the
     // call site.
     setControllerEditor(editor);
+    // Phase 7: configure the TS service once on
+    // the first mount (idempotent), then apply
+    // whatever `compilerOptions` the
+    // `tsConfigStore` has for the active
+    // workspace. Re-runs on every tab switch
+    // (the new editor instance may need the
+    // same options re-applied — `setCompilerOptions`
+    // is global state, so this is technically a
+    // no-op for the second+ invocation, but it's
+    // defensive and cheap).
+    configureTsServiceOnce();
+    applyDiscoveredTsConfig();
     // Phase S: if a `pendingReveal` is queued
     // for this exact path, apply it now and
     // clear the request. We compare paths
@@ -187,6 +293,20 @@ function ActiveEditor({
       setPendingReveal(null);
     }
   }, [path, setControllerEditor, setPendingReveal]);
+
+  // Phase 7: re-apply the discovered `compilerOptions`
+  // whenever the `tsConfigStore` updates — that covers
+  // workspace switch, external `tsconfig.json` save
+  // (debounced 500ms by the store's fs watcher), and
+  // any future "reload project config" action. The
+  // store's `updatedAt` is a monotonic timestamp that
+  // bumps on every successful re-read; using it as the
+  // effect dep means we don't need to deep-compare the
+  // `compilerOptions` object.
+  const tsConfigUpdatedAt = useTsConfigStore((s) => s.updatedAt);
+  useEffect(() => {
+    applyDiscoveredTsConfig();
+  }, [tsConfigUpdatedAt]);
 
   // 5b-5: clear the controller-store handle when
   // the active editor unmounts (tab switch,

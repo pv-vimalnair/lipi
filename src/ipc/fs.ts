@@ -145,3 +145,18 @@ export async function renameEntry(from: string, to: string): Promise<void> {
     throw asFsError(err);
   }
 }
+
+/**
+ * Phase 7: cheap "does this path exist" check, used by
+ * `tsConfigStore` to decide whether to read the workspace's
+ * `tsconfig.json` (or fall back to defaults). The Rust side
+ * does not differentiate between files and directories and
+ * treats permission errors as "doesn't exist" — both are
+ * `false` from this caller's perspective.
+ *
+ * The command is sync on the Rust side and never throws
+ * (no `Result` wrapping), so we don't need a try/catch here.
+ */
+export async function pathExists(path: string): Promise<boolean> {
+  return await invoke<boolean>('fs_path_exists', { path });
+}

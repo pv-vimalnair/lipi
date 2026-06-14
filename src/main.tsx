@@ -34,6 +34,11 @@ import {
 import '@xterm/xterm/css/xterm.css';
 import '@/shared/styles/tokens.css';
 import '@/shared/styles/global.css';
+// Phase 7: register Monaco's language-service Web Workers
+// (TypeScript, JSON, CSS, HTML) before any `monaco-editor`
+// module is evaluated. Side-effect import — see the file's
+// header comment for why ordering matters.
+import '@/screens/EditorWorkspace/workers/getMonacoWorker';
 
 const container = document.getElementById('root');
 if (!container) {

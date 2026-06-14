@@ -33,7 +33,7 @@ mod fs_watcher;
 mod workspace_search;
 use fs::{
     read_dir, read_file, write_file, create_file, delete_entry, rename_entry,
-    FsEntry, FsError, FileContent,
+    path_exists, FsEntry, FsError, FileContent,
 };
 use fs_watcher::{fs_unwatch, fs_watch};
 use workspace_search::workspace_search;
@@ -463,6 +463,17 @@ fn fs_delete_entry(path: String) -> Result<(), FsError> {
 #[tauri::command]
 fn fs_rename_entry(from: String, to: String) -> Result<(), FsError> {
     rename_entry(std::path::Path::new(&from), std::path::Path::new(&to))
+}
+
+/// Phase 7: cheap path-exists check for `tsConfigStore` (and any
+/// other "should I bother reading this file?" caller). Returns
+/// `true` for any path the OS can stat — files, directories,
+/// symlinks. `false` for missing paths and paths we can't read
+/// (a permission-denied is treated as "doesn't exist" because the
+/// call site just wants a yes/no).
+#[tauri::command]
+fn fs_path_exists(path: String) -> bool {
+    path_exists(std::path::Path::new(&path))
 }
 
 // --- Phase 5c: custom tool shell executor ---------------------------------
@@ -1565,6 +1576,7 @@ pub fn run() {
             fs_create_file,
             fs_delete_entry,
             fs_rename_entry,
+            fs_path_exists,
             fs_watch,
             fs_unwatch,
             workspace_search,

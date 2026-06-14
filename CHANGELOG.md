@@ -6,6 +6,102 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (Phase 6 — Daily-driver hardening)
+
+The first `tauri build` whose **end-user install
+directory is clean**: only `lipi.exe` and the NSIS
+uninstaller, no project-lead helper CLIs. Daily-driver
+status verified by `install → launch → screenshot →
+uninstall` round-trip on a fresh
+`C:\Users\Pv Vimal Nair\AppData\Local\Lipi\`. See
+`HANDOFF.md` §10 for the full writeup.
+
+**Helper CLIs are no longer shipped to users**
+
+- `sign_license`, `rotate_updater_key`, and the
+  production-readiness-pass `gen_license_keypair`
+  CLIs are now gated behind a new `internal-tools`
+  Cargo feature, OFF by default. The project lead
+  builds them locally with
+  `cargo build --features internal-tools`. End-user
+  installs only contain `lipi.exe` and `uninstall.exe`.
+- The source files for all three CLIs were moved
+  from `src/bin/` to `src-tauri/tools/`. This is
+  required because tauri-bundler 2.1.x walks
+  `src/bin/` on disk in addition to reading
+  `[[bin]]` entries, and ignores `required-features`
+  for the disk-scanned bins (see
+  [tauri#15325](https://github.com/tauri-apps/tauri/issues/15325)
+  and [tauri#14379](https://github.com/tauri-apps/tauri/pull/14379)
+  for the upstream bug + fix). The two-layer
+  exclusion (gated + moved) is the only path that
+  "just works" in tauri 2.1.x.
+
+**MSI bundling temporarily disabled**
+
+- `tauri.conf.json` now sets
+  `bundle.targets = ["nsis"]` instead of `"all"`.
+  The WiX-based MSI bundler fails with
+  `LGHT0094 : Unresolved reference to symbol
+  'WixUI:WixUI_InstallDir'` in 2.1.x — a real
+  regression whose root cause has not yet been
+  pinned down (the previous build, `bd922b5`,
+  produced a working MSI). The NSIS installer
+  is the primary distribution format for the
+  daily-driver use case; MSI can be re-enabled
+  after the underlying issue is fixed. Track in
+  HANDOFF §10.
+
+**On-device STT (`m2c-native` feature) — known limitation**
+
+- LLVM 22.1.7 (clang + libclang), CMake 4.3.3,
+  and Visual Studio 2022 Build Tools' MSVC 14.44
+  are now installed on the project lead's Windows
+  machine. The `cargo check --features m2c-native`
+  build progresses through bindgen, compiles
+  whisper.cpp via CMake, and reaches the final
+  Rust link step.
+- The build then fails with `error[E0080]:
+  attempt to compute '1_usize - 264_usize'` in the
+  generated `whisper_full_params` bindings. This
+  is an incompatibility between
+  `whisper-rs-sys 0.13.1` (pinned in `Cargo.toml`
+  via `whisper-rs = "0.14"`) and the latest
+  whisper.cpp upstream (which restructured
+  `whisper_full_params` in a way the older
+  bindgen can't see). The fix is a Cargo dep bump
+  on `whisper-rs` / `whisper-rs-sys`, but that
+  is deferred — the m2c-native path is a
+  "future" feature, the current installer ships
+  the M2c Rust code in stub mode (the user-facing
+  voice flow is Web Speech, which is fully
+  functional). Track in HANDOFF §10.
+
+**Voice preferences + capabilities stores**
+
+- `src/shared/state/voicePreferencesStore.ts` and
+  `src/shared/state/voiceCapabilitiesStore.ts`
+  (both with co-located `.test.ts` files) are
+  the new in-app stores for the user's
+  voice-mode preference (web-speech / on-device
+  / auto) and the device's runtime STT
+  capabilities (what mic / Web Speech / on-device
+  model is available). Wired to the
+  `SettingsProvider` (On-Device card, Web Speech
+  card). See HANDOFF §10 for the data shape and
+  the user-facing controls.
+
+**Mobile STT shim (decision 0046)**
+
+- `docs/plugins/lipi-stt-android/README.md` and
+  `docs/plugins/lipi-stt-ios/README.md` capture
+  the M2c mobile shim spec from decision 0046.
+  The mobile STT path is gated behind the
+  `lipi-stt-android` / `lipi-stt-ios` plugins
+  and the existing Tauri mobile builds. The
+  desktop code is unchanged — the shim is
+  Tauri-mobile-only.
+
 ### Added (Production-readiness pass — `bd922b5`)
 
 The first end-to-end `tauri build` run that produces

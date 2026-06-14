@@ -201,44 +201,59 @@ serde_json = "1"
 # tempfile (Phase 5c — `lipi-tools.json` round-trip tests).
 tempfile = "3"
 
-# Phase 3: the `sign_license` CLI. A one-shot
-# Rust binary that the project lead runs from a
-# terminal to issue production license keys from
-# purchase emails. Takes `--plan <monthly|yearly>
-# --machine <64-char hex fingerprint> --out
-# <path/to/license.txt>`; reads the production
-# private key from `TAURI_PROD_LICENSE_KEY_HEX`
-# (32 hex chars); signs the payload with the
-# existing `licensing::sign_payload` function;
-# writes the `LIP1.…` key to `--out`.
+# Internal tools (project-lead-only CLIs)
+# ----------------------------------------
+# All three of these are project-lead-only CLIs
+# that MUST NOT ship in the end-user installer.
+# They are declared as explicit `[[bin]]` entries
+# with `required-features = ["internal-tools"]`,
+# AND the source files live in `tools/` rather
+# than `src/bin/`. The two-layer exclusion is
+# necessary because tauri-bundler 2.1.x's binary
+# discovery runs in two stages:
 #
-# This bin is desktop-only (no mobile, no Tauri
-# runtime) — the CLI is a separate process from
-# the Tauri app. The licensing module is gated
-# `#[cfg(not(mobile))]` (see `lib.rs`), which
-# would normally hide it from this bin too. To
-# keep the licensing module accessible from the
-# bin, we add the bin to the same `not(mobile)`
-# gate at the source level (see
-# `src/bin/sign_license.rs` for the gate).
+#   1. Read `[[bin]]` entries from Cargo.toml —
+#      respects `required-features` and skips
+#      gated bins.
+#   2. Walk `src/bin/` on disk — picks up every
+#      .rs file not already in the list, IGNORING
+#      `required-features`.
+#
+# The bug is documented in
+# https://github.com/tauri-apps/tauri/issues/15325
+# (and fixed in PR #14379, which targets a
+# later tauri-bundler release than 2.1.x ships
+# with). Until that fix lands, the only path
+# that works in 2.1.x is: keep the `[[bin]]`
+# declaration with `required-features` AND move
+# the source file out of `src/bin/`. The bundler's
+# Stage 1 skips the bin (gated), and Stage 2
+# can't find it on disk (moved). The project lead
+# builds the CLIs with
+# `cargo build --features internal-tools`.
+#
+# Phase 6 daily-driver hardening replaces the
+# previous `bd922b5` setup (where `sign_license`
+# and `rotate_updater_key` had `required-features
+# = []` and so were unconditionally built AND
+# bundled) with the gated + moved layout. The
+# user install now contains only `lipi.exe` and
+# the NSIS uninstaller; the helper CLIs are
+# project-lead-only.
 [[bin]]
 name = "sign_license"
-path = "src/bin/sign_license.rs"
-required-features = []
+path = "tools/sign_license.rs"
+required-features = ["internal-tools"]
 
-# Phase 5: the `rotate_updater_key` CLI. A one-shot
-# Rust binary that the project lead runs from a
-# terminal when rotating the Tauri updater signing
-# keypair. See `src/bin/rotate_updater_key.rs` for
-# the full design and
-# `docs/plans/prod-p5-release-pipeline-design.md`
-# for the rationale. The CLI patches the
-# `plugins.updater.pubkey` field in `tauri.conf.json`
-# in place and prints a unified-diff for review.
 [[bin]]
 name = "rotate_updater_key"
-path = "src/bin/rotate_updater_key.rs"
-required-features = []
+path = "tools/rotate_updater_key.rs"
+required-features = ["internal-tools"]
+
+[[bin]]
+name = "gen_license_keypair"
+path = "tools/gen_license_keypair.rs"
+required-features = ["internal-tools"]
 
 [features]
 # Default: just the shell, no plugins. Add features as we wire them.
@@ -246,6 +261,13 @@ required-features = []
 # and toggles between the Vite dev server and a bundled asset protocol.
 # Don't declare it manually.
 default = []
+# `internal-tools` enables the project-lead-only CLI
+# binaries (sign_license, rotate_updater_key,
+# gen_license_keypair). It is OFF by default so the
+# end-user installer only contains `lipi.exe` and
+# the NSIS uninstaller. Enable it locally or in CI
+# with `cargo build --features internal-tools`.
+internal-tools = []
 # M2c hardware acceleration for whisper-rs. Off by default —
 # the dev build does plain CPU inference (works in CI sandboxes
 # without a GPU). Production builds opt in per target:

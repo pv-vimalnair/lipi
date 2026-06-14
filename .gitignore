@@ -8,6 +8,10 @@ dist-ssr/
 
 # Tauri build artifacts
 src-tauri/target/
+# target-m2c/ is the parallel CARGO_TARGET_DIR used
+# for the m2c-native (whisper-rs-sys) builds. It's
+# a build artifact, not source.
+src-tauri/target-m2c/
 src-tauri/gen/schemas/
 src-tauri/tauri-dev.log
 src-tauri/lipi-window.png

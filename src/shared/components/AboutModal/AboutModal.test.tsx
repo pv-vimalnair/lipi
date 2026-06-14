@@ -49,6 +49,18 @@ vi.mock('@/ipc/app', () => ({
   openDevtools: vi.fn(async () => undefined),
 }));
 
+// Phase 5: mock the updater-health IPC so the test
+// doesn't need a Tauri runtime. The test renders
+// the initial "checking…" state (the IPC promise
+// never resolves in the synchronous render).
+const mockUpdaterHealthCheck = vi.fn(
+  async () => ({ kind: 'reachable' as const, status: 200 }),
+);
+
+vi.mock('@/ipc/updaterHealth', () => ({
+  updaterHealthCheck: () => mockUpdaterHealthCheck(),
+}));
+
 function render(props: { open: boolean; onClose?: () => void }): string {
   const element: ReactElement = (
     <AboutModal
@@ -122,6 +134,55 @@ describe('AboutModal', () => {
     expect(html).toMatch(/<a [^>]*href="https:\/\/github\.com\/lipi-dev\/lipi"/);
     expect(html).toMatch(/target="_blank"/);
     expect(html).toMatch(/rel="noreferrer noopener"/);
+  });
+
+  it('renders the updater-health row in the meta dl', () => {
+    // Phase 5: the meta dl now includes an
+    // "Updater" row with a status pill. The
+    // initial state (before the IPC resolves)
+    // is "checking…".
+    const html = render({ open: true });
+    expect(html).toContain('Updater');
+    expect(html).toContain('checking');
+    expect(html).toContain('data-testid="updater-health-checking"');
+  });
+});
+
+describe('UpdaterHealthPill (Phase 5)', () => {
+  it('renders the "checking" state', async () => {
+    const { UpdaterHealthPill } = await import('./AboutModal');
+    const html = renderToStaticMarkup(
+      <UpdaterHealthPill state={{ kind: 'checking' }} />,
+    );
+    expect(html).toContain('checking');
+    expect(html).toContain('data-testid="updater-health-checking"');
+  });
+
+  it('renders the "reachable" state with the status in the title', async () => {
+    const { UpdaterHealthPill } = await import('./AboutModal');
+    const html = renderToStaticMarkup(
+      <UpdaterHealthPill
+        state={{ kind: 'done', health: { kind: 'reachable', status: 200 } }}
+      />,
+    );
+    expect(html).toContain('✓ reachable');
+    expect(html).toContain('data-testid="updater-health-reachable"');
+    expect(html).toContain('title="HTTP 200"');
+  });
+
+  it('renders the "unreachable" state with the reason in the title', async () => {
+    const { UpdaterHealthPill } = await import('./AboutModal');
+    const html = renderToStaticMarkup(
+      <UpdaterHealthPill
+        state={{
+          kind: 'done',
+          health: { kind: 'unreachable', reason: 'timeout after 5s' },
+        }}
+      />,
+    );
+    expect(html).toContain('✗ unreachable');
+    expect(html).toContain('data-testid="updater-health-unreachable"');
+    expect(html).toContain('title="timeout after 5s"');
   });
 });
 

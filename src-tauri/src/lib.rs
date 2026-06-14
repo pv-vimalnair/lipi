@@ -118,6 +118,30 @@ mod iap;
 #[cfg(not(mobile))]
 pub use iap::iap_redeem;
 
+// Phase 5: the updater endpoint health check. See
+// `src-tauri/src/updater_health.rs` for the full
+// design and `docs/plans/prod-p5-release-pipeline-design.md`
+// for the rationale. Desktop-only (mobile apps have
+// their own updater). The frontend's About screen
+// calls the `updater_health_check` Tauri command on
+// mount to display "Updater: ✓ reachable" or
+// "Updater: ✗ unreachable — …".
+#[cfg(not(mobile))]
+mod updater_health;
+#[cfg(not(mobile))]
+pub use updater_health::updater_health_check;
+
+// Phase 5: the `rotate_updater_key` CLI library.
+// See `src-tauri/src/rotate_updater_key.rs` for
+// the pure logic (argument parsing, pubkey
+// validation, JSON patching) and
+// `src-tauri/src/bin/rotate_updater_key.rs` for the
+// thin I/O wrapper. `pub` so the binary can import
+// it. Desktop-only (the CLI is for the project
+// lead's dev machine, not end users).
+#[cfg(not(mobile))]
+pub mod rotate_updater_key;
+
 mod ai;
 pub use ai::{get_configured_providers as ai_get_configured_providers_rs, list_providers as ai_list_providers_rs, provider_by_id, ProviderInfo};
 
@@ -1565,6 +1589,8 @@ pub fn run() {
             license_get_machine_fingerprint,
             #[cfg(not(mobile))]
             iap_redeem,
+            #[cfg(not(mobile))]
+            updater_health_check,
         ])
         .manage(Arc::new(TerminalState::new()))
         .menu(|app| menu::build_main_menu(app))

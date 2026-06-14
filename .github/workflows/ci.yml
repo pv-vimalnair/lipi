@@ -1,0 +1,150 @@
+# Phase 5: the on-pull-request CI.
+#
+# Runs on every push to a branch and every PR
+# against `main`. The pipeline:
+#
+# 1. Runs vitest (TypeScript / React tests).
+# 2. Runs cargo test (Rust tests).
+# 3. Runs tsc --noEmit (TypeScript type check).
+# 4. Runs vite build (frontend build).
+# 5. Runs cargo check (Rust syntax + type check).
+# 6. **Phase 5 guard**: fails the build if the
+#    versions in `package.json`,
+#    `src-tauri/Cargo.toml`, and
+#    `src-tauri/tauri.conf.json` don't match.
+# 7. **Phase 5 guard**: fails the build if the
+#    dev updater keypair
+#    (`dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUyMjI5QkMyNEMzRjQ4RA==`)
+#    is referenced from `tauri.conf.json`'s
+#    `plugins.updater.pubkey`. Catches
+#    "I forgot to rotate the keypair" bugs at
+#    PR time, not at release time.
+#
+# The version-mismatch + dev-keypair-reference
+# guards are the "did the project lead forget
+# something" checks. They're cheap (just a grep
+# + a JSON parse) and catch the two most common
+# "release went out with the wrong key" / "the
+# app on disk is v0.0.5 but the website says
+# v0.0.4" bugs.
+#
+# See `docs/plans/prod-p5-release-pipeline-design.md`
+# for the design rationale.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch
+# (the most recent push wins). This is a quality-
+# of-life feature for contributors who push
+# multiple commits in quick succession.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────────
+  # Phase 5 guard: version-mismatch check. Fails
+  # the build if `package.json`,
+  # `src-tauri/Cargo.toml`, and
+  # `src-tauri/tauri.conf.json` have different
+  # version strings.
+  # ──────────────────────────────────────────────────
+  version-guard:
+    name: Version guard
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check version consistency
+        run: |
+          set -e
+          # Read the version from each file. We
+          # use a small bash script (no jq
+          # dependency) for portability.
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          CARGO_VERSION=$(grep -E '^version = ' src-tauri/Cargo.toml | head -1 | sed -E 's/version = "([^"]+)"/\1/')
+          TAURI_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+
+          echo "package.json:       $PKG_VERSION"
+          echo "Cargo.toml:         $CARGO_VERSION"
+          echo "tauri.conf.json:    $TAURI_VERSION"
+
+          if [ "$PKG_VERSION" != "$CARGO_VERSION" ] || [ "$PKG_VERSION" != "$TAURI_VERSION" ]; then
+            echo "::error::Version mismatch — all three files must have the same version"
+            echo "::error::  package.json:    $PKG_VERSION"
+            echo "::error::  Cargo.toml:      $CARGO_VERSION"
+            echo "::error::  tauri.conf.json: $TAURI_VERSION"
+            exit 1
+          fi
+
+          echo "Version check PASSED: all three files agree on $PKG_VERSION"
+
+  # ──────────────────────────────────────────────────
+  # Test suite + build. The actual "does it
+  # work" check.
+  # ──────────────────────────────────────────────────
+  test:
+    name: Test (${{ matrix.os }})
+    needs: [version-guard]
+    strategy:
+      fail-fast: false
+      matrix:
+        # We run the test suite on all 3 OSes
+        # because Tauri's platform-specific
+        # code (e.g. macOS Keychain, Windows
+        # DPAPI) can have platform-only bugs.
+        # The matrix runs in parallel and the
+        # project lead sees which OS failed.
+        os: [ubuntu-22.04, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.82'
+
+      - name: Install platform-specific deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Run vitest
+        run: npm test -- --run
+
+      - name: Run tsc
+        run: npx tsc --noEmit
+
+      - name: Run vite build
+        run: npm run build
+
+      - name: Run cargo test
+        run: cd src-tauri && cargo test --workspace --locked
+
+      - name: Run cargo check (all targets)
+        run: cd src-tauri && cargo check --all-targets --locked

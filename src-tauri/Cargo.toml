@@ -221,6 +221,20 @@ name = "sign_license"
 path = "src/bin/sign_license.rs"
 required-features = []
 
+# Phase 5: the `rotate_updater_key` CLI. A one-shot
+# Rust binary that the project lead runs from a
+# terminal when rotating the Tauri updater signing
+# keypair. See `src/bin/rotate_updater_key.rs` for
+# the full design and
+# `docs/plans/prod-p5-release-pipeline-design.md`
+# for the rationale. The CLI patches the
+# `plugins.updater.pubkey` field in `tauri.conf.json`
+# in place and prints a unified-diff for review.
+[[bin]]
+name = "rotate_updater_key"
+path = "src/bin/rotate_updater_key.rs"
+required-features = []
+
 [features]
 # Default: just the shell, no plugins. Add features as we wire them.
 # `custom-protocol` is auto-injected by `cargo tauri dev` / `cargo tauri build`

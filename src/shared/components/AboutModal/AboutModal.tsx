@@ -33,6 +33,7 @@ import { Modal } from '@/shared/components/Modal';
 import { Button } from '@/shared/components/Button';
 import { Stack } from '@/shared/components/Stack';
 import { getAppVersion } from '@/ipc/app';
+import { updaterHealthCheck, type UpdaterHealth } from '@/ipc';
 import styles from './AboutModal.module.css';
 
 export interface AboutModalProps {
@@ -62,10 +63,15 @@ interface VersionInfo {
   version: string;
 }
 
+type HealthState =
+  | { kind: 'checking' }
+  | { kind: 'done'; health: UpdaterHealth };
+
 export function AboutModal({ open, onClose }: AboutModalProps): JSX.Element {
   const titleId = useId();
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [versionError, setVersionError] = useState<string | null>(null);
+  const [healthState, setHealthState] = useState<HealthState>({ kind: 'checking' });
 
   // Fetch the live version when the modal opens. We don't
   // show a loading spinner — the modal renders with "…"
@@ -86,6 +92,32 @@ export function AboutModal({ open, onClose }: AboutModalProps): JSX.Element {
       .catch((e: unknown) => {
         if (cancelled) return;
         setVersionError(e instanceof Error ? e.message : 'unknown error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  // Phase 5: probe the updater endpoint when the modal
+  // opens. The probe is desktop-only (the Rust command
+  // is gated `#[cfg(not(mobile))]`); on mobile / web
+  // the IPC will reject and we render "unavailable".
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setHealthState({ kind: 'checking' });
+    updaterHealthCheck()
+      .then((health) => {
+        if (cancelled) return;
+        setHealthState({ kind: 'done', health });
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const reason = e instanceof Error ? e.message : 'unknown error';
+        setHealthState({
+          kind: 'done',
+          health: { kind: 'unreachable', reason },
+        });
       });
     return () => {
       cancelled = true;
@@ -140,6 +172,12 @@ export function AboutModal({ open, onClose }: AboutModalProps): JSX.Element {
                 </a>
               </dd>
             </div>
+            <div className={styles.metaRow}>
+              <dt>Updater</dt>
+              <dd>
+                <UpdaterHealthPill state={healthState} />
+              </dd>
+            </div>
           </dl>
 
           <div className={styles.actions}>
@@ -150,5 +188,61 @@ export function AboutModal({ open, onClose }: AboutModalProps): JSX.Element {
         </Stack>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * Phase 5: a small status pill that displays the
+ * updater endpoint's health. Renders one of four
+ * states:
+ *
+ *   - "checking…" (grey) — the IPC is in flight
+ *   - "✓ reachable" (green) — the host responded
+ *   - "✗ unreachable — <reason>" (red) — network
+ *     error or 4xx/5xx response
+ *
+ * The pill lives in the modal's "meta" `<dl>` row
+ * so the visual rhythm matches the other meta rows
+ * (Platforms, License, Source).
+ *
+ * Exported for testing — the unit test renders
+ * each of the three states directly. The export
+ * is intentionally only the function (not its
+ * parent), to keep the public surface of the
+ * AboutModal module small.
+ */
+export function UpdaterHealthPill({ state }: { state: HealthState }): JSX.Element {
+  if (state.kind === 'checking') {
+    return (
+      <span
+        className={`${styles.updaterHealth} ${styles.updaterHealthChecking}`}
+        data-testid="updater-health-checking"
+      >
+        checking…
+      </span>
+    );
+  }
+
+  const health = state.health;
+  if (health.kind === 'reachable') {
+    return (
+      <span
+        className={`${styles.updaterHealth} ${styles.updaterHealthReachable}`}
+        data-testid="updater-health-reachable"
+        title={`HTTP ${health.status}`}
+      >
+        ✓ reachable
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={`${styles.updaterHealth} ${styles.updaterHealthUnreachable}`}
+      data-testid="updater-health-unreachable"
+      title={health.reason}
+    >
+      ✗ unreachable
+    </span>
   );
 }

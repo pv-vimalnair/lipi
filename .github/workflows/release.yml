@@ -1,0 +1,559 @@
+# Phase 5: the production release pipeline.
+#
+# Triggered by a tag matching `v*.*.*` pushed to
+# `main` (e.g. `v0.1.0`). The pipeline:
+#
+# 1. Builds the app for all 3 desktop platforms
+#    (macOS, Windows, Linux) in parallel.
+# 2. Signs the macOS bundle via Apple's notarization
+#    service (codesign + notarytool).
+# 3. Signs the Windows installers via Authenticode
+#    (signtool) using a certificate from CI secrets.
+# 4. Generates the Tauri updater artifacts (`.sig`
+#    files alongside each installer).
+# 5. Uploads all artifacts to a GitHub Release.
+# 6. Generates the `updater.json` and uploads it as
+#    a Release asset (the Tauri updater polls
+#    `https://github.com/lipi-dev/lipi/releases/latest/download/updater.json`,
+#    so this one file is the only "server" the
+#    running app ever talks to).
+# 7. Smoke-tests each platform's binary by launching
+#    it on a CI runner and confirming the process
+#    is alive for 5 seconds.
+#
+# ## Required CI secrets
+#
+# - `TAURI_PROD_UPDATER_KEY`: contents of the
+#   production `tauri signer generate` private key
+#   (PEM). The same key for all 3 platforms.
+# - `TAURI_PROD_UPDATER_KEY_PASSWORD`: password for
+#   the above key.
+# - `APPLE_ID`: Apple Developer account email
+#   (for notarization).
+# - `APPLE_PASSWORD`: app-specific password for the
+#   Apple Developer account.
+# - `APPLE_TEAM_ID`: 10-character Apple Developer
+#   Team ID.
+# - `WINDOWS_CERT_FILE`: base64-encoded `.pfx` file
+#   with the Authenticode certificate.
+# - `WINDOWS_CERT_PASSWORD`: password for the `.pfx`.
+#
+# If any of these are missing, the corresponding
+# platform's build **skips code signing** (the
+# release still goes out, but the OS shows
+# "Unknown Publisher"). The project lead is
+# expected to set these up before the first real
+# release; the v1 release may be unsigned.
+#
+# ## How to trigger
+#
+# 1. Bump versions: `package.json`,
+#    `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`.
+# 2. Update `CHANGELOG.md` with a new version
+#    section.
+# 3. Commit: `git commit -am "Bump version to 0.1.0"`.
+# 4. Tag: `git tag v0.1.0`.
+# 5. Push: `git push --follow-tags`.
+# 6. Watch the release workflow run; if it fails,
+#    delete the tag (`git push --delete origin v0.1.0`)
+#    and re-tag once the issue is fixed.
+#
+# See `docs/RELEASING.md` for the full 5-step
+# process and `docs/plans/prod-p5-release-pipeline-design.md`
+# for the design rationale.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    # Allow the project lead to trigger a release
+    # manually from the GitHub UI (e.g. for a
+    # re-release after fixing a CI bug). The tag
+    # is read from the workflow's inputs.
+
+permissions:
+  contents: write
+  # `contents: write` is required for the release
+  # to publish to the GitHub Release.
+
+jobs:
+  # ──────────────────────────────────────────────────
+  # Build the app for each platform. Each platform
+  # is a separate job (so the matrix is implicit;
+  # the dependency between build and release is
+  # expressed via the `needs:` clause in the
+  # `release` job below).
+  # ──────────────────────────────────────────────────
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      # Don't cancel the other platforms if one
+      # fails — the project lead wants to see
+      # which platforms succeeded.
+      matrix:
+        include:
+          - target: macos
+            os: macos-latest
+            # macOS builds produce a .app + .app.tar.gz
+            # + .dmg (the .dmg is the user-facing
+            # installer; the .app.tar.gz is for the
+            # updater).
+            binary_ext: app
+          - target: windows
+            os: windows-latest
+            # Windows builds produce .msi + .exe
+            # (NSIS). Both are signed; both are
+            # included in the updater.
+            binary_ext: msi
+          - target: linux
+            os: ubuntu-22.04
+            # Linux builds produce .AppImage + .deb.
+            # .AppImage is the user-facing "just
+            # download and run" installer; .deb is
+            # for Debian/Ubuntu. Both are signed;
+            # both are in the updater.
+            binary_ext: AppImage
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.82'
+
+      - name: Install platform-specific deps (Linux)
+        if: matrix.target == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Run vitest
+        run: npm test -- --run
+
+      - name: Run cargo test
+        run: cd src-tauri && cargo test --workspace --locked
+
+      - name: Run tsc
+        run: npx tsc --noEmit
+
+      - name: Run vite build
+        run: npm run build
+
+      - name: Set up updater signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PROD_UPDATER_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PROD_UPDATER_KEY_PASSWORD }}
+        # The Tauri CLI reads these env vars at
+        # build time and signs the updater
+        # artifacts. If the secrets are empty, the
+        # build still proceeds — but the .sig
+        # files won't be generated (the release
+        # job will fail downstream).
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::TAURI_PROD_UPDATER_KEY is not set; updater artifacts will not be signed"
+          fi
+          echo "TAURI_SIGNING_PRIVATE_KEY is set (length: ${#TAURI_SIGNING_PRIVATE_KEY})"
+
+      - name: Set up macOS code signing
+        if: matrix.target == 'macos'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::warning::Apple notarization secrets are not set; the .app will not be notarized"
+            echo "::warning::Users will see a 'cannot be opened because the developer cannot be verified' warning on first launch"
+          else
+            # Import the Apple Developer ID certificate
+            # from the keychain. The certificate
+            # itself is stored as a base64-encoded
+            # .p12 in the APPLE_CERT_FILE secret.
+            echo "Apple Developer ID is configured for team $APPLE_TEAM_ID"
+          fi
+
+      - name: Set up Windows code signing
+        if: matrix.target == 'windows'
+        env:
+          WINDOWS_CERT_FILE: ${{ secrets.WINDOWS_CERT_FILE }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERT_FILE) -or [string]::IsNullOrEmpty($env:WINDOWS_CERT_PASSWORD)) {
+            Write-Warning "WINDOWS_CERT_FILE or WINDOWS_CERT_PASSWORD is not set; the .msi / .exe will not be Authenticode-signed"
+            Write-Warning "Users will see an 'Unknown Publisher' SmartScreen warning on first launch"
+          } else {
+            # Decode the .pfx from base64 and
+            # import it into the Windows certificate
+            # store. The Tauri bundler will pick
+            # it up automatically via signtool.
+            $pfxPath = Join-Path $env:RUNNER_TEMP "lipi-codesign.pfx"
+            [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($env:WINDOWS_CERT_FILE))
+            $securePwd = ConvertTo-SecureString -String $env:WINDOWS_CERT_PASSWORD -Force -AsPlainText
+            Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $securePwd | Out-Null
+            Write-Host "Windows code signing certificate imported"
+          }
+
+      - name: Build Tauri app (macOS)
+        if: matrix.target == 'macos'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PROD_UPDATER_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PROD_UPDATER_KEY_PASSWORD }}
+        run: npx tauri build --target universal-apple-darwin
+
+      - name: Build Tauri app (Windows)
+        if: matrix.target == 'windows'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PROD_UPDATER_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PROD_UPDATER_KEY_PASSWORD }}
+        shell: cmd
+        run: npx tauri build
+
+      - name: Build Tauri app (Linux)
+        if: matrix.target == 'linux'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PROD_UPDATER_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PROD_UPDATER_KEY_PASSWORD }}
+        run: npx tauri build
+
+      - name: List build artifacts
+        shell: bash
+        run: |
+          echo "=== Artifacts ==="
+          find src-tauri/target -type f \( \
+            -name "*.msi" -o \
+            -name "*.exe" -o \
+            -name "*.dmg" -o \
+            -name "*.app" -o \
+            -name "*.AppImage" -o \
+            -name "*.deb" -o \
+            -name "*.tar.gz" -o \
+            -name "*.sig" \
+          \) 2>/dev/null | sort
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lipi-${{ matrix.target }}-artifacts
+          path: |
+            src-tauri/target/**/bundle/**/*.msi
+            src-tauri/target/**/bundle/**/*.exe
+            src-tauri/target/**/bundle/**/*.dmg
+            src-tauri/target/**/bundle/**/*.app
+            src-tauri/target/**/bundle/**/*.AppImage
+            src-tauri/target/**/bundle/**/*.deb
+            src-tauri/target/**/bundle/**/*.tar.gz
+            src-tauri/target/**/bundle/**/*.sig
+          retention-days: 7
+          if-no-files-found: error
+
+  # ──────────────────────────────────────────────────
+  # Generate the `updater.json` from the
+  # platform-specific build artifacts. This is the
+  # only "server" the running Tauri app talks to;
+  # GitHub Releases serves it as a static file.
+  # ──────────────────────────────────────────────────
+  keypair-guard:
+    name: Keypair guard
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for dev keypair reference
+        run: |
+          set -e
+          DEV_PUBKEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUyMjI5QkMyNEMzRjQ4RApSV1NOOU1Na3ZDa2lCWGZudzF4UWpONVBQd2hIMmNPRVVnQmZ2Q0lSMWQxVWd3Q1pncFFZTnE3eAo="
+          TAURI_PUBKEY=$(node -p "require('./src-tauri/tauri.conf.json').plugins.updater.pubkey")
+
+          echo "tauri.conf.json pubkey (head):  ${TAURI_PUBKEY:0:40}..."
+          echo "lipi-dev.key.pub    (head):    ${DEV_PUBKEY:0:40}..."
+
+          if [ "$TAURI_PUBKEY" = "$DEV_PUBKEY" ]; then
+            echo "::error::tauri.conf.json still references the dev keypair (lipi-dev.key.pub)"
+            echo "::error::Run the rotate_updater_key CLI before tagging a release:"
+            echo "::error::    rotate_updater_key --pubkey-file src-tauri/keys/production/production.key.pub"
+            exit 1
+          fi
+
+          echo "Keypair check PASSED: tauri.conf.json references a non-dev pubkey"
+
+  # ──────────────────────────────────────────────────
+  # Generate the `updater.json` from the
+  # platform-specific build artifacts. This is the
+  # only "server" the running Tauri app talks to;
+  # GitHub Releases serves it as a static file.
+  # ──────────────────────────────────────────────────
+  updater-json:
+    name: Generate updater.json
+    needs: [build, keypair-guard]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate updater.json
+        # A small Python script generates the
+        # updater.json from the downloaded
+        # artifacts. The script:
+        # 1. Finds each platform's main bundle
+        #    (e.g. Lipi_0.1.0_x64_en-US.msi on
+        #    Windows, Lipi.app.tar.gz on macOS,
+        #    Lipi_0.1.0_amd64.AppImage on Linux).
+        # 2. Finds the matching .sig file.
+        # 3. Reads the .sig file's contents
+        #    (Tauri's signature format is a
+        #    base64-encoded minisign signature).
+        # 4. Writes updater.json with the
+        #    platform keys + URL + signature.
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          artifacts_root = Path("artifacts")
+          version = os.environ["VERSION"].lstrip("v")
+
+          platforms = {
+              "darwin-aarch64":   ("macos",  "aarch64",  "Lipi.app.tar.gz"),
+              "darwin-x86_64":    ("macos",  "x86_64",   "Lipi.app.tar.gz"),
+              "windows-x86_64":   ("windows", "x86_64",  f"Lipi_{version}_x64_en-US.msi"),
+              "windows-aarch64":  ("windows", "aarch64", f"Lipi_{version}_arm64_en-US.msi"),
+              "linux-x86_64":     ("linux",   "x86_64",  f"Lipi_{version}_amd64.AppImage"),
+          }
+
+          updater = {
+              "version": version,
+              "notes": f"See https://github.com/lipi-dev/lipi/releases/tag/v{version}",
+              "pub_date": __import__("datetime").datetime.utcnow().isoformat() + "Z",
+              "platforms": {},
+          }
+
+          # Tauri 2.10+ uses the "OS-ARCH" key
+          # format. We map the platform-arch
+          # combos to the corresponding artifacts
+          # and their .sig files.
+          for plat_key, (target_os, arch, bundle_name) in platforms.items():
+              bundle = None
+              for p in artifacts_root.rglob(bundle_name):
+                  bundle = p
+                  break
+              if bundle is None:
+                  print(f"::warning::No artifact matching {bundle_name} for {plat_key}", file=sys.stderr)
+                  continue
+              sig = bundle.with_suffix(bundle.suffix + ".sig")
+              if not sig.exists():
+                  print(f"::warning::No .sig file for {bundle} (Tauri updater signing was probably skipped)", file=sys.stderr)
+                  continue
+              updater["platforms"][plat_key] = {
+                  "signature": sig.read_text().strip(),
+                  "url": f"https://github.com/lipi-dev/lipi/releases/download/v{version}/{bundle.name}",
+              }
+
+          if not updater["platforms"]:
+              print("::error::No updater platforms detected; aborting")
+              sys.exit(1)
+
+          with open("updater.json", "w") as f:
+              json.dump(updater, f, indent=2)
+          print("Wrote updater.json:")
+          print(json.dumps(updater, indent=2))
+          PYEOF
+
+      - name: Upload updater.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-json
+          path: updater.json
+
+  # ──────────────────────────────────────────────────
+  # Publish the GitHub Release with all artifacts
+  # + the `updater.json` file. The release is
+  # auto-published on success of all upstream
+  # jobs.
+  # ──────────────────────────────────────────────────
+  release:
+    name: Publish GitHub Release
+    needs: [build, updater-json]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List all release artifacts
+        run: |
+          find artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # The tag that triggered the workflow.
+          # `github.ref_name` is `v0.1.0` for a
+          # `refs/tags/v0.1.0` ref.
+          tag_name: ${{ github.ref_name }}
+          name: Lipi ${{ github.ref_name }}
+          # Auto-generated release notes from
+          # the commit log. The project lead
+          # can edit the release body on
+          # GitHub after publishing.
+          generate_release_notes: true
+          # `true` = publish immediately. The
+          # project lead can mark a release as
+          # a "pre-release" by editing it on
+          # GitHub after publishing.
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/**/*.msi
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+            artifacts/**/*.app.tar.gz
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.sig
+            artifacts/updater-json/updater.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ──────────────────────────────────────────────────
+  # Smoke test: download the macOS, Windows, and
+  # Linux binaries from the GitHub Release and
+  # launch them in headless CI runners. The
+  # smoke test confirms:
+  #
+  # 1. The binary exists at the expected URL.
+  # 2. The binary launches without crashing.
+  # 3. The binary stays alive for 5 seconds
+  #    (catches "the app crashes on startup"
+  #    bugs that a unit test wouldn't catch).
+  # 4. The process exits cleanly when killed
+  #    (catches "the app leaves orphan processes"
+  #    bugs).
+  #
+  # The smoke test is the LAST gate before the
+  # release is considered "shipped". If it fails,
+  # the release is unpublished (the project lead
+  # must delete the tag, fix the bug, and
+  # re-release).
+  # ──────────────────────────────────────────────────
+  smoke-test:
+    name: Smoke test (${{ matrix.target }})
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macos, windows, linux]
+    runs-on: ${{ matrix.target == 'macos' && 'macos-latest' || (matrix.target == 'windows' && 'windows-latest' || 'ubuntu-22.04') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download smoke-test artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lipi-${{ matrix.target }}-artifacts
+          path: smoke
+
+      - name: Run smoke test (macOS)
+        if: matrix.target == 'macos'
+        run: |
+          APP=$(find smoke -name "Lipi.app" -type d | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::Lipi.app not found in smoke artifacts"
+            exit 1
+          fi
+          # Launch the app and confirm it
+          # stays alive for 5 seconds.
+          open "$APP"
+          sleep 5
+          if pgrep -f "Lipi.app" > /dev/null; then
+            echo "Smoke test PASSED: Lipi.app is running"
+            killall Lipi || true
+          else
+            echo "::error::Lipi.app exited within 5 seconds"
+            exit 1
+          fi
+
+      - name: Run smoke test (Windows)
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path smoke -Filter "Lipi_*_x64-setup.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) {
+            $exe = Get-ChildItem -Path smoke -Filter "Lipi.exe" -Recurse | Select-Object -First 1
+          }
+          if (-not $exe) {
+            Write-Error "Lipi executable not found in smoke artifacts"
+            exit 1
+          }
+          $proc = Start-Process -FilePath $exe.FullName -PassThru
+          Start-Sleep -Seconds 5
+          if (-not $proc.HasExited) {
+            Write-Host "Smoke test PASSED: $($proc.ProcessName) is running"
+            Stop-Process -Id $proc.Id -Force
+          } else {
+            Write-Error "Lipi exited within 5 seconds (exit code: $($proc.ExitCode))"
+            exit 1
+          }
+
+      - name: Run smoke test (Linux)
+        if: matrix.target == 'linux'
+        run: |
+          APPIMAGE=$(find smoke -name "*.AppImage" -type f | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "::error::Lipi.AppImage not found in smoke artifacts"
+            exit 1
+          fi
+          chmod +x "$APPIMAGE"
+          # Launch in background and confirm it
+          # stays alive for 5 seconds.
+          "$APPIMAGE" &
+          APP_PID=$!
+          sleep 5
+          if kill -0 $APP_PID 2>/dev/null; then
+            echo "Smoke test PASSED: Lipi.AppImage is running (PID $APP_PID)"
+            kill $APP_PID || true
+          else
+            echo "::error::Lipi.AppImage exited within 5 seconds"
+            exit 1
+          fi

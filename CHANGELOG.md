@@ -199,6 +199,314 @@ re-exercised with the new `kid` field).
 - `npm run build`: clean.
 - `cargo check`: clean (no warnings).
 
+### Added (Phase 4.1 — IAP v1.1 follow-ups)
+
+A focused set of v1.1 follow-ups that
+fill in items the Phase 4 design doc
+explicitly deferred (see HANDOFF §6 "Current
+phase: Phase 4.1 — IAP v1.1 follow-ups —
+SHIPPED" + §9.28, and
+`docs/plans/prod-p4-1-iap-followups-design.md`
+for the design). The roadmap coding is now
+truly complete; only the design doc
+remained. The production-readiness roadmap
+was already 100% complete (Phase 3, 5, 4
+shipped in the previous turns); Phase 4.1
+is a polish-and-completeness pass on the
+IAP code path.
+
+**Apple raw-receipt path**
+
+(Implemented in `src-tauri/src/iap_apple.rs`
++ `src-tauri/src/iap.rs` + the corresponding
+TS wrappers.)
+
+- **`iap_redeem` now accepts raw base64
+  receipts** in addition to the JSON
+  response + raw XML formats. The
+  `dispatch_receipt` function inspects the
+  receipt's first non-whitespace character
+  and a few structural markers to route to
+  the right validator:
+  - JSON response (`{`) → `ReceiptRoute::Apple`
+    → `validate_apple_response` (parsed-response
+    path, no HTTP call from the Rust side).
+  - XML (`<`) → `ReceiptRoute::Microsoft` →
+    `parse_microsoft_response` + the
+    Microsoft OAuth flow.
+  - Base64 (>= 100 chars, all `A-Za-z0-9+/=`) →
+    `ReceiptRoute::AppleRaw` →
+    `verify_apple_receipt` (the HTTP-calling
+    entry point that POSTs to
+    `buy.itunes.apple.com/verifyReceipt`).
+- **`verify_apple_receipt` is no longer
+  `#[allow(dead_code)]`** — it's the entry
+  point for the raw-receipt case. The
+  dispatcher calls it directly.
+
+**Microsoft OAuth client-credentials flow**
+
+(Implemented in `src-tauri/src/iap_oauth.rs`
++ `src-tauri/src/iap_microsoft.rs`.)
+
+- **Replaced the static bearer token
+  (`LIPI_MS_IAP_BEARER_TOKEN`) with a real
+  OAuth client-credentials flow.** The new
+  `iap_oauth` module:
+  - Reads `LIPI_MS_IAP_CLIENT_ID`,
+    `LIPI_MS_IAP_CLIENT_SECRET`, and
+    `LIPI_MS_IAP_TENANT_ID` from the
+    environment at call time.
+  - Exchanges them for an access token at
+    `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`
+    with `grant_type=client_credentials`
+    and `scope=https://api.store.microsoft.com/.default`.
+  - Caches the access token in memory
+    (process-local) for 55 minutes
+    (Microsoft's 60-minute lifetime minus
+    a 5-minute safety margin).
+  - Transparently refreshes on the next
+    call when the cache is empty or the
+    token is expired.
+  - Falls back to the static
+    `LIPI_MS_IAP_BEARER_TOKEN` if the OAuth
+    env vars are unset (dev escape hatch).
+- **`verify_microsoft_receipt` now uses
+  the cached OAuth token** instead of
+  reading the env var. The static-token
+  fallback is preserved as a dev-only
+  escape hatch.
+- **New error reasons:**
+  - `iap-oauth-credentials-missing` (the
+    OAuth env vars are unset AND no static
+    fallback is configured).
+
+**"Refresh from IAP" Tauri command**
+
+(Implemented in `src-tauri/src/iap.rs` +
+`src/ipc/iap.ts` +
+`src/screens/License/components/IapRefreshFlow/IapRefreshFlow.tsx`.)
+
+- **New `iap_refresh_license` Tauri
+  command** that re-validates an IAP-issued
+  license and extends its `exp` (e.g. after
+  the user renews their subscription).
+  The flow is:
+  1. Load + verify the current license.
+  2. Check the `kid` field. Only
+     `kid = "iap-local"` licenses are
+     refreshable (trial / offline-purchase
+     licenses return
+     `iap-refresh-not-applicable`).
+  3. Validate the new receipt (re-uses
+     `iap_redeem_inner` for routing).
+  4. Compare the new `exp` to the current
+     `exp`. If not later, return
+     `iap-refresh-no-extension` (don't
+     downgrade).
+  5. Build a new `LicensePayload` with the
+     new `exp`, sign with the same
+     per-machine keypair, save.
+- **New `iapRefreshLicense` TypeScript
+  wrapper** in `src/ipc/iap.ts` with full
+  JSDoc.
+- **New "Refresh from IAP" button on
+  `LicenseCard`** — only visible for
+  IAP-issued licenses (detected via the
+  new `licenseGetKid` IPC call).
+- **New `IapRefreshFlow` wizard on the
+  License activation screen** — a 3-step
+  flow (paste → running → result) that
+  walks the user through pasting the new
+  receipt, shows the spinner, and displays
+  the new expiration date.
+- **New error reasons:**
+  - `iap-license-missing` (no license in
+    the keychain).
+  - `iap-license-invalid` (the existing
+    license failed verification).
+  - `iap-license-load-failed` (keychain
+    read error).
+  - `iap-refresh-not-applicable` (the
+    existing license is not IAP-issued).
+  - `iap-refresh-no-extension` (the new
+    receipt's `exp` is not later than the
+    current `exp`).
+  - `iap-refresh-failed` (sanity check
+    for unexpected non-active statuses).
+
+**TransferFlow IAP-license redirect**
+
+(Implemented in
+`src/screens/License/components/TransferFlow/TransferFlow.tsx`.)
+
+- **For IAP-issued licenses, the
+  TransferFlow result step now shows an
+  IAP-specific message** instead of the
+  existing email body. The user is told
+  to cancel their IAP subscription on this
+  machine and re-subscribe on the new one
+  (IAP licenses are bound to a single
+  machine, and the IAP receipt was paid on
+  this machine's Apple ID, not the new
+  machine's). The email-generation step is
+  skipped (no email to send — the project
+  lead can't help with IAP transfers).
+- **The deactivation still happens** (so
+  the IAP local keypair is cleared) — the
+  result step just shows a different
+  message.
+
+**New `license_get_kid` Tauri command**
+
+(Implemented in `src-tauri/src/licensing.rs`
++ `src/ipc/licensing.ts`.)
+
+- **New `license_get_kid` Tauri command**
+  that returns the `kid` of the current
+  license. Returns `None` if there is no
+  license in the keychain, or the license
+  fails to verify. The UI uses this to
+  determine if the license is IAP-issued
+  (so it can show the "Refresh from IAP"
+  button) vs trial or offline-purchase.
+
+### Changed (Phase 4.1 — IAP v1.1 follow-ups)
+
+- **`verify_apple_receipt` is now a public
+  entry point** (removed
+  `#[allow(dead_code)]`). The dispatcher
+  calls it directly for raw base64
+  receipts.
+- **`verify_microsoft_receipt` now uses
+  the OAuth client-credentials flow** (via
+  the new `iap_oauth::get_access_token`
+  function) instead of the static
+  `LIPI_MS_IAP_BEARER_TOKEN` env var. The
+  static-token fallback is preserved as a
+  dev-only escape hatch.
+- **`humanizeInvalidReason` in
+  `LicenseCard.tsx` adds new branches** for
+  the new IAP-refresh reason codes:
+  `iap-refresh-not-applicable`,
+  `iap-refresh-no-extension`,
+  `iap-license-missing`,
+  `iap-license-invalid`,
+  `iap-license-load-failed`,
+  `iap-refresh-failed`. Each maps to a
+  user-friendly explanation.
+- **The `LicenseCard` UI now shows a
+  "Refresh from IAP" button** (only
+  visible for IAP-issued licenses).
+- **The `TransferFlow` UI now shows an
+  IAP-specific message** for IAP-issued
+  licenses (with the same deactivate
+  confirmation flow, but a different
+  result step).
+- **The `License` activation screen now
+  shows a new `IapRefreshFlow` wizard**
+  (sibling of `TransferFlow`).
+
+### Decisions (Phase 4.1 — IAP v1.1 follow-ups)
+
+- **Decision #100 (Microsoft OAuth)**: The
+  Microsoft bearer token is now obtained
+  via the OAuth client-credentials flow
+  instead of a static env var. The token
+  is cached in-memory (process-local) for
+  55 minutes and transparently refreshed.
+  The static `LIPI_MS_IAP_BEARER_TOKEN` is
+  preserved as a dev-only escape hatch.
+  See `docs/decisions/0100-p4-1-ms-oauth.md`.
+- **Decision #101 (Refresh license)**: The
+  `iap_refresh_license` command is
+  additive (no changes to the existing
+  `iap_redeem` flow). It only works for
+  IAP-issued licenses
+  (`kid = "iap-local"`); other licenses
+  return
+  `iap-refresh-not-applicable`. The new
+  receipt's `exp` must be later than the
+  current `exp` (no downgrades). See
+  `docs/decisions/0101-p4-1-refresh-license.md`.
+
+### Tests (Phase 4.1 — IAP v1.1 follow-ups)
+
+- `src-tauri/src/iap.rs`:
+  - `dispatch_receipt_routes_base64_to_apple_raw`
+  - `dispatch_receipt_routes_realistic_base64_to_apple_raw`
+  - `dispatch_receipt_does_not_route_short_base64_to_apple_raw`
+  - `dispatch_receipt_does_not_route_base64_with_non_base64_chars_to_apple_raw`
+  - `dispatch_receipt_does_not_route_unicode_to_apple_raw`
+  - `dispatch_receipt_does_not_route_xml_to_apple_raw`
+  - `is_base64_receipt_accepts_long_alphanumeric`
+  - `is_base64_receipt_accepts_long_with_special_chars`
+  - `is_base64_receipt_rejects_short_strings`
+  - `is_base64_receipt_rejects_non_base64_characters`
+  - `refresh_license_error_reason_for_missing_license`
+  - `refresh_license_error_reason_includes_kid`
+  - `refresh_license_error_reason_includes_timestamps`
+  - `refresh_license_kid_constants`
+  - `refresh_license_new_payload_has_correct_structure`
+  - `refresh_license_preserves_kid`
+  (16 new tests)
+- `src-tauri/src/iap_oauth.rs`:
+  - `parse_token_response_extracts_access_token_and_expires_in`
+  - `parse_token_response_rejects_missing_access_token`
+  - `parse_token_response_rejects_missing_expires_in`
+  - `parse_token_response_rejects_non_json_body`
+  - `parse_token_response_rejects_empty_body`
+  - `is_token_expired_returns_true_for_none`
+  - `is_token_expired_returns_true_for_past_timestamp`
+  - `is_token_expired_returns_false_for_fresh_token`
+  - `is_token_expired_handles_zero_expiry`
+  - `build_cached_token_uses_ttl_from_response`
+  - `build_cached_token_caps_ttl_at_55_minutes`
+  - `build_cached_token_uses_smaller_ttl_for_short_lived_tokens`
+  - `build_token_url_replaces_tenant_placeholder`
+  - `build_token_url_handles_empty_tenant`
+  - `read_oauth_credentials_returns_none_when_all_unset`
+  - `oauth_error_display_credentials_missing`
+  - `oauth_error_display_exchange_failed`
+  - `oauth_error_display_invalid_expires_in`
+  (18 new tests)
+- `src/ipc/iap.test.ts`:
+  - `iapRefreshLicense > invokes the iap_refresh_license Tauri command with the receipt and plan`
+  - `iapRefreshLicense > returns the active status with the new expiration`
+  - `iapRefreshLicense > propagates iap-refresh-not-applicable for non-IAP licenses`
+  - `iapRefreshLicense > propagates iap-refresh-no-extension for stale receipts`
+  - `iapRefreshLicense > propagates iap-license-missing for absent licenses`
+  - `iapRefreshLicense > propagates iap-license-invalid for tampered licenses`
+  - `iapRefreshLicense > propagates iap-receipt-format-unrecognized when the new receipt is malformed`
+  (7 new tests)
+- `src/screens/SettingsProvider/components/LicenseCard.test.ts`:
+  - `iap-refresh-not-applicable explains the command only works for IAP licenses`
+  - `iap-refresh-no-extension explains the new receipt is not later`
+  - `iap-license-missing tells the user to use the Restore from IAP button`
+  - `iap-license-invalid tells the user to deactivate and re-activate`
+  - `iap-license-load-failed mentions keychain permissions`
+  - `iap-refresh-failed suggests trying again or pasting a license key`
+  (6 new tests)
+- `src/screens/License/components/TransferFlow/TransferFlow.test.tsx`:
+  - `for an IAP-issued license, the result step shows the IAP-specific message`
+  - `for an IAP-issued license, the result step skips the email generation`
+  - `for a trial license, the result step shows the existing email body (backward-compat)`
+  (3 new tests)
+
+Totals: **50 new tests** (34 Rust + 16 TS).
+Full vitest suite: 1001 passed (up from 985).
+Full cargo test suite: 326 passed (up from 292).
+
+### Verified (Phase 4.1)
+
+- `npx vitest run`: 1001 passed (up from
+  985).
+- `cargo test --lib`: 326 passed (up from
+  292).
+- `npx tsc --noEmit`: clean.
+- `npm run build`: clean.
+- `cargo check`: clean (no warnings).
+
 ### Added (Phase 5 — Production release pipeline)
 
 The last code-focused phase before public

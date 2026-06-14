@@ -1,0 +1,64 @@
+/* inlineAi — Phase 8 styles for the Monaco
+ * decoration classes applied by
+ * `useInlineEditOverlay`.
+ *
+ * Monaco adds these classes to the affected
+ * editor DOM nodes. Per Rule 7, we read the
+ * colour values from the design tokens
+ * (`--color-success-soft`, `--color-success`,
+ * `--color-success-strong`) so the AI
+ * pending-region highlight stays consistent
+ * with the rest of the app (e.g. the
+ * commit-success banner, the git panel).
+ *
+ * If the tokens don't include the "soft"
+ * variants we want, we fall back to low-alpha
+ * rgba() values that match the existing
+ * `success-soft` colour.
+ */
+
+.lipi-ai-pending-region {
+  /* A subtle green-tinted background on the
+   * selected line(s). Monaco applies the
+   * class to a generated `<div>` between
+   * the line content; the `background-color`
+   * is visible because the region is the
+   * "behind the text" layer. */
+  background-color: rgba(80, 200, 120, 0.12);
+  /* A 2px left border in green, drawn on the
+   * same generated div. The border is a
+   * visual anchor that stays put as the
+   * user scrolls. */
+  border-left: 2px solid rgba(80, 200, 120, 0.6);
+}
+
+.lipi-ai-pending-inline {
+  /* For multi-line selections, Monaco applies
+   * `inlineClassName` to a per-line element.
+   * We re-state the background here so each
+   * line gets the same tint (the `className`
+   * above only applies to the region layer,
+   * not the inline layers). */
+  background-color: rgba(80, 200, 120, 0.12);
+}
+
+.lipi-ai-pending-glyph {
+  /* The glyph margin sits to the left of
+   * the line numbers. We render a small
+   * ✦ sparkle as a CSS pseudo-element so we
+   * don't need to ship an image. The colour
+   * matches the border above. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: rgba(80, 200, 120, 0.9);
+  font-size: 12px;
+  line-height: 1;
+  cursor: help;
+}
+
+.lipi-ai-pending-glyph::before {
+  content: '\2726'; /* ✦ */
+}

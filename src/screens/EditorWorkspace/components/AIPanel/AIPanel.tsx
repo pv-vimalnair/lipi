@@ -19,7 +19,6 @@ import {
   voicePreferencesSelectors,
 } from '@/shared/state/voicePreferencesStore';
 import { getFriendlyError } from './errorMessages';
-import { CmdKModal } from './CmdKModal';
 import styles from './AIPanel.module.css';
 
 /**
@@ -36,11 +35,14 @@ import styles from './AIPanel.module.css';
  *   │   │       called (5b-4).
  *   │   └─ Composer (textarea + Send / Stop button)
  *   └─
- *   ⤴ The CmdKModal is mounted at the bottom of the panel
- *     (always rendered, hidden by `open === false`). It's
- *     driven by `cmdKStore` — the global Cmd-K handler in
- *     `EditorWorkspace` calls `openCmdK(sel)` and the
- *     modal reads its own state.
+ *   ⤴ (Phase 8) the inline AI edit overlay is no
+ *     longer rendered inside the AIPanel. The
+ *     overlay lives as a Monaco `IContentWidget`
+ *     anchored to the selection in the editor pane.
+ *     The global Cmd-K handler in `EditorWorkspace`
+ *     calls `inlineEditStore.open(sel)`; the editor
+ *     pane's `useInlineEditOverlay` hook renders the
+ *     widget when the store's `selection` is non-null.
  *
  * First-class states (Rule 5 — discriminated union):
  *   - idle         → composer is enabled, no error, no in-flight
@@ -67,9 +69,10 @@ import styles from './AIPanel.module.css';
  *     "Invalid API key" + "Open Settings to update
  *     your key.", etc.) instead of leaking the raw
  *     `errorKind` and provider message.
- *   - The CmdKModal is mounted at the bottom of the
- *     panel tree so the inline-edit flow has somewhere
- *     to render.
+ *   - (Phase 8) the CmdKModal mount is gone —
+ *     the inline edit overlay is now a Monaco
+ *     `IContentWidget` anchored to the editor's
+ *     selection, not a side-panel modal.
  *
  * 5b-6 additions:
  *   - The `ToolTrace` cards are now a full state
@@ -327,7 +330,6 @@ export function AIPanel() {
           onStop={() => void stop()}
         />
       </Stack>
-      <CmdKModal />
     </PaneShell>
   );
 }

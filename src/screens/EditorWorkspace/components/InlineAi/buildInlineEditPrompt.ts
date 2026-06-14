@@ -1,44 +1,32 @@
 /**
- * buildCmdKPrompt — the prompt template for the
- * `Cmd-K` inline edit flow (5b-5).
+ * buildInlineEditPrompt — the prompt template for
+ * the `Cmd+K` inline AI edit flow (Phase 8).
  *
- * The user hits Cmd-K with a text selection in
- * the editor. The CmdKModal opens, shows the
- * selection, and asks for an instruction ("add
- * error handling", "convert to async", etc.). On
- * submit, we build a system + user prompt that
- * tells the model: "you are a precise code/text
- * editor, here's the original text and an
- * instruction, reply with ONLY the rewritten
- * text".
- *
- * The returned `systemPrompt` is sent as the
- * first message with `role: 'system'`, and the
- * `userMessage` is sent as the next message
- * with `role: 'user'`. (The aiStore's
- * `send()` accepts a `messages` array — the
- * CmdKModal will splice the system message
- * in.)
- *
- * The function returns a `Result` rather than
- * throwing so the caller can surface a friendly
- * inline error ("Type an instruction first")
- * without a try/catch. The two failure modes
- * are:
- *   - empty selection (the user opened the
- *     modal somehow with no text selected —
- *     shouldn't happen in practice, the global
- *     Cmd-K handler bails in that case, but
- *     defense in depth)
+ * This replaces the Phase 5b-5 `buildCmdKPrompt`
+ * (kept the same shape — same system prompt, same
+ * `Result` type, same validation errors — and just
+ * renamed). The function still returns a `Result`
+ * rather than throwing so the caller (the new
+ * `InlineEditOverlay` component) can surface a
+ * friendly inline error without a try/catch. The
+ * two failure modes are the same:
+ *   - empty selection (defense in depth — the
+ *     global Cmd-K handler bails in that case)
  *   - empty instruction (the user submitted
  *     without typing an instruction)
+ *
+ * Per Rule 3 (screen-folder layout) this lives in
+ * `src/screens/EditorWorkspace/components/InlineAi/`
+ * — the same folder as the new overlay. The 5b-5
+ * file under `AIPanel/` is now dead and will be
+ * deleted alongside the modal.
  */
 
-export type BuildCmdKPromptError =
+export type BuildInlineEditPromptError =
   | 'empty-selection'
   | 'empty-instruction';
 
-export type BuildCmdKPromptResult =
+export type BuildInlineEditPromptResult =
   | {
       ok: true;
       systemPrompt: string;
@@ -46,7 +34,7 @@ export type BuildCmdKPromptResult =
     }
   | {
       ok: false;
-      error: BuildCmdKPromptError;
+      error: BuildInlineEditPromptError;
     };
 
 /**
@@ -54,9 +42,9 @@ export type BuildCmdKPromptResult =
  * and Anthropic both honour a system-role
  * message. Kept short and prescriptive ("return
  * ONLY the rewritten text") so the model doesn't
- * add pleasantries that would break
- * CmdKModal's "Apply" flow (which expects the
- * raw rewrite as the message body).
+ * add pleasantries that would break the inline
+ * edit's "Apply" flow (which expects the raw
+ * rewrite as the message body).
  */
 const SYSTEM_PROMPT = [
   'You are a precise code and text editor.',
@@ -71,10 +59,10 @@ const SYSTEM_PROMPT = [
  * fenced block so the model can see whitespace
  * exactly; the instruction is on its own line.
  */
-export function buildCmdKPrompt(
+export function buildInlineEditPrompt(
   selectionText: string,
   instruction: string,
-): BuildCmdKPromptResult {
+): BuildInlineEditPromptResult {
   if (!selectionText || !selectionText.trim()) {
     return { ok: false, error: 'empty-selection' };
   }

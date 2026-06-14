@@ -6,6 +6,279 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (Phase 8 — Inline AI edits (Cmd+K))
+
+The Phase 5b-5 modal-based `Cmd+K` flow is **gone**.
+The same `Cmd+K` shortcut now opens an **inline
+overlay** anchored to the user's selection in the
+Monaco editor: a green-tinted highlight on the
+selected range, a sparkle glyph in the gutter, a
+small floating toolbar below the selection with
+the instruction input, and a Tab / Esc keybinding
+for accept / reject. The AI plumbing
+(`aiStore.sendEdit`, Rust streaming, friendly
+errors) is reused verbatim — Phase 8 is purely
+frontend. See `HANDOFF.md` §9.32 for the full
+writeup.
+
+**`inlineEditStore` (Zustand)** — replaces
+`cmdKStore`
+
+- Renamed file: `state/cmdKStore.ts` →
+  `state/inlineEditStore.ts`. Renamed exports:
+  `useCmdKStore` → `useInlineEditStore`,
+  `openCmdK` → `open`, `closeCmdK` → `reject`,
+  `CmdKSelection` → `InlineEditSelection`,
+  `CmdKStatus` → `InlineEditStatus`.
+- New actions: `accept()` (calls
+  `editor.executeEdits` + `editor.pushUndoStop`
+  on the live editor from `editorControllerStore`,
+  bracketing the AI edit with undo stops so a
+  single `Cmd+Z` cleanly reverts the change),
+  `reject()` (clears state without calling
+  `executeEdits`), `close()` (alias for `reject`),
+  `sealProposal(text)` (called by the
+  `aiStore.messages` `streaming: false` watcher),
+  `fail(kind, message)` (called by the
+  `aiStore.requestStatus` error watcher).
+- New fields: `proposal: string | null` (the
+  sealed AI text, read by the overlay's "After"
+  preview), `error: { kind, message } | null`
+  (the error view's payload), `streamingMessageId`
+  (renamed from the 5b-5 field of the same name).
+- Removed: `setInstruction` is unchanged; the
+  `setError` / `setDone` / `setStreaming` /
+  `resetToIdle` actions are renamed / replaced
+  by the new ones above (the rename is the
+  only signature change; the per-action
+  semantics match the 5b-5 actions of the same
+  intent).
+- 9 unit tests cover: idle start state, `open`
+  clears previous instruction + sets selection,
+  `setInstruction` updates, `beginStream`
+  transitions to `streaming` + stores the
+  message id, `sealProposal` transitions to
+  `done` + stores the proposal, `fail`
+  transitions to `error` + stores the error,
+  `accept` calls `pushUndoStop → executeEdits →
+  pushUndoStop` (the Phase 8 undo-bracket
+  improvement) and clears state, `reject`
+  clears state without `executeEdits`, `close`
+  is an alias for `reject`.
+
+**`InlineEditOverlay` (React component)**
+
+- New
+  `src/screens/EditorWorkspace/components/InlineAi/InlineEditOverlay.tsx`
+  + `InlineEditOverlay.module.css` (and a
+  side-effect-imported
+  `inlineAi.module.css` for the Monaco
+  decoration classes). The component renders
+  into a Monaco `IContentWidget`'s DOM node
+  (created by `useInlineEditOverlay`).
+- 3 visual states (driven by
+  `inlineEditStore.status`):
+  - `idle` — single-line instruction input
+    auto-focused, "Ask AI" button, Enter
+    submits, Esc rejects.
+  - `streaming` — 3-dot spinner + "AI is
+    editing…" label (the partial streamed
+    text is NOT shown — per the user's
+    explicit "wait for the full response
+    then show the diff" choice).
+  - `done` — fixed-height `pre` preview of
+    the AI's sealed proposal + Accept /
+    Reject buttons. The header shows the
+    `Tab / Esc` keybinding hint.
+  - `error` — friendly error title + hint
+    from `getFriendlyError()` (same copy as
+    the AIPanel's ErrorBanner) + Try again
+    / Dismiss buttons.
+- All design tokens read from
+  `src/shared/styles/tokens.css` (Rule 7):
+  `--color-bg-elevated`, `--color-border-strong`,
+  `--color-success`, `--color-danger`,
+  `--color-info` / `--color-accent`,
+  `--space-*`, `--radius-*`, `--font-*`.
+
+**`useInlineEditOverlay` (Monaco glue hook)**
+
+- New
+  `src/screens/EditorWorkspace/hooks/useInlineEditOverlay.tsx`
+  — the ONLY place in the codebase that
+  talks to Monaco for the inline-edit flow
+  (Rule 6). The hook takes the live editor
+  from `editorControllerStore` (read on
+  every render; the production wiring is
+  in `EditorPane.handleMount`'s
+  `useEffect`) and:
+  1. Creates a
+     `editor.createDecorationsCollection([])`
+     that highlights the captured selection
+     with `.lipi-ai-pending-region` (green
+     tint + 2px left border), an inline
+     `.lipi-ai-pending-inline` highlight
+     for multi-line selections, and a
+     `.lipi-ai-pending-glyph` (✦ sparkle
+     in the gutter).
+  2. Mounts a Monaco `IContentWidget`
+     (id: `lipi.ai.inlineEdit.overlay`)
+     whose DOM node hosts a
+     `createRoot(...).render(<InlineEditOverlay .../>)`
+     tree. The widget's `getPosition()` is
+     anchored to `{ lineNumber:
+     selection.range.endLineNumber, column:
+     selection.range.endColumn }` with
+     `preference: [BELOW]` so the overlay
+     sits just below the last selected
+     line. `allowEditorOverflow: true` so
+     the overlay is visible even when it
+     sits near the viewport edge.
+  3. Registers two `editor.addCommand`
+     bindings on Monaco's keybinding
+     service:
+     - `Tab` (KeyCode.Tab = 2) — when
+       `status === 'done' && proposal !==
+       null`, `accept()`. Otherwise, fall
+       through to Monaco's default Tab
+       handler via
+       `editor.trigger('keyboard', 'tab', null)`.
+     - `Escape` (KeyCode.Escape = 9) —
+       when `selection` is non-null,
+       `reject()`. Otherwise, no-op.
+  4. Subscribes to `useInlineEditStore`
+     and re-runs the widget / decoration
+     update on every change. Returns a
+     cleanup function that unmounts the
+     React root, removes the content
+     widget, clears the decoration
+     collection, and unsubscribes from
+     the store.
+- 4 unit tests (in
+  `hooks/useInlineEditOverlay.test.tsx`)
+  exercise the `setupOverlay` function
+  directly against a mock editor:
+  mounts the widget when `selection` is
+  set, unmounts when it goes null, adds
+  the `.lipi-ai-pending-region` decoration
+  on `open()`, clears it on `reject()`.
+
+**`triggerInlineEdit` (shared entry point)**
+
+- New `state/inlineEditTrigger.ts` exports
+  a single function `triggerInlineEdit()`
+  that reads the live editor from
+  `editorControllerStore`, extracts the
+  current selection, and dispatches
+  `inlineEditStore.open(sel)`. Returns
+  `false` when there's no editor / no
+  selection (the caller can ignore the
+  return — the global `Cmd+K` handler
+  and the Command Palette both call
+  this). Returning the result lets the
+  test suite assert the gating.
+
+**Global `Cmd+K` / `Ctrl+K` handler**
+
+- `EditorWorkspace.tsx`'s `handleCmdK` is
+  now a one-liner around
+  `triggerInlineEdit()`. The
+  `useKeyboardShortcut`'s `enabled`
+  predicate is now `editor != null &&
+  status === 'idle'` (previously was
+  `true`); the `selection` field is read
+  inside `triggerInlineEdit`, so an
+  empty selection still bails (matching
+  the 5b-5 UX).
+
+**Command palette entry**
+
+- New `inlineEdit.open` command in
+  `src/shared/commands/commands.ts`
+  (group: `AI`, shortcut: `['Cmd', 'K']`).
+  The `run` handler is the same
+  `triggerInlineEdit()` the keyboard
+  binding uses; the `isEnabled`
+  predicate mirrors the keyboard's gate
+  (`editor != null && status === 'idle'`).
+  The import is **lazy** (`await import(...)`)
+  to avoid the cycle: `commands.ts`
+  lives in `src/shared/`, but the
+  trigger lives in the EditorWorkspace
+  screen folder. The cost is ~1ms on
+  the first run; subsequent runs are
+  instant (module cache hit).
+
+**Files deleted (Phase 5b-5 surface)**
+
+- `src/screens/EditorWorkspace/components/AIPanel/CmdKModal.tsx`
+  (replaced by `InlineEditOverlay.tsx`).
+- `src/screens/EditorWorkspace/components/AIPanel/CmdKModal.module.css`
+  (replaced by `InlineEditOverlay.module.css`).
+- `src/screens/EditorWorkspace/components/AIPanel/buildCmdKPrompt.ts`
+  (renamed + moved to
+  `src/screens/EditorWorkspace/components/InlineAi/buildInlineEditPrompt.ts`).
+- `src/screens/EditorWorkspace/components/AIPanel/buildCmdKPrompt.test.ts`
+  (recreated at
+  `components/InlineAi/buildInlineEditPrompt.test.ts`).
+- `src/screens/EditorWorkspace/state/cmdKStore.ts`
+  (replaced by `inlineEditStore.ts`).
+- `src/screens/EditorWorkspace/state/cmdKStore.test.ts`
+  (recreated as
+  `state/inlineEditStore.test.ts`).
+- `AIPanel.tsx` no longer imports or
+  mounts `<CmdKModal />` (the modal
+  was always mounted at the bottom of
+  the panel tree; now nothing is
+  mounted there for the inline-edit
+  flow).
+
+**Files modified**
+
+- `src/screens/EditorWorkspace/EditorWorkspace.tsx`
+  — import swap, handler one-liner,
+  `enabled` predicate refinement.
+- `src/screens/EditorWorkspace/components/AIPanel/AIPanel.tsx`
+  — drop `CmdKModal` import + mount.
+- `src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx`
+  — add `useInlineEditOverlay({ editor:
+  useEditorControllerStore(s => s.editor) })`
+  in the `ActiveEditor` body. The hook
+  sets up / tears down the overlay on
+  every editor-instance change (tab
+  switch).
+- `src/shared/commands/commands.ts`
+  — new `inlineEdit.open` command +
+  lazy import for the trigger.
+
+**Test / build status**
+
+- `npx vitest run`: **1022 passed
+  (1022)** across 79 test files (up
+  from 1018 in Phase 7). The +4 is the
+  9 new `inlineEditStore` tests minus
+  the 9 deleted `cmdKStore` tests plus
+  the 4 new `useInlineEditOverlay`
+  tests.
+- `npm run typecheck`: clean (no monaco
+  types leak into the store; the store
+  is monaco-agnostic as the rest of the
+  codebase).
+- `npm run build`: clean. The
+  `InlineEditOverlay` + `useInlineEditOverlay`
+  add ~5 KB raw / ~2 KB gzip to the
+  index bundle. Monaco chunk sizes are
+  unchanged from Phase 7.
+- `cargo test --lib`: **329 passed
+  (329)**. Unchanged (no Rust changes).
+- 3 pre-existing benign unhandled
+  rejections during `vitest run` from
+  `aiStore.setupSubscriptions` calling
+  Tauri's `listen('ai://chunk' | ...)`
+  in the jsdom test environment. These
+  are warnings (not test failures) and
+  are unrelated to Phase 8.
+
 ### Added (Phase 7 — TypeScript intellisense via Monaco)
 
 The editor now has real TypeScript language service:

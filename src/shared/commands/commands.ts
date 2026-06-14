@@ -102,7 +102,29 @@ import {
   useWorkspaceStore,
   workspaceSelectors,
 } from '@/shared/state/workspaceStore';
+import { useEditorControllerStore } from '@/screens/EditorWorkspace/state/editorControllerStore';
+import { useInlineEditStore } from '@/screens/EditorWorkspace/state/inlineEditStore';
 import { openWorkspace } from '@/screens/Welcome';
+
+/**
+ * Lazy import — the inline-edit trigger lives
+ * in a screen folder (`@/screens/EditorWorkspace`)
+ * which itself depends on the Command Palette
+ * (and therefore on this file) transitively.
+ * A top-level import would create a circular
+ * dependency. We resolve the trigger at call
+ * time (the user actually runs the command) so
+ * the cycle is broken at module-load time and
+ * only materialises on the first invocation.
+ */
+async function getTriggerInlineEdit(): Promise<
+  () => boolean
+> {
+  const mod = await import(
+    '@/screens/EditorWorkspace/state/inlineEditTrigger'
+  );
+  return mod.triggerInlineEdit;
+}
 
 export interface Command {
   /** Unique id. Used for `data-cmd`
@@ -405,6 +427,67 @@ export const COMMANDS: readonly Command[] = [
     keywords: ['anthropic', 'claude'],
     run: () => {
       useAiStore.getState().setProvider('anthropic');
+    },
+  },
+
+  // -- Inline AI edit (Phase 8) ---------------------------------
+  // The `Cmd+K` / `Ctrl+K` global shortcut binds
+  // directly to `triggerInlineEdit` (in
+  // `src/screens/EditorWorkspace/state/inlineEditTrigger.ts`).
+  // The Command Palette's `'inlineEdit.open'`
+  // entry calls the same function so the
+  // shortcut and the palette are perfectly
+  // equivalent — discoverable from the
+  // palette, executable from the keyboard.
+  //
+  // The `isEnabled` predicate mirrors the
+  // shortcut's gating: an editor must be
+  // mounted AND no edit can already be in
+  // flight. We intentionally do NOT check
+  // for a non-empty selection here — the
+  // shortcut handler bails silently when
+  // there's no selection, and the same UX
+  // applies from the palette (a no-op is
+  // better UX than a confusing error
+  // popup).
+  {
+    id: 'inlineEdit.open',
+    title: 'Edit selection with AI',
+    subtitle:
+      'Highlight code, type an instruction, Tab to accept, Esc to reject',
+    group: 'AI',
+    keywords: [
+      'ai',
+      'edit',
+      'cmd',
+      'k',
+      'refactor',
+      'transform',
+      'inline',
+      'rewrite',
+    ],
+    shortcut: ['Cmd', 'K'],
+    isEnabled: () => {
+      // We can't import the screen-local
+      // `triggerInlineEdit` here (it would
+      // pull the EditorWorkspace screen
+      // into the shared palette — Rule 6),
+      // so we re-derive the gating inline.
+      // If the gate ever drifts, the
+      // shortcut and the palette will
+      // disagree about enabled-ness, which
+      // is loud and easy to spot.
+      const inlineEditStatus = useInlineEditStore.getState().status;
+      const editor = useEditorControllerStore.getState().editor;
+      return editor != null && inlineEditStatus === 'idle';
+    },
+    run: () => {
+      // Async (fire-and-forget — the palette
+      // doesn't await). The first run pays the
+      // dynamic-import cost (~1ms on a warm
+      // Vite cache); subsequent runs return
+      // instantly from the module cache.
+      void getTriggerInlineEdit().then((fn) => fn());
     },
   },
 

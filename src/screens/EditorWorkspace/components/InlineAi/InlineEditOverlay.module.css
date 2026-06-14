@@ -1,0 +1,259 @@
+/* InlineEditOverlay — Phase 8 styles.
+ *
+ * The overlay is a Monaco `IContentWidget` anchored
+ * to the selected range. Monaco positions the
+ * widget using its internal coordinate system; the
+ * `position: relative` on the root gives the inner
+ * flex layout a sane origin. All colours /
+ * spacing / radii read from the design tokens in
+ * `src/shared/styles/tokens.css` (Rule 7).
+ *
+ * Visual states (data-status on .root):
+ *   - idle       → instruction input + Ask AI
+ *   - streaming  → spinner + "AI is editing…"
+ *   - done       → proposal preview + Accept / Reject
+ *   - error      → friendly error copy + Try again / Dismiss
+ *
+ * Width is fixed at 360px (matches the AIPanel's
+ * common chat-message width — keeps the eye from
+ * jumping). The max-height clamps the overlay
+ * to the viewport so the proposal preview can
+ * scroll on long rewrites.
+ */
+
+.root {
+  position: relative;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-overlay, 0 4px 16px rgba(0, 0, 0, 0.2));
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  overflow: hidden;
+  /* Monaco's z-index for content widgets is
+   * `1`; we sit one above so the overlay
+   * never ends up behind the editor's own
+   * scrollbar / find widget. */
+  z-index: 2;
+}
+
+/* Status-tinted top border so the user can tell
+ * at a glance which state the overlay is in. */
+.root[data-status="streaming"] {
+  border-top: 2px solid var(--color-info, var(--color-accent, #4a9eff));
+}
+.root[data-status="done"] {
+  border-top: 2px solid var(--color-success);
+}
+.root[data-status="error"] {
+  border-top: 2px solid var(--color-danger);
+}
+
+/* --- Header ------------------------------------------------------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-base);
+  flex-shrink: 0;
+}
+
+.headerIcon {
+  font-size: var(--font-size-md);
+  line-height: 1;
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-bold);
+}
+
+.headerTitle {
+  flex: 1;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.headerHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono, ui-monospace, "Cascadia Code", monospace);
+  white-space: nowrap;
+}
+
+/* --- Body (state-specific) ---------------------------------------- */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  min-width: 0;
+  /* Long proposals scroll inside the body
+   * (the root's max-height is the cap). */
+  overflow-y: auto;
+  flex: 1;
+}
+
+/* --- Idle body --------------------------------------------------- */
+
+.input {
+  width: 100%;
+  min-height: 36px;
+  max-height: 120px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  resize: vertical;
+  outline: none;
+  transition: border-color var(--motion-fast) var(--easing-standard);
+}
+
+.input:focus {
+  border-color: var(--color-accent, #4a9eff);
+}
+
+.input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.localError {
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+  line-height: var(--line-height-normal);
+}
+
+/* --- Footer (input + result actions) ----------------------------- */
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.hint {
+  flex: 1;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono, ui-monospace, "Cascadia Code", monospace);
+}
+
+/* --- Streaming body ---------------------------------------------- */
+
+.streaming {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  min-height: 24px;
+}
+
+.streamingDot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-pill, 50%);
+  background: var(--color-info, var(--color-accent, #4a9eff));
+  /* CSS keyframe spin. The dot starts as a
+   * quarter-arc (border) and rotates. We
+   * could use a spinner SVG, but a CSS
+   * spinner is lighter and matches the
+   * monospace-y feel of the overlay. */
+  border: 2px solid transparent;
+  border-top-color: var(--color-info, var(--color-accent, #4a9eff));
+  border-right-color: var(--color-info, var(--color-accent, #4a9eff));
+  background: transparent;
+  animation: inlineEditSpin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes inlineEditSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.streamingText {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-normal);
+}
+
+/* --- Done body --------------------------------------------------- */
+
+.afterLabel {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.proposal {
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono, ui-monospace, "Cascadia Code", monospace);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-primary);
+  /* Long proposals scroll inside the pre
+   * (the body's overflow-y: auto handles it). */
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+/* --- Error body -------------------------------------------------- */
+
+.errorRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+}
+
+.errorIcon {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-normal);
+  color: var(--color-danger);
+  flex-shrink: 0;
+}
+
+.errorText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.errorTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  line-height: var(--line-height-normal);
+}
+
+.errorHint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-normal);
+}

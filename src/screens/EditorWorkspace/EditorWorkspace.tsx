@@ -21,8 +21,9 @@ import {
   useEditorTabsStore,
 } from './state/editorTabsStore';
 import { useEditorTabs } from './hooks/useEditorTabs';
-import { useCmdKStore } from './state/cmdKStore';
+import { useInlineEditStore } from './state/inlineEditStore';
 import { useEditorControllerStore } from './state/editorControllerStore';
+import { triggerInlineEdit } from './state/inlineEditTrigger';
 import { registerToolExecutor } from './state/aiStore';
 import { executeToolCall } from './state/toolRegistry';
 import { useKeyboardShortcut } from '@/shared/hooks';
@@ -50,20 +51,23 @@ import styles from './EditorWorkspace.module.css';
  * The two stores never know about each other — wiring lives at the
  * screen level where both are mounted.
  *
- * 5b-5 wiring:
+ * 5b-5 wiring (now Phase 8):
  *   - The `Cmd-K` / `Ctrl-K` global shortcut is
  *     bound HERE (not in the EditorPane) so it
  *     fires regardless of which pane has focus.
  *     The handler reads the live Monaco editor
  *     from the `editorControllerStore`, extracts
  *     the current selection, and dispatches
- *     `cmdKStore.openCmdK(sel)`. The modal
- *     itself is rendered inside the AIPanel;
- *     this screen is the single hand-off
- *     point between the keyboard event and
- *     the modal's open-state. The handler
- *     is a no-op when no editor is mounted
- *     (mobile, no file open).
+ *     `inlineEditStore.open(sel)`. The inline
+ *     overlay is rendered inside the editor pane
+ *     as a Monaco `IContentWidget`; this screen
+ *     is the single hand-off point between the
+ *     keyboard event and the overlay's open-state.
+ *     The handler is a no-op when no editor is
+ *     mounted (mobile, no file open) OR when
+ *     there's no selection OR when an edit is
+ *     already in flight (the `enabled` predicate
+ *     covers all three).
  *
  * 5b-6 wiring:
  *   - Registers the `toolRegistry`'s
@@ -137,60 +141,41 @@ export function EditorWorkspace() {
   const dirty = activeTab ? isDirty(activeTab) : false;
   const language = activeTab?.language ?? 'Plain Text';
 
-  // 5b-5: global Cmd-K / Ctrl-K handler for
-  // inline edit. Reads the live Monaco editor
-  // from the controller store, extracts the
-  // current selection, and dispatches
-  // `cmdKStore.openCmdK(sel)`. The handler is
-  // a no-op when no editor is mounted — in
-  // that case the controller store's `editor`
-  // is null and we just bail.
-  const openCmdK = useCmdKStore((s) => s.openCmdK);
+  // Phase 8: global Cmd-K / Ctrl-K handler for
+  // inline AI edit. The handler is a thin
+  // wrapper around `triggerInlineEdit` (in
+  // `state/inlineEditTrigger.ts`) so the
+  // Command Palette can call the same
+  // function. The wrapper is a no-op when no
+  // editor is mounted OR no text is selected
+  // OR an edit is already in flight (the
+  // `enabled` predicate below covers all
+  // three).
   const handleCmdK = useCallback(() => {
-    const editor = useEditorControllerStore.getState().editor as
-      | {
-          getSelection: () => unknown;
-          getModel: () => {
-            getValueInRange: (sel: unknown) => string;
-          } | null;
-        }
-      | null;
-    if (!editor) return;
-    const sel = editor.getSelection();
-    if (!sel) return;
-    const model = editor.getModel();
-    if (!model) return;
-    const text = model.getValueInRange(sel);
-    if (!text) return; // no selection — nothing to edit
-    // Cast the selection to the shape
-    // `CmdKSelection.range` expects. The
-    // selection shape is monaco's `IRange`
-    // (start/end line + column) which lines
-    // up with our hand-rolled type.
-    const range = sel as {
-      startLineNumber: number;
-      startColumn: number;
-      endLineNumber: number;
-      endColumn: number;
-    };
-    openCmdK({ text, range });
-  }, [openCmdK]);
+    triggerInlineEdit();
+  }, []);
 
-  // 5b-5: bind the shortcut. The
+  // Phase 8: bind the shortcut. The
   // `useKeyboardShortcut` hook already allows
   // shortcuts inside the Monaco editor surface
   // (it only skips non-Monaco text inputs) —
   // so this fires whether the editor or the
   // AI panel has focus. The `enabled` flag
   // gates the handler when no editor is
-  // mounted (the user can still hit Cmd-K
-  // but nothing happens — the same UX as
-  // hitting Cmd-K on a closed tab in VS
-  // Code).
+  // mounted, no selection, or an edit is
+  // already in flight. The user can still
+  // hit Cmd-K and nothing happens — the same
+  // UX as hitting Cmd-K on a closed tab in VS
+  // Code.
+  const editor = useEditorControllerStore((s) => s.editor);
+  const inlineEditStatus = useInlineEditStore((s) => s.status);
   useKeyboardShortcut(
     { ctrl: true, key: 'k' },
     handleCmdK,
-    { enabled: true },
+    {
+      enabled:
+        editor != null && inlineEditStatus === 'idle',
+    },
   );
 
   // M1: device emulator

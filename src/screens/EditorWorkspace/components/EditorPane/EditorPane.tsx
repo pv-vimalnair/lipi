@@ -14,6 +14,7 @@ import {
 } from '../../state/editorTabsStore';
 import { useEditorTabs } from '../../hooks/useEditorTabs';
 import { useEditorControllerStore } from '../../state/editorControllerStore';
+import { useInlineEditOverlay } from '../../hooks/useInlineEditOverlay';
 import { useTsConfigStore } from '../../state/tsConfigStore';
 import {
   useWorkspaceStore,
@@ -319,6 +320,29 @@ function ActiveEditor({
       setControllerEditor(null);
     };
   }, [setControllerEditor]);
+
+  // Phase 8: mount the inline-edit overlay +
+  // decoration collection + Tab/Esc keybindings
+  // for the live editor. The hook is a no-op
+  // when `editor` is null (e.g. before the first
+  // mount, or after a tab switch). On every
+  // `handleMount`, a new editor instance is
+  // written to the controller store, and the
+  // `useInlineEditOverlay` hook tears down the
+  // previous instance's widget / decorations
+  // / keybindings (the effect's cleanup
+  // function) and sets up the new instance's
+  // — the same pattern as the 5b-5 controller-
+  // store write above.
+  //
+  // We read the live editor from the
+  // controller store on every render (instead
+  // of taking it from `handleMount`'s closure)
+  // so the hook's `useEffect` can react to
+  // tab switches without us having to wire
+  // a custom event.
+  const liveEditor = useEditorControllerStore((s) => s.editor);
+  useInlineEditOverlay({ editor: liveEditor });
 
   if (load.kind === 'loading') {
     return (

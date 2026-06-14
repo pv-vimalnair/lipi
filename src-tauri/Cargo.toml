@@ -7,6 +7,11 @@ license = "MIT"
 repository = "https://github.com/lipi-dev/lipi"
 edition = "2021"
 rust-version = "1.82.0"  # gix 0.78's MSRV
+# When [[bin]] entries are declared explicitly (sign_license,
+# rotate_updater_key), Cargo no longer auto-detects src/main.rs
+# as the default binary. Setting `default-run` tells `cargo run`,
+# `cargo build`, and the Tauri CLI which binary is the app.
+default-run = "lipi"
 
 # Match the npm package version. Tauri 2 reads this; keep in sync with
 # `package.json` (no tooling to enforce yet — see docs/ENGINEERING.md).

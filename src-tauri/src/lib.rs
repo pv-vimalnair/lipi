@@ -254,6 +254,16 @@ fn get_app_version() -> AppVersion {
 /// View > Toggle Developer Tools menu item, routed through
 /// `useMenuEvents`.
 ///
+/// The `open_devtools()` method is `#[cfg]`-gated by the
+/// upstream Tauri crate — it only exists in `debug` builds
+/// OR when the `devtools` cargo feature is enabled. Since
+/// this is a dev-only tool, we gate the call site with
+/// `#[cfg(debug_assertions)]` instead of enabling the
+/// feature in production (no need to ship devtools in
+/// release binaries). In release builds the command
+/// remains registered (so the JS-side `invoke` doesn't
+/// throw "command not found") but it just returns Ok.
+///
 /// No-op on platforms that don't support devtools (e.g.
 /// Android — see the `@tauri-apps/api` `WebviewConfig.devtools`
 /// doc for the full matrix). On Windows the devtools
@@ -262,7 +272,11 @@ fn get_app_version() -> AppVersion {
 /// webkit2gtk build.
 #[tauri::command]
 fn open_devtools(window: tauri::WebviewWindow) -> Result<(), String> {
-    window.open_devtools();
+    #[cfg(debug_assertions)]
+    {
+        window.open_devtools();
+    }
+    let _ = window; // silence unused warning in release builds
     Ok(())
 }
 

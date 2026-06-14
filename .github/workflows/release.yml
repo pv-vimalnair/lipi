@@ -289,7 +289,18 @@ jobs:
       - name: Check for dev keypair reference
         run: |
           set -e
-          DEV_PUBKEY="dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUyMjI5QkMyNEMzRjQ4RApSV1NOOU1Na3ZDa2lCWGZudzF4UWpONVBQd2hIMmNPRVVnQmZ2Q0lSMWQxVWd3Q1pncFFZTnE3eAo="
+          # Read the dev pubkey directly from the committed
+          # `src-tauri/keys/dev/lipi-dev.key.pub` file (single
+          # source of truth — never duplicate it inline). The
+          # guard's job is to fail the release if the embedded
+          # `tauri.conf.json` pubkey still matches this dev
+          # value (which would mean the project lead forgot to
+          # rotate to the production keypair before tagging).
+          if [ ! -f "src-tauri/keys/dev/lipi-dev.key.pub" ]; then
+            echo "::error::src-tauri/keys/dev/lipi-dev.key.pub is missing — the dev keypair is required for the guard to work"
+            exit 1
+          fi
+          DEV_PUBKEY=$(tr -d '\n' < "src-tauri/keys/dev/lipi-dev.key.pub")
           TAURI_PUBKEY=$(node -p "require('./src-tauri/tauri.conf.json').plugins.updater.pubkey")
 
           echo "tauri.conf.json pubkey (head):  ${TAURI_PUBKEY:0:40}..."

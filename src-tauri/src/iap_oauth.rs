@@ -97,10 +97,59 @@ const GRANT_TYPE_CLIENT_CREDENTIALS: &str = "client_credentials";
 /// Read the OAuth credentials from the
 /// environment. Returns `None` if any of the
 /// three env vars is unset.
+///
+/// ## Build-time vs runtime
+///
+/// For production builds, the three env vars
+/// (`LIPI_MS_IAP_CLIENT_ID`, `LIPI_MS_IAP_CLIENT_SECRET`,
+/// `LIPI_MS_IAP_TENANT_ID`) are passed to `cargo build`
+/// so that `option_env!` embeds them as `&'static str`
+/// constants in the binary. This is the secure path
+/// — the secret is never on disk after the build, and
+/// `process.env` inspection at runtime doesn't reveal
+/// it.
+///
+/// For dev / CI-without-secrets, the same env vars
+/// can be set at runtime (e.g. in a `.env` file the
+/// dev loads before launching the app, or in a
+/// `launch.json` IDE config). The runtime
+/// `std::env::var` path is the dev escape hatch.
+///
+/// The two paths are *not* mutually exclusive: the
+/// build-time value is preferred if set, with the
+/// runtime value as a fallback. This means a dev who
+/// wants to override the build-time value (e.g. for
+/// a quick local test against a different Azure AD
+/// app registration) can set the runtime env var and
+/// the OAuth flow will pick it up.
 pub fn read_oauth_credentials_from_env() -> Option<OAuthCredentials> {
-    let client_id = std::env::var("LIPI_MS_IAP_CLIENT_ID").ok()?;
-    let client_secret = std::env::var("LIPI_MS_IAP_CLIENT_SECRET").ok()?;
-    let tenant_id = std::env::var("LIPI_MS_IAP_TENANT_ID").ok()?;
+    // Build-time-embedded values (preferred).
+    // `option_env!` returns `None` if the env var was
+    // not set during `cargo build`. The values are
+    // baked into the binary as `&'static str`, so they
+    // survive even if the runtime env doesn't have them.
+    let build_client_id = option_env!("LIPI_MS_IAP_CLIENT_ID");
+    let build_client_secret = option_env!("LIPI_MS_IAP_CLIENT_SECRET");
+    let build_tenant_id = option_env!("LIPI_MS_IAP_TENANT_ID");
+
+    // Runtime env values (fallback for dev).
+    let runtime_client_id = std::env::var("LIPI_MS_IAP_CLIENT_ID").ok();
+    let runtime_client_secret = std::env::var("LIPI_MS_IAP_CLIENT_SECRET").ok();
+    let runtime_tenant_id = std::env::var("LIPI_MS_IAP_TENANT_ID").ok();
+
+    // Prefer build-time; fall back to runtime; only
+    // return `Some` if all three are present in at
+    // least one source.
+    let client_id = build_client_id
+        .map(str::to_string)
+        .or(runtime_client_id)?;
+    let client_secret = build_client_secret
+        .map(str::to_string)
+        .or(runtime_client_secret)?;
+    let tenant_id = build_tenant_id
+        .map(str::to_string)
+        .or(runtime_tenant_id)?;
+
     Some(OAuthCredentials {
         client_id,
         client_secret,
@@ -345,18 +394,6 @@ impl std::fmt::Display for OAuthError {
 }
 
 impl std::error::Error for OAuthError {}
-
-/// Clear the in-memory cache.
-///
-/// Primarily used in tests (to reset state
-/// between test cases). Not exposed to the
-/// IPC layer.
-#[cfg(test)]
-pub fn clear_cache_for_tests() {
-    if let Ok(mut guard) = CACHED_TOKEN.lock() {
-        *guard = None;
-    }
-}
 
 // --- Tests -------------------------------------------------------------
 

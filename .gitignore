@@ -14,11 +14,24 @@ src-tauri/lipi-window.png
 # screenshot.ps1 is a dev helper; keep it tracked so contributors can use it
 
 # Tauri updater signing keys
-# The .key.pub (public) is committed so `cargo tauri build` works
-# out of the box for contributors. The .key (private) is a dev
-# placeholder with a hard-coded password — production CI rotates
-# to a real key from a secret store, never commits the private
-# key.
+# - production/ holds the *real* production keypair. The .pub
+#   is committed so the embedded `plugins.updater.pubkey` in
+#   tauri.conf.json matches the CI signing key (so end users
+#   can verify update signatures). The .key (private) is
+#   git-ignored and lives in the CI secret store + an offline
+#   backup USB owned by the project lead.
+# - dev/ holds a *throwaway* dev keypair. The .pub is committed
+#   so contributors can run `tauri build` locally without
+#   setting up signing secrets. The .key (private) is
+#   git-ignored — never reuse the dev key for any artifact
+#   that ships to users.
+src-tauri/keys/production/*.key
+src-tauri/keys/production/*.key.txt
+!src-tauri/keys/production/*.key.pub
+src-tauri/keys/dev/*.key
+!src-tauri/keys/dev/*.key.pub
+# Backwards-compat: any old `lipi-dev.key` at the
+# src-tauri/ root is also ignored.
 lipi-dev.key
 !lipi-dev.key.pub
 

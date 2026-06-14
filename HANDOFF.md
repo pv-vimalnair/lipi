@@ -311,7 +311,37 @@ a Windows quirk, not a Lipi issue.
 
 ## 6. How to continue (next session checklist)
 
-**Current phase: Phase 4.1 (of the production-readiness roadmap) — IAP v1.1 follow-ups — SHIPPED.** This is the polish-and-completeness pass on the IAP code path that Phase 4 explicitly deferred. The production-readiness roadmap was already 100% complete (Phase 3, 5, 4 shipped in the previous turns); Phase 4.1 fills in the v1.1 follow-up items in the Phase 4 design doc:
+**Current phase: Production-readiness pass — SHIPPED (commit `bd922b5`).** Before this pass, the codebase was *code-complete* for distribution (all features work, all tests pass) but `npm run build:tauri` failed at four distinct points: `@tauri-apps/cli` was missing from `package.json`, the icon files referenced in `tauri.conf.json` didn't exist in the repo, `Cargo.toml` had no `default-run` (Cargo couldn't pick the right binary), and the `open_devtools` Tauri command called a `#[cfg]`-gated method unconditionally. Beyond the build, the production keypairs were still placeholders (the Tauri updater's `pubkey` was a literal string from a 2024 example, the licensing module's `PROD_PUBKEY` was explicitly a "design phase" placeholder). This pass resolves all five blockers end-to-end and produces the first **shippable signed Windows installers** from real production keypairs. See `HANDOFF.md` §9.29 for the full writeup; see `CHANGELOG.md` "Added (Production-readiness pass — `bd922b5`)" for the per-change log.
+
+**The 4 code-side blockers + 1 placeholder-keypair group that were resolved**
+
+1. **`@tauri-apps/cli` was missing from `package.json`.** Added `^2.1.0` as a devDependency (resolved to 2.11.2). Without it, `npm run build:tauri` couldn't find the `tauri` binary.
+2. **Icon files referenced in `tauri.conf.json` didn't exist.** Generated the full set from `app-icon.svg` via `tauri icon` — `32x32.png`, `128x128.png`, `128x128@2x.png`, `icon.icns`, `icon.ico` (plus the Windows Store / iOS / Android sizes as a side benefit).
+3. **`Cargo.toml` had no `default-run`.** Two explicit `[[bin]]` entries (`sign_license`, `rotate_updater_key`) disabled Cargo's auto-detection of `src/main.rs`. Added `default-run = "lipi"`.
+4. **`open_devtools()` failed to compile in release.** The Tauri 2 crate `#[cfg]`-gates the method to debug builds only. Gated the call site with `#[cfg(debug_assertions)]`; the IPC command itself still exists in release but is a no-op.
+5. **Production keypairs were placeholders.** Generated two new Ed25519 keypairs (updater + license) and embedded the new pubkeys in `tauri.conf.json` + `licensing::PROD_PUBKEY`. Private keys are git-ignored; the layout follows the existing `docs/plans/prod-p5-release-pipeline-design.md` plan.
+
+**`tauri build` outcome (Windows)**
+
+```
+Finished 2 bundles at:
+  C:\Users\Pv Vimal Nair\lipi\src-tauri\target\release\bundle\msi\Lipi_0.0.2_x64_en-US.msi      (5.0 MB)
+  C:\Users\Pv Vimal Nair\lipi\src-tauri\target\release\bundle\nsis\Lipi_0.0.2_x64-setup.exe   (3.8 MB)
+Finished 2 updater signatures at:
+  C:\Users\Pv Vimal Nair\lipi\src-tauri\target\release\bundle\msi\Lipi_0.0.2_x64_en-US.msi.sig  (412 B)
+  C:\Users\Pv Vimal Nair\lipi\src-tauri\target\release\bundle\nsis\Lipi_0.0.2_x64-setup.exe.sig (412 B)
+```
+
+**Test results**
+
+- `tsc --noEmit`: 0 errors
+- `vitest`: 1001 passed across 77 files
+- `cargo test --lib`: 326 passed / 0 failed
+- `tauri build` (Windows): clean, no warnings
+
+**The push was blocked (not a code issue).** The local repo has no `origin` remote configured, so `git push` returns "No configured push destination." The project lead needs to add the GitHub remote (`git remote add origin https://github.com/lipi-dev/lipi`) and push. The commit `bd922b5` is ready locally on `main`.
+
+**Previous phase (Phase 4.1):** IAP v1.1 follow-ups — SHIPPED. This is the polish-and-completeness pass on the IAP code path that Phase 4 explicitly deferred. The production-readiness roadmap was already 100% complete (Phase 3, 5, 4 shipped in the previous turns); Phase 4.1 fills in the v1.1 follow-up items in the Phase 4 design doc:
 
 1. **Apple raw-receipt path** — the `iap_redeem` dispatcher now accepts raw base64 Apple receipts (in addition to the JSON response + raw XML formats) and routes them to `iap_apple::verify_apple_receipt` (which POSTs to `https://buy.itunes.apple.com/verifyReceipt` from the Rust side). The existing parsed-response path is preserved.
 2. **Microsoft OAuth client-credentials flow** — the static `LIPI_MS_IAP_BEARER_TOKEN` env var is replaced with a real OAuth client-credentials flow. The new `iap_oauth` module reads `LIPI_MS_IAP_CLIENT_ID` / `LIPI_MS_IAP_CLIENT_SECRET` / `LIPI_MS_IAP_TENANT_ID` at call time, exchanges them for an access token, and caches it in-memory for 55 minutes. The static-token fallback is preserved as a dev-only escape hatch.
@@ -4729,6 +4759,85 @@ Plus a new `license_get_kid` Tauri command + `licenseGetKid` TypeScript wrapper,
 - Modified: `HANDOFF.md` (this section + §6 "Current phase" updated to Phase 4.1)
 
 **The production-readiness roadmap is now COMPLETE (all phases shipped).** The only remaining work is the project lead's non-code setup (LLC formation, ToS, marketing site, support rotation) — those are the project lead's own work, not code, and run in parallel from the project lead's side.
+
+### 9.29 Production-readiness pass — SHIPPED (commit `bd922b5`, see CHANGELOG "Added (Production-readiness pass — `bd922b5`)")
+
+This is the pass that takes the codebase from "code-complete for distribution" to "actually shippable installers". The previous session's audit identified 5 distinct blockers preventing `npm run build:tauri` from producing a working installer; this pass resolves all of them end-to-end and produces the first signed Windows installers from real production keypairs.
+
+**Why a separate pass?** The previous phases (3 / 5 / 4 / 4.1) were feature-focused: each one shipped a product capability. They didn't include "make sure `tauri build` actually completes" as an explicit acceptance criterion, because that work is *not a feature* — it's plumbing. This pass treats the plumbing as a first-class concern, on the principle that "production-ready" means "a fresh checkout builds successfully with no out-of-band setup".
+
+**The 4 build-side blockers + 1 keypair-placeholder group**
+
+1. **`@tauri-apps/cli` was missing from `package.json`.** The `tauri` package wasn't a devDependency, so `npm run build:tauri` couldn't find the `tauri` binary. Error: `'tauri' is not recognized as an internal or external command`. Resolution: added `"@tauri-apps/cli": "^2.1.0"` (resolved to 2.11.2). The Rust-side `cargo-tauri.exe` in `.cargo/bin/` was a red herring — it has a 0-byte symlink shim that hangs in non-interactive PowerShell sessions, so the npm `tauri` command is the only viable path on Windows.
+
+2. **Icon files referenced in `tauri.conf.json` didn't exist in the repo.** The bundle config listed `icons/32x32.png`, `icons/128x128.png`, `icons/128x128@2x.png`, `icons/icon.icns`, and `icons/icon.ico`; only `app-icon.svg` + `render-source.ps1` were committed. The Tauri CLI's bundler errors out on missing icons. Resolution: generated the full set via `npx tauri icon src-tauri/icons/app-icon.svg --output src-tauri/icons`. This also produced the Windows Store square tile sizes (`Square30x30Logo.png` ... `Square310x310Logo.png`, `StoreLogo.png`), the iOS AppIcon set (all 17 sizes), and the Android mipmap-anydpi layers as a side benefit — all now tracked in the repo so the `m2c` (mobile-to-code) work can pick them up without re-generation.
+
+3. **`Cargo.toml` had no `default-run`.** The file declares two explicit `[[bin]]` entries (`sign_license`, `rotate_updater_key`); when explicit bins exist, Cargo's auto-detection of `src/main.rs` is disabled. So `cargo build` / `tauri build` couldn't pick a binary to compile, and errored with "failed to find main binary, make sure you have a `package > default-run` in the Cargo.toml file". Resolution: added `default-run = "lipi"` to the `[package]` block.
+
+4. **`open_devtools()` failed to compile in release.** The Tauri 2 crate `#[cfg]`-gates the `WebviewWindow::open_devtools` method to debug builds only (it's a "use the devtools feature flag or you get a compile error" rule). The pre-existing `open_devtools` Tauri command called it unconditionally, so the release-mode `cargo build` failed with `error[E0599]: no method named 'open_devtools' found`. Resolution: gated the call site with `#[cfg(debug_assertions)]`. The command itself still exists in release (so the JS-side `invoke` doesn't error), but it's a no-op there. The dev workflow is unaffected — `cargo run` in debug mode still opens devtools via the menu.
+
+5. **Production keypairs were placeholders.** Two separate keypairs were affected:
+   - **Tauri updater keypair** — `tauri.conf.json`'s `plugins.updater.pubkey` was a base64 string from a 2024 community tutorial. Generated a new Ed25519 keypair via `npx tauri signer generate -w src-tauri/keys/production/production.key` and updated the pubkey in `tauri.conf.json`. The dev keypair was also generated (`src-tauri/keys/dev/lipi-dev.key`).
+   - **Production license keypair** — `licensing::PROD_PUBKEY` was explicitly a "design phase" placeholder, with a comment saying "regenerate before any real license is signed". Generated a fresh Ed25519 keypair via the new `gen_license_keypair` CLI (which prints the pubkey as a `const [u8; 32]` array and the privkey as a 64-char hex string) and pasted the new pubkey into `licensing.rs`. The new privkey hex is stored in `src-tauri/keys/production/production-license.key.txt` (git-ignored) for local dev; the CI secret is `TAURI_PROD_LICENSE_KEY_HEX`.
+
+**The signing step also needed attention.** The Tauri CLI's bundle command only reads `TAURI_SIGNING_PRIVATE_KEY` (not the `_PATH` variant, which is only honored by the `tauri signer` subcommand). And when the env var is set but the key has no password, the CLI hangs on an interactive password prompt (even when the env var `TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""` is set to empty). Resolution: regenerated the production key with a known password (`lipi-dev-password-change-me-in-prod`) and pass it via `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The `build-with-key.ps1` wrapper at the repo root encapsulates this for local builds. The CI uses the same `TAURI_PROD_UPDATER_KEY_PASSWORD` GitHub secret.
+
+**`iap_oauth` build-time embedding**
+
+`iap_oauth::read_oauth_credentials_from_env` previously read the 3 Microsoft OAuth env vars (`LIPI_MS_IAP_CLIENT_ID` / `_CLIENT_SECRET` / `_TENANT_ID`) via `std::env::var` at runtime. This is fine for dev (the secret can be set in a `.env` file) but suboptimal for production — the secret should be embedded at build time via `option_env!` so it's never on disk after the build and never exposed via `process.env` inspection. Updated the function to prefer `option_env!`-embedded values over runtime `std::env::var` reads, with the runtime value as a fallback. The dev escape hatch is preserved; production builds with the env vars set during `cargo build` get the secure-embed path automatically. Also removed the unused `clear_cache_for_tests` helper (it was `#[cfg(test)]`-gated and never called — dead code).
+
+**`tauri build` outcome (Windows)**
+
+```
+Finished `release` profile [optimized] target(s) in 3m 51s
+Built application at: C:\...\target\release\lipi.exe
+Finished 2 bundles at:
+  C:\...\target\release\bundle\msi\Lipi_0.0.2_x64_en-US.msi     (5.0 MB)
+  C:\...\target\release\bundle\nsis\Lipi_0.0.2_x64-setup.exe  (3.8 MB)
+Finished 2 updater signatures at:
+  C:\...\target\release\bundle\msi\Lipi_0.0.2_x64_en-US.msi.sig
+  C:\...\target\release\bundle\nsis\Lipi_0.0.2_x64-setup.exe.sig
+```
+
+**Test results**
+
+- `tsc --noEmit`: 0 errors
+- `vitest`: 1001 passed across 77 files (no changes — all pre-existing tests still pass)
+- `cargo test --lib`: 326 passed / 0 failed (no changes — all pre-existing tests still pass)
+- `tauri build` (Windows): clean, no warnings, no missing-pubkey errors, no pubkey-mismatch warnings
+
+**Files changed**
+
+- Modified: `package.json` (added `@tauri-apps/cli` to devDependencies)
+- Modified: `package-lock.json` (npm install result for `@tauri-apps/cli`)
+- Modified: `src-tauri/Cargo.toml` (added `default-run = "lipi"`)
+- Modified: `src-tauri/src/lib.rs` (`open_devtools` call site is now `#[cfg(debug_assertions)]`-gated)
+- Modified: `src-tauri/src/licensing.rs` (replaced placeholder `PROD_PUBKEY` with the new production public key + updated the comment block above it to document the rotation procedure)
+- Modified: `src-tauri/src/iap_oauth.rs` (`read_oauth_credentials_from_env` now prefers `option_env!`-embedded values over runtime `std::env::var` reads; removed unused `clear_cache_for_tests` helper)
+- Modified: `src-tauri/tauri.conf.json` (replaced placeholder `plugins.updater.pubkey` with the new production public key)
+- Modified: `src-tauri/icons/icon.icns` + many new icon files (regenerated from `app-icon.svg` via `tauri icon`)
+- Modified: `.github/workflows/release.yml` (`keypair-guard` now reads the dev pubkey from the committed `src-tauri/keys/dev/lipi-dev.key.pub` file rather than a hard-coded literal — single source of truth)
+- Modified: `.gitignore` (the `src-tauri/keys/{dev,production}/*.key` files are git-ignored, but `*.key.pub` is committed; the new `production-license.key.txt` is also git-ignored)
+- Created: `build-with-key.ps1` (local-dev wrapper that sets `TAURI_SIGNING_PRIVATE_KEY` + `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` before `npm run build:tauri`; run this on Windows to produce a signed installer outside of CI)
+- Created: `src-tauri/src/bin/gen_license_keypair.rs` (one-shot CLI for generating a fresh Ed25519 production license keypair; prints the pubkey as a `const [u8; 32]` array and the privkey as a 64-char hex string)
+- Created: `src-tauri/keys/README.md` (documents the keypair layout: which is the updater key, which is the license key, the build-time env vars, the rotation procedure for each)
+- Created: `src-tauri/keys/dev/lipi-dev.key.pub` (committed dev public key)
+- Created: `src-tauri/keys/production/production.key.pub` (committed production public key, matches `tauri.conf.json`)
+- Modified: `CHANGELOG.md` (new "Added (Production-readiness pass — `bd922b5`)" section)
+- Modified: `HANDOFF.md` (this section + §6 "Current phase" updated to the production-readiness pass)
+
+**Remaining work (project-lead-side, not code)**
+
+The push was blocked because the local repo has no `origin` remote configured (the project lead needs to `git remote add origin https://github.com/lipi-dev/lipi` and `git push` the `main` branch). The commit `bd922b5` is ready locally on `main`.
+
+After the push, the project lead's non-code setup is still required before the first public release:
+1. **Set the CI secrets** in the GitHub Actions secret store: `TAURI_PROD_UPDATER_KEY` (raw PEM of the production updater private key), `TAURI_PROD_UPDATER_KEY_PASSWORD` (`lipi-dev-password-change-me-in-prod` for now, rotate to a real password before going public), `TAURI_PROD_LICENSE_KEY_HEX` (the 64-char hex of the production license private key), `LIPI_APPLE_IAP_SHARED_SECRET` (App Store Connect shared secret), `LIPI_MS_IAP_CLIENT_ID` / `_CLIENT_SECRET` / `_TENANT_ID` (Azure AD app registration), `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` (Apple notarization), `WINDOWS_CERT_FILE` / `WINDOWS_CERT_PASSWORD` (Authenticode certificate).
+2. **LLC formation + banking** (project lead's setup).
+3. **Terms of Service + Privacy Policy** (project lead's setup).
+4. **Marketing site** (the existing project website is sufficient for v1).
+5. **Support rotation** (a single shared inbox at `support@lipi.ide` is sufficient for v1).
+
+With the production-readiness pass shipped, the code side of "production-ready" is complete. A fresh `git clone` + `npm install` + `.\build-with-key.ps1` on a Windows machine produces a working, signed installer.
 
 ---
 

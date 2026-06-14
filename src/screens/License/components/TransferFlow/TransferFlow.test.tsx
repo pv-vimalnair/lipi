@@ -1,0 +1,142 @@
+/**
+ * Tests for `TransferFlow`. The flow is a 3-step
+ * wizard (confirm → running → result). The component
+ * delegates the actual deactivation to
+ * `useLicenseStore.deactivate`; we mock the store
+ * to verify the state transitions.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+
+import { useLicenseStore } from '@/shared/state/licenseStore';
+import type { LicenseStatusPayload } from '@/ipc/licensing';
+import { TransferFlow } from './TransferFlow';
+
+function mount(): { container: HTMLDivElement; root: Root; cleanup: () => void } {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => {
+    root.render(createElement(TransferFlow));
+  });
+  return {
+    container,
+    root,
+    cleanup: () => {
+      act(() => root.unmount());
+      container.remove();
+    },
+  };
+}
+
+let deactivateMock: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  deactivateMock = vi.fn().mockResolvedValue(undefined);
+  useLicenseStore.setState({
+    status: { kind: 'active', plan: 'yearly', expiresAt: 1, issuedAt: 0, daysRemaining: 100 } as LicenseStatusPayload,
+    machineFingerprint: 'aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222',
+    // The store's `deactivate` field is typed
+    // `() => Promise<LicenseStatusPayload>`; in the
+    // test we only care that it's called, not what it
+    // returns. Cast to the test's mock signature.
+    deactivate: deactivateMock as unknown as () => Promise<LicenseStatusPayload>,
+    loadMachineFingerprint: vi.fn().mockResolvedValue('aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222') as unknown as () => Promise<string>,
+  });
+});
+afterEach(() => {
+  useLicenseStore.setState({ status: null, machineFingerprint: null });
+});
+
+describe('TransferFlow', () => {
+  it('renders the initial confirmation step', () => {
+    const { container, cleanup } = mount();
+    try {
+      expect(container.textContent).toMatch(/Transfer to a new machine/);
+      expect(container.textContent).toMatch(/Yes, deactivate on this machine/);
+      expect(container.textContent).toMatch(/Cancel/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('confirming the transfer calls deactivate IPC', async () => {
+    const { container, cleanup } = mount();
+    try {
+      const yes = Array.from(container.querySelectorAll('button')).find(
+        (b) => /Yes, deactivate/.test(b.textContent || ''),
+      );
+      expect(yes).toBeDefined();
+      await act(async () => {
+        yes!.click();
+        // Allow the async deactivate to resolve.
+        await Promise.resolve();
+      });
+      expect(deactivateMock).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('shows the success step after deactivation with the email body', async () => {
+    const { container, cleanup } = mount();
+    try {
+      const yes = Array.from(container.querySelectorAll('button')).find(
+        (b) => /Yes, deactivate/.test(b.textContent || ''),
+      );
+      await act(async () => {
+        yes!.click();
+        await Promise.resolve();
+      });
+      // After the promise resolves, the component
+      // moves to the 'result' step.
+      expect(container.textContent).toMatch(/Your license has been deactivated on this machine/);
+      expect(container.textContent).toMatch(/licensing@lipi.ide/);
+      // The fingerprint appears in the email body.
+      expect(container.textContent).toMatch(/aaaa1111bbbb2222/);
+      // The plan appears in the email body.
+      expect(container.textContent).toMatch(/yearly/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('the "Cancel" button keeps the flow on the confirm step', () => {
+    const { container, cleanup } = mount();
+    try {
+      const cancel = Array.from(container.querySelectorAll('button')).find(
+        (b) => /^Cancel$/.test((b.textContent || '').trim()),
+      );
+      expect(cancel).toBeDefined();
+      act(() => {
+        cancel!.click();
+      });
+      // Still on the confirm step.
+      expect(container.textContent).toMatch(/Transfer to a new machine/);
+      expect(deactivateMock).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('the email body uses the plan from a gracePeriod status', async () => {
+    useLicenseStore.setState({
+      status: { kind: 'gracePeriod', plan: 'monthly', expiredAt: 1, daysIntoGrace: 1 },
+      machineFingerprint: 'ffff9999ffff9999ffff9999ffff9999ffff9999ffff9999ffff9999ffff9999',
+    });
+    const { container, cleanup } = mount();
+    try {
+      const yes = Array.from(container.querySelectorAll('button')).find(
+        (b) => /Yes, deactivate/.test(b.textContent || ''),
+      );
+      await act(async () => {
+        yes!.click();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toMatch(/monthly/);
+    } finally {
+      cleanup();
+    }
+  });
+});

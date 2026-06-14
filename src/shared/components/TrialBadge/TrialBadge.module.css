@@ -1,0 +1,65 @@
+/* TrialBadge — Phase 3 (subscription UX).
+ *
+ * A small pill in the title bar's right slot. Three
+ * tones, mapped to design tokens:
+ *   - `.red` — urgency (≤ 3 days trial, grace period).
+ *   - `.amber` — renewal reminder (≤ 7 days).
+ *   - `.neutral` — informational (> 7 days).
+ *
+ * The badge is a `<button>` (not a `<span>`) so the
+ * user can click it to navigate to the License
+ * activation screen. The button has minimal chrome
+ * (no border, no shadow) so it doesn't compete with
+ * the title-bar's other elements (the ⚙ settings
+ * button, the workspace path, etc.). */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: var(--font-weight-medium, 500);
+  line-height: 1.4;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.badge:focus-visible {
+  outline: 2px solid var(--color-accent, #5e6ad2);
+  outline-offset: 1px;
+}
+
+.neutral {
+  color: var(--color-text-muted);
+  background: var(--color-bg-elevated, #1a1a1a);
+  border-color: var(--color-border-subtle);
+}
+
+.neutral:hover {
+  color: var(--color-text);
+  background: var(--color-bg-sunken, #161616);
+}
+
+.amber {
+  color: var(--color-text);
+  background: var(--color-warning-bg, #3a2f1c);
+  border-color: var(--color-warning-strong, #f0c674);
+}
+
+.amber:hover {
+  background: var(--color-warning-bg-hover, #4a3a22);
+}
+
+.red {
+  color: var(--color-text);
+  background: var(--color-danger-bg, #3a1f1f);
+  border-color: var(--color-danger-strong, #e06c75);
+}
+
+.red:hover {
+  background: var(--color-danger-bg-hover, #4a2828);
+}

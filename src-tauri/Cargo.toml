@@ -196,6 +196,31 @@ serde_json = "1"
 # tempfile (Phase 5c — `lipi-tools.json` round-trip tests).
 tempfile = "3"
 
+# Phase 3: the `sign_license` CLI. A one-shot
+# Rust binary that the project lead runs from a
+# terminal to issue production license keys from
+# purchase emails. Takes `--plan <monthly|yearly>
+# --machine <64-char hex fingerprint> --out
+# <path/to/license.txt>`; reads the production
+# private key from `TAURI_PROD_LICENSE_KEY_HEX`
+# (32 hex chars); signs the payload with the
+# existing `licensing::sign_payload` function;
+# writes the `LIP1.…` key to `--out`.
+#
+# This bin is desktop-only (no mobile, no Tauri
+# runtime) — the CLI is a separate process from
+# the Tauri app. The licensing module is gated
+# `#[cfg(not(mobile))]` (see `lib.rs`), which
+# would normally hide it from this bin too. To
+# keep the licensing module accessible from the
+# bin, we add the bin to the same `not(mobile)`
+# gate at the source level (see
+# `src/bin/sign_license.rs` for the gate).
+[[bin]]
+name = "sign_license"
+path = "src/bin/sign_license.rs"
+required-features = []
+
 [features]
 # Default: just the shell, no plugins. Add features as we wire them.
 # `custom-protocol` is auto-injected by `cargo tauri dev` / `cargo tauri build`

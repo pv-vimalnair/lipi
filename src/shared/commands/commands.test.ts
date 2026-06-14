@@ -173,7 +173,7 @@ describe('command palette — filterCommands', () => {
     // headers without
     // missing one.
     for (const cmd of COMMANDS) {
-      expect(['Settings', 'Chat', 'AI', 'Tools', 'Voice', 'Help', 'Dev']).toContain(
+      expect(['Settings', 'Chat', 'AI', 'Tools', 'Voice', 'Help', 'Dev', 'License']).toContain(
         cmd.group,
       );
     }

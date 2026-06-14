@@ -72,12 +72,51 @@ pub use secrets::{delete_api_key as secrets_delete_rs, get_api_key as secrets_ge
 // compile the licensing module. See
 // `docs/plans/prod-p2-licensing-design.md` for the full
 // design and the threat model.
-mod licensing;
+// Phase 2: offline-license signing + verification (the
+// first step of the "Lipi to Paid Public Launch" roadmap —
+// see HANDOFF §6 "Next:" and §9.24). The licensing module
+// is desktop-only (the design doc explicitly defers mobile
+// licensing to a later phase — the Apple Keychain
+// "shared keychain group" + receipt validation is a non-
+// trivial follow-up).
+//
+// The 4 IPC commands (`license_get_status`,
+// `license_activate`, `license_deactivate`,
+// `license_get_machine_fingerprint`) are gated
+// `#[cfg(not(mobile))]` so the iOS / Android builds don't
+// compile the licensing module. See
+// `docs/plans/prod-p2-licensing-design.md` for the full
+// design and the threat model.
+//
+// The `pub` keyword on the module (vs. the `pub use` of
+// the individual items) is for Phase 3's `sign_license`
+// CLI binary (`src-tauri/src/bin/sign_license.rs`), which
+// needs to access `licensing::sign_payload` and
+// `licensing::LicensePayload` directly. The CLI is gated
+// `#[cfg(not(mobile))]` too, so the `pub mod` is also
+// gated — the mobile build doesn't see the licensing
+// module at all.
+#[cfg(not(mobile))]
+pub mod licensing;
 #[cfg(not(mobile))]
 pub use licensing::{
     license_activate, license_deactivate, license_get_machine_fingerprint, license_get_status,
     LicenseStatus,
 };
+
+// Phase 3: the IAP (in-app purchase) receipt
+// adapter stub. See `src-tauri/src/iap.rs` for the
+// full design and `docs/plans/prod-p3-subscription-ux-design.md`
+// for the rationale. Desktop-only (mobile IAP is a
+// separate phase). The v1 stub returns
+// `Invalid { reason: "iap-not-yet-implemented: ..." }`
+// for any input; Phase 4 fills in the real receipt
+// validation. The UI can be built and tested now
+// against the stub.
+#[cfg(not(mobile))]
+mod iap;
+#[cfg(not(mobile))]
+pub use iap::iap_redeem;
 
 mod ai;
 pub use ai::{get_configured_providers as ai_get_configured_providers_rs, list_providers as ai_list_providers_rs, provider_by_id, ProviderInfo};
@@ -1524,6 +1563,8 @@ pub fn run() {
             license_deactivate,
             #[cfg(not(mobile))]
             license_get_machine_fingerprint,
+            #[cfg(not(mobile))]
+            iap_redeem,
         ])
         .manage(Arc::new(TerminalState::new()))
         .menu(|app| menu::build_main_menu(app))

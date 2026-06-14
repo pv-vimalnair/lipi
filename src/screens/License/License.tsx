@@ -48,6 +48,8 @@ import {
 } from '@/shared/state/licenseStore';
 
 import { humanizeInvalidReason, statusLine } from './helpers';
+import { PricingCard } from './components/PricingCard/PricingCard';
+import { TransferFlow } from './components/TransferFlow/TransferFlow';
 
 import styles from './License.module.css';
 
@@ -121,6 +123,16 @@ export function License({ renderActions }: LicenseProps): JSX.Element {
         <h1 className={styles.title}>Activate Lipi</h1>
         <p className={styles.lede}>{statusLineForScreen(status)}</p>
 
+        {/* Phase 3: the in-app paywall. Renders the
+            three pricing tiers (trial, monthly,
+            yearly) above the activation form, so the
+            user sees the prices and the CTA before
+            they paste a key. The trial tier is
+            non-interactive (the trial is auto-
+            generated); the paid tiers open the
+            project website. */}
+        <PricingCard />
+
         <Stack gap={3} className={styles.form}>
           <label className={styles.label} htmlFor="lipi-license-key">
             License key
@@ -172,6 +184,15 @@ export function License({ renderActions }: LicenseProps): JSX.Element {
             {fingerprint ?? 'Loading fingerprint…'}
           </code>
         </section>
+
+        {/* Phase 3: the transfer-to-a-new-machine
+            wizard. A 3-step flow (confirm →
+            running → result) that deactivates the
+            user's license on this machine and
+            generates an email body to send to the
+            project lead for re-issuing on a new
+            machine. */}
+        <TransferFlow />
       </main>
     </div>
   );

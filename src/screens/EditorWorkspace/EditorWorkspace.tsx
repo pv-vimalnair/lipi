@@ -4,6 +4,7 @@ import { EditorPane } from './components/EditorPane';
 import { SidePanelPane } from './components/SidePanelPane';
 import { TitleBar } from './components/TitleBar';
 import { StatusBar } from './components/StatusBar';
+import { ExpiryBanner } from '@/shared/components/ExpiryBanner';
 import { MobileShell } from './components/MobileShell';
 import { ConfirmToolCallModal } from './components/ConfirmToolCallModal';
 import { WorkspaceTabs } from './components/WorkspaceTabs';
@@ -230,6 +231,15 @@ export function EditorWorkspace() {
         aria-hidden={isMobile}
       >
         <TitleBar subtitle={isDev ? 'dev · M6a' : undefined} />
+        {/* Phase 3: the trial-expiry banner. Renders
+            nothing for the default (>7 days) state;
+            shows a red banner with an "Activate now"
+            CTA when the trial is in its final 3 days
+            or the user is in the grace period. The
+            banner sits between the title bar and the
+            workspace tabs so it's visible regardless
+            of which tab is active. */}
+        <ExpiryBanner />
         <WorkspaceTabs />
         <FileTreePane />
         <EditorPane />

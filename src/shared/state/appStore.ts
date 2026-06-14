@@ -21,7 +21,7 @@
 
 import { create } from 'zustand';
 
-export type Screen = 'editor' | 'settings' | 'welcome';
+export type Screen = 'editor' | 'settings' | 'welcome' | 'license';
 
 interface AppState {
   activeScreen: Screen;

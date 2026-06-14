@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { EditorWorkspace } from '@/screens/EditorWorkspace';
 import { SettingsProvider } from '@/screens/SettingsProvider';
 import { Welcome } from '@/screens/Welcome';
+import { License } from '@/screens/License/License';
 import { useAppStore } from '@/shared/state/appStore';
 import { useAboutStore, aboutSelectors } from '@/shared/state/aboutStore';
 import { useFirstRunStore } from '@/shared/state/firstRunStore';
@@ -21,6 +22,7 @@ import {
   OnboardingTour,
   VoiceAnnouncer,
 } from '@/shared/components';
+import { LicenseGate } from '@/shared/components/LicenseGate';
 import {
   useCommandPaletteShortcut,
   useDeepLinkRouting,
@@ -96,6 +98,21 @@ function ScreenRoot() {
     // returns to 'welcome'
     // or 'editor'.
     return <SettingsProvider />;
+  }
+
+  if (activeScreen === 'license') {
+    // Phase 3: the License activation screen is
+    // an overlay reachable from the title-bar
+    // trial badge, the editor's expiry banner,
+    // the License gate's "Activate a license"
+    // CTA, and the LicenseCard's "Transfer"
+    // button. It overlays the editor AND the
+    // welcome screen, same isolation rule as
+    // Settings. The screen's own `renderActions`
+    // slot is omitted (the License screen is
+    // modal-ish; we don't want a "back to
+    // settings" link in the corner).
+    return <License />;
   }
 
   // While the workspace
@@ -211,6 +228,14 @@ function AppRoot() {
     <>
       <ScreenRoot />
       <CommandPaletteModal />
+      {/* Phase 3: the license gate. Mounted at the
+          AppRoot level so it overlays EVERY screen
+          (Settings, Welcome, License, editor) when
+          the status is `expired` or `invalid`. The
+          gate's nag mode (for `gracePeriod`) is also
+          rendered here so the nag floats above the
+          editor's content. */}
+      <LicenseGate />
       {/* M5: voice a11y announcer. Mounted at the
           AppRoot level so the live region is
           present on every screen (the user can

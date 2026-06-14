@@ -123,7 +123,7 @@ export interface Command {
    * the same group render
    * contiguously in the list
    * (with a small header). */
-  group: 'Settings' | 'Chat' | 'AI' | 'Tools' | 'Voice' | 'Help' | 'Dev';
+  group: 'Settings' | 'Chat' | 'AI' | 'Tools' | 'Voice' | 'Help' | 'Dev' | 'License';
   /** Extra search terms. The
    * title is always searched;
    * `keywords` adds synonyms
@@ -471,6 +471,23 @@ export const COMMANDS: readonly Command[] = [
     keywords: ['about', 'version', 'license', 'help', 'info'],
     run: () => {
       useAboutStore.getState().show();
+    },
+  },
+
+  // -- License -------------------------------------------------
+  // Phase 3: the License activation screen. Reachable from
+  // the Command Palette as well as the title-bar trial
+  // badge and the LicenseCard's "Transfer" button. Useful
+  // for the user who is mid-edit and wants to manage
+  // their license without going to Settings first.
+  {
+    id: 'license.openActivation',
+    title: 'Activate a license',
+    subtitle: 'Paste a license key, transfer to a new machine, or view pricing',
+    group: 'License',
+    keywords: ['license', 'activate', 'key', 'transfer', 'subscription', 'pricing'],
+    run: () => {
+      useAppStore.getState().setActiveScreen('license');
     },
   },
 

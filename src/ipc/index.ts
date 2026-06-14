@@ -24,3 +24,4 @@ export * from './nativeDictation';
 export * from './fsWatcher';
 export * from './workspaceSearch';
 export * from './licensing';
+export * from './iap';

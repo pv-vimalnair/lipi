@@ -48,6 +48,7 @@ import {
   useLicenseStore,
   licenseSelectors,
 } from '@/shared/state/licenseStore';
+import { useAppStore } from '@/shared/state/appStore';
 import type { LicenseStatusPayload } from '@/ipc/licensing';
 
 import styles from './LicenseCard.module.css';
@@ -57,6 +58,7 @@ export function LicenseCard(): JSX.Element {
   const fingerprint = useLicenseStore(licenseSelectors.machineFingerprint);
   const loadFingerprint = useLicenseStore((s) => s.loadMachineFingerprint);
   const deactivate = useLicenseStore((s) => s.deactivate);
+  const setActiveScreen = useAppStore((s) => s.setActiveScreen);
   const [showFingerprint, setShowFingerprint] = useState(false);
   const [confirmingDeactivate, setConfirmingDeactivate] = useState(false);
   const [deactivateError, setDeactivateError] = useState<string | null>(null);
@@ -75,6 +77,15 @@ export function LicenseCard(): JSX.Element {
       setDeactivateError(String(err));
     }
   }, [deactivate]);
+
+  // Phase 3: navigate to the License activation
+  // screen's transfer flow. The full transfer
+  // wizard lives on the License screen (not in
+  // the card) because the wizard needs a multi-
+  // step layout that doesn't fit a settings card.
+  const handleTransfer = useCallback((): void => {
+    setActiveScreen('license');
+  }, [setActiveScreen]);
 
   if (status === null) {
     return (
@@ -120,6 +131,19 @@ export function LicenseCard(): JSX.Element {
               Deactivate
             </Button>
           )
+        )}
+        {/* Phase 3: "Transfer to a new machine".
+            Navigates to the License activation
+            screen where the transfer wizard lives.
+            Available for any non-empty license
+            (trial, active, grace period) — there's
+            nothing to transfer for an unactivated
+            state (the user just hasn't activated
+            yet; "transfer" is a no-op there). */}
+        {(status.kind === 'active' || status.kind === 'trial' || status.kind === 'gracePeriod') && (
+          <Button variant="ghost" size="sm" onClick={handleTransfer}>
+            Transfer to a new machine
+          </Button>
         )}
       </Stack>
 

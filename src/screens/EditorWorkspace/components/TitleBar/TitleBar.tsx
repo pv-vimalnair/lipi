@@ -3,6 +3,7 @@ import styles from './TitleBar.module.css';
 import { fileTreeSelectors, useFileTreeStore } from '../../state/fileTreeStore';
 import { useAppStore } from '@/shared/state/appStore';
 import { IconButton } from '@/shared/components/IconButton';
+import { TrialBadge } from '@/shared/components/TrialBadge';
 
 export interface TitleBarProps {
   title?: string;
@@ -64,6 +65,13 @@ export function TitleBar({
       </div>
       <div className={styles.center} />
       <div className={styles.right}>
+        {/* Phase 3: the trial-status badge. Renders
+            nothing for the default state (>7 days,
+            active, etc.) and a colored pill for the
+            "needs attention" states. The badge is a
+            <button> that navigates to the License
+            activation screen on click. */}
+        <TrialBadge />
         {showSettingsButton && (
           <span className={styles.dragBlocker}>
             <IconButton

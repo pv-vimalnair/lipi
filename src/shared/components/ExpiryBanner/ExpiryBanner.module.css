@@ -1,0 +1,79 @@
+/* ExpiryBanner — Phase 3 (subscription UX).
+ *
+ * A red horizontal banner that sits between the title
+ * bar and the file tree. The visual style matches the
+ * danger-left-border pattern used elsewhere in the
+ * codebase (PrivacyDataCard, LicenseCard). The banner
+ * has two actions: "Activate now →" (primary, navigates
+ * to the License activation screen) and "Got it"
+ * (ghost, dismisses for the session). */
+
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--color-bg-elevated, #1a1a1a);
+  border-bottom: 1px solid var(--color-border-subtle);
+  border-left: 4px solid var(--color-danger-strong, #e06c75);
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text);
+  flex-wrap: wrap;
+}
+
+.message {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.cta {
+  font: inherit;
+  font-size: var(--font-size-sm, 12px);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--color-accent, #5e6ad2);
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.cta:hover {
+  background: var(--color-bg-sunken, #161616);
+  text-decoration: underline;
+}
+
+.cta:focus-visible {
+  outline: 2px solid var(--color-accent, #5e6ad2);
+  outline-offset: 1px;
+}
+
+.dismiss {
+  font: inherit;
+  font-size: var(--font-size-sm, 12px);
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.dismiss:hover {
+  color: var(--color-text);
+  background: var(--color-bg-sunken, #161616);
+}
+
+.dismiss:focus-visible {
+  outline: 2px solid var(--color-accent, #5e6ad2);
+  outline-offset: 1px;
+}

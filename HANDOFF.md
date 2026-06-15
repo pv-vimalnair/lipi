@@ -287,6 +287,12 @@ on mobile — cannot be retrofitted in Week 8.
 | 85 | Phase 9.6's completion provider **falls through to empty suggestions on null / error**, letting Monaco's built-in take over for that keystroke. | Matches the Phase 9 pattern for the other providers (hover, definition, refs). The real server's `textDocument/completion` can time out or return null; returning `{ suggestions: [] }` is the safe default. | 2026-06-15 |
 | 86 | Phase 9.6 maps LSP `insertTextFormat === 2` to Monaco `insertTextRules = 4` (the `InsertAsSnippet` bit). | LSP `InsertTextFormat.Snippet` means the `insertText` contains placeholders (`$1`, `$0`, `${1:default}`). Monaco's `CompletionItemInsertTextRule.InsertAsSnippet` is the equivalent. The mapping is a single `if` — without it, snippet completions from the real server would be inserted as literal `$1` text. | 2026-06-15 |
 | 87 | Phase 9.6's `fromLspCompletionItemKind` is a hand-rolled 23-case `switch`, not a bit-shift cast. | LSP and Monaco's `CompletionItemKind` enums are misaligned: LSP `Text=1`, Monaco `Text=0`; LSP `TypeParameter=21`, Monaco `TypeParameter=23`; etc. A naive cast (`as monaco.languages.CompletionItemKind`) would misclassify almost every item (a `Method` would render as a `Text` completion, etc.). The 23-case `switch` is a one-time mapping with no runtime cost. | 2026-06-15 |
+| 88 | Phase 9.5's auto-respawn uses an **exponential backoff ladder** (1s, 2s, 4s, 8s, 16s, 30s, 30s, 30s ...) capped at 5 consecutive crashes, not a fixed-interval retry. | A fixed interval (e.g. 5s) would either spam a still-broken server or take too long to recover from a transient blip. The exponential ladder gives a quick first retry (1s) for a hiccup but backs off to 30s for a truly broken workspace, and the 5-crash cap means a corrupted `.d.ts` file can't burn CPU forever. The cap is 5 (not 3, not 10) — enough to ride out a multi-second system load spike without giving up too early. | 2026-06-15 |
+| 89 | Phase 9.5 captures the last **8 KiB of stderr** (~100 lines), not the full stderr stream. | The full stream can be megabytes for a chatty server (`typescript-language-server` logs every parsed file). 8 KiB is enough to capture the panic message + last few stack frames — what a user actually needs for a bug report — and bounds the memory cost per workspace to ~one screenshot. The buffer is per-handle (not global) so concurrent crashes don't overwrite each other. | 2026-06-15 |
+| 90 | Phase 9.5 fires the `lsp://crashed` event from a **dedicated `spawn_wait_task`** that owns `child.wait().await`, not from the reader loop. | The reader loop terminates on stdout EOF (the child may close stdout and keep running). Distinguishing "no data right now" from "process is dead" requires `wait()`, which is a separate task. A single `if (await wait()) { emit }` would race with the reader's `setTimeout` and miss crashes that happen between reads. The dedicated task is ~10 lines and has no perf cost (it just sits on `wait()`). | 2026-06-15 |
+| 91 | Phase 9.5's `LspClient.shutdown()` **fire-and-forgets the `shutdown` / `exit` JSON-RPC messages** and calls `lspStdioClose` BEFORE clearing the reader timer. | The old code awaited the `shutdown` response AFTER clearing the reader timer — the response was never read and the promise hung. The fix is to send the messages, call `lspStdioClose`, then clear the timer. The JSON-RPC `shutdown` request becomes a "best effort" signal (the server might not respond if it's already dying); `lspStdioClose` does the actual cleanup (kills the child). | 2026-06-15 |
+| 92 | Phase 9.5's bridge uses a **`useRef` to dedupe** re-runs of the provider-registration effect on the initial mount, in addition to the `clientHandleId` dep. | The `clientHandleId` dep correctly re-runs the effect on a respawn (new handleId), but it ALSO re-runs on the *initial* mount: the first run sees `null` (subscribed value before the store has a client), the second run sees the new handleId (after `getOrCreate` finishes). The ref tracks the last handleId we registered against, so the second run bails. ~5 lines, no API change. | 2026-06-15 |
+| 93 | Phase 9.5 exposes a **test-only `__resetLspClientStoreForTests` action** on the store (not a top-level function) for the test suite to call in `beforeEach`. | The store holds closure-scoped state (respawn timers, `handleToWorkspace` map, `crashUnlisten`) that `setState` can't reach. The cleanest isolation point is a method on the store itself, which has access to the closure. The `__` prefix marks it as not-part-of-the-public-API (TypeScript convention for "internal to the module"); the test file imports the store's `useLspClientStore` and calls `getState().__resetLspClientStoreForTests()`. | 2026-06-15 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -5498,8 +5504,169 @@ in the Decisions log)**
   who care can fall back to the
   built-in via the toggle.
 
+### 9.35 Phase 9.5 — SHIPPED (LSP crash recovery, see CHANGELOG "Added (Phase 9.5 — LSP crash recovery)")
+
+> **Status:** Phase 9.5 is **shipped**. The
+> `typescript-language-server` integration now
+> **survives crashes** without the user noticing
+> (except for a momentary stutter). When the language
+> server dies (segfault, OOM, crash on a malformed
+> file), the store flips the per-workspace status
+> to `error`, pops up a "Crashed" badge in the
+> `LanguageServerCard` settings UI with the last
+> ~100 lines of stderr, auto-respawns the client on
+> an exponential backoff ladder (1s, 2s, 4s, 8s,
+> 16s, 30s, 30s, 30s ...) and gives up after 5
+> consecutive crashes so a broken workspace doesn't
+> burn CPU forever, and tears down the Monaco
+> providers and re-registers them on the new client
+> so features (go-to-def, hover, rename, ...) just
+> keep working.
+
+**Rust side**
+
+- `src-tauri/src/stdio.rs` — added a per-handle
+  `stderr_buffer` (8 KiB ring buffer, drained by a
+  `spawn_stderr_reader` task that owns the
+  `ChildStderr` and pushes bytes into the buffer
+  one at a time, evicting the oldest when the cap
+  is hit) and a `spawn_wait_task` that captures
+  the child's exit status via `child.wait().await`
+  and emits a new `lsp://crashed` Tauri event with
+  the payload `{ handleId, exitStatus, stderrTail }`.
+  Also added the `lsp_stdio_read_stderr` Tauri
+  command (drains the ring buffer on demand) and
+  `push_stderr` as a testable helper (10 new unit
+  tests for the buffer's eviction policy, multibyte
+  UTF-8 boundary handling, and the empty-buffer
+  no-op case).
+
+**TypeScript side**
+
+- `src/ipc/lsp.ts` — added `lspStdioReadStderr`
+  (typed wrapper for the new command) and
+  `onLspCrashed(handler)` (typed wrapper for the
+  new event).
+- `src/screens/EditorWorkspace/state/lspClientStore.ts`:
+  - subscribes to `onLspCrashed` exactly once per
+    store instance (idempotent via a
+    `crashUnlisten` closure ref);
+  - tracks the `handleId → workspaceRoot` reverse
+    map so crash events route to the right
+    workspace (handleIds are recycled by the mock
+    counter, but the real Rust side uses
+    UUID-like strings);
+  - adds a `respawn(workspaceRoot)` action for
+    the settings card's "Restart server" button —
+    disposes the dead client, starts a fresh one,
+    and resets the consecutive-crash counter (a
+    manual restart is a "I know what I'm doing"
+    signal);
+  - implements the auto-respawn ladder in
+    `scheduleRespawn` (1s, 2s, 4s, 8s, 16s, 30s,
+    30s, 30s ...) with a 5-crash cap. Respects
+    the kill switch — if the user turns the real
+    server off mid-backoff, the pending respawn is
+    cancelled;
+  - exposes a test-only
+    `__resetLspClientStoreForTests` action that
+    clears the closure-scoped state (timers,
+    handle map, crash listener, start promises) —
+    necessary for vitest's beforeEach/afterEach
+    to keep tests isolated across the file.
+
+**Latent `LspClient.shutdown()` bug fixed**
+
+The old code cleared the reader timer
+(`clearTimeout(this._readerTimer)`) BEFORE awaiting
+the JSON-RPC `shutdown` response, which meant the
+response was never read and
+`await _request('shutdown', ...)` hung indefinitely.
+The fix is to fire-and-forget the `shutdown` /
+`exit` messages (`void this._request(...)`) and
+call `lspStdioClose(handleId)` BEFORE clearing the
+reader timer and setting `_closed = true`. This
+bug was exposed by the new test that
+`await useLspClientStore.getState().dispose(...)`
+in `afterEach` (the previous test code used
+`void client.shutdown()`, which masked the hang).
+
+**Bridge re-registration on respawn**
+
+- `useMonacoLspBridge.tsx` adds `clientHandleId`
+  to the `useEffect` dep list so a respawn (which
+  produces a new handleId) tears down the old
+  Monaco providers and re-registers on the new
+  client. A `useRef` tracks the last handleId the
+  effect registered against to avoid
+  double-registering on the *initial* mount (the
+  dep transitions from `null` to `'handle_xxx'`
+  after the first `getOrCreate`, which would
+  otherwise re-fire the effect and double-register
+  providers).
+
+**UI**
+
+- `LanguageServerCard.tsx` shows a pulsing "Crashed"
+  badge (respects `prefers-reduced-motion`) when
+  the workspace has crash info, displays the crash
+  timestamp ("3s ago"), exit code, and
+  consecutive-crash count, shows either the
+  auto-respawn countdown ("Auto-restarting in
+  2s...") or "Auto-restart disabled" if the kill
+  switch is off, renders a scrollable stderr-tail
+  panel with a "Copy diagnostics" button for bug
+  reports, and the existing "Restart server"
+  button now calls `respawn` (forces an immediate
+  restart and resets the backoff ladder).
+
+**Tests added (7)**
+
+`src/screens/EditorWorkspace/state/lspClientStore.test.ts`:
+
+1. `lsp://crashed` event flips status to `error`
+   and populates `crashByWorkspace`.
+2. Crash event schedules an auto-respawn with
+   exponential backoff (1s for the first crash).
+3. Auto-respawn cancels when the kill switch is
+   OFF (the user turned the real server off
+   mid-backoff).
+4. `dispose` cancels a pending auto-respawn
+   (no zombie respawn after workspace close).
+5. `respawn` action creates a fresh client and
+   resets crash info.
+6. Crash event for an unknown `handleId` is
+   ignored (stale event from a disposed
+   workspace).
+7. Consecutive crashes escalate the backoff
+   (1s → 2s → 4s → 8s) and stop auto-respawning
+   after the 5-crash cap.
+
+**Test results**
+
+1062/1062 vitest pass (+7 from Phase 9.6's 1055);
+367/367 cargo pass (+32, including 10 new stdio
+tests for the stderr buffer and crash event);
+`tsc --noEmit` clean; `cargo build` clean with 0
+warnings.
+
+**Known limitations / future work**
+
+- No crash metrics / telemetry. The `LspCrashInfo`
+  is shown to the user in the settings card but
+  not shipped anywhere. A future
+  `lsp_crash_metric` Tauri command could push to
+  a counter for dashboards.
+- Auto-respawn countdown UI is per-workspace
+  (each workspace has its own badge). A
+  global "one of your language servers crashed"
+  toast would be a nice follow-up.
+- The 5-crash cap is hard-coded. A
+  setting (e.g. `lsp_crash_respawn_cap`) in the
+  settings card would let power users tune it.
+
 ---
 
-*End of handoff. Lipi is at **Phase 9.6 complete** (real `typescript-language-server` integration now also drives `textDocument/completion`, opt-in via a new sub-toggle in the `LanguageServerCard` settings UI — 5 new Tauri commands + `LspClient` class + per-workspace Zustand store + Monaco bridge hook + 9 LSP provider adapters (the new one is `registerCompletionProvider` with LSP-`CompletionItem`→Monaco-`CompletionItem` conversion + LSP `CompletionItemKind`→Monaco `CompletionItemKind` enum mapping) + Settings card with two independent toggles (master kill switch + completion sub-toggle), "Ready / Starting / Error / Stopped" status badge, install hint, and "Restart server" button — no `monaco-languageclient` dependency, ~600 lines of TypeScript, full control over the per-method response conversion). The next session should resume from Phase 9.7 (LSP crash diagnostics) and the remaining Phase 9.1-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.35.*
+*End of handoff. Lipi is at **Phase 9.5 complete** (LSP crash recovery — Rust stderr ring buffer + `lsp://crashed` event + 7 new TS tests for the auto-respawn ladder + `LanguageServerCard` "Crashed" badge with auto-respawn countdown + `__resetLspClientStoreForTests` test helper for store isolation + a latent `LspClient.shutdown()` hang fix that surfaced only when the new tests started awaiting `dispose()`). The next session should resume from Phase 9.7 (LSP crash analytics + telemetry) and the remaining Phase 9.1-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.36.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

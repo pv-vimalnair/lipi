@@ -172,8 +172,10 @@ pub use command::{run_command as run_command_rs, RunCommandArgs, RunCommandError
 mod stdio;
 pub use stdio::{
     check_available as stdio_check_available_rs, run_stdio as stdio_run_stdio_rs,
-    stdio_close as stdio_close_rs, stdio_read as stdio_read_rs, stdio_write as stdio_write_rs,
-    CheckAvailableResult, RunStdioArgs, RunStdioResult, StdioError, StdioState,
+    stdio_close as stdio_close_rs, stdio_read as stdio_read_rs,
+    stdio_read_stderr as stdio_read_stderr_rs, stdio_write as stdio_write_rs,
+    CheckAvailableResult, LspCrashedPayload, LSP_CRASHED_EVENT, RunStdioArgs,
+    RunStdioResult, StdioError, StdioState,
 };
 
 mod http;
@@ -508,9 +510,10 @@ async fn run_command(args: RunCommandArgs) -> Result<RunCommandResult, RunComman
 #[tauri::command]
 async fn lsp_run_stdio(
     state: tauri::State<'_, Arc<StdioState>>,
+    app: tauri::AppHandle,
     args: RunStdioArgs,
 ) -> Result<RunStdioResult, StdioError> {
-    stdio_run_stdio_rs(state, args).await
+    stdio_run_stdio_rs(state, app, args).await
 }
 
 #[tauri::command]
@@ -520,6 +523,15 @@ async fn lsp_stdio_read(
     max_bytes: usize,
 ) -> Result<Vec<u8>, StdioError> {
     stdio_read_rs(state, handle_id, max_bytes).await
+}
+
+#[tauri::command]
+async fn lsp_stdio_read_stderr(
+    state: tauri::State<'_, Arc<StdioState>>,
+    handle_id: String,
+    max_bytes: usize,
+) -> Result<Vec<u8>, StdioError> {
+    stdio_read_stderr_rs(state, handle_id, max_bytes).await
 }
 
 #[tauri::command]
@@ -1658,6 +1670,7 @@ pub fn run() {
             http_request,
             lsp_run_stdio,
             lsp_stdio_read,
+            lsp_stdio_read_stderr,
             lsp_stdio_write,
             lsp_stdio_close,
             lsp_check_available,

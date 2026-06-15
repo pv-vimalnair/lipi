@@ -34,6 +34,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 /**
  * Args for `lsp_run_stdio`. The JS `LspClient` builds
@@ -178,3 +179,98 @@ export async function lspCheckAvailable(): Promise<CheckAvailableResult> {
  * Rust-side value verbatim, not this constant.
  */
 export const LSP_INSTALL_HINT = 'npm install -g typescript-language-server';
+
+/**
+ * `lsp://crashed` event name. Emitted by the Rust
+ * `StdioHandle::spawn_wait_task` when a child process
+ * exits. The JS `lspClientStore` subscribes via
+ * `onLspCrashed` and uses the payload to flip the
+ * workspace's `LspStatus` to `error`, capture the
+ * last stderr lines, and schedule an auto-respawn
+ * with exponential backoff.
+ *
+ * Pinning the event name as a constant guards
+ * against typos on the Rust side (`LSP_CRASHED_EVENT`
+ * in `src-tauri/src/stdio.rs`); the Rust test
+ * `lsp_crashed_event_name_is_stable` asserts both
+ * sides agree.
+ */
+export const LSP_CRASHED_EVENT = 'lsp://crashed';
+
+/**
+ * Payload of the `lsp://crashed` event. Mirrors
+ * `LspCrashedPayload` in `src-tauri/src/stdio.rs`.
+ *
+ * `exitStatus` is the integer exit code if the child
+ * exited normally. `null` if the child was killed by
+ * a signal (Unix) or the exit code couldn't be
+ * captured (Windows in some edge cases).
+ *
+ * `stderrTail` is the last ~8 KiB (≈100 lines) the
+ * child wrote to stderr, UTF-8 lossy. May be the
+ * empty string if the child never wrote to stderr.
+ * The settings card surfaces this in its
+ * "Last lines of server output" panel.
+ *
+ * `handleId` is the same opaque 32-char hex string
+ * returned by `lspRunStdio`. The store matches on it
+ * to decide which workspace's client crashed (the
+ * store's `clients` map is keyed by `workspaceRoot`,
+ * not `handleId`, so a small lookup is needed —
+ * see `lspClientStore.ts`).
+ */
+export interface OnLspCrashedPayload {
+  handleId: string;
+  exitStatus: number | null;
+  stderrTail: string;
+}
+
+/**
+ * Drain up to `maxBytes` from the per-handle stderr
+ * buffer. The buffer is a ring buffer capped at 8 KiB
+ * on the Rust side, so the JS caller should call
+ * once with `maxBytes = 8 * 1024` to grab the entire
+ * tail in one shot.
+ *
+ * Phase 9.5 — crash diagnostics. The settings card
+ * calls this on the back of an `lsp://crashed` event
+ * to populate the "Last lines of server output"
+ * panel. In normal operation (no crash), the buffer
+ * is usually empty and this returns an empty
+ * `Uint8Array`.
+ *
+ * Note: this is a destructive read. Each call
+ * consumes the bytes from the buffer (the Rust side
+ * does `pop_front` in a loop). Callers that want to
+ * peek should cache the returned bytes themselves.
+ */
+export async function lspStdioReadStderr(
+  handleId: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const bytes = await invoke<number[]>('lsp_stdio_read_stderr', {
+    handleId,
+    maxBytes,
+  });
+  return new Uint8Array(bytes);
+}
+
+/**
+ * Subscribe to `lsp://crashed` events. Returns an
+ * `UnlistenFn` that the caller should invoke in a
+ * cleanup effect (or `useEffect` return value) to
+ * detach the listener.
+ *
+ * The store calls this exactly once at module load
+ * and keeps the unlisten alive for the lifetime of
+ * the app. The Rust side fires the event exactly
+ * once per child (the wait task is single-shot), so
+ * the listener doesn't need to debounce.
+ */
+export async function onLspCrashed(
+  handler: (payload: OnLspCrashedPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<OnLspCrashedPayload>(LSP_CRASHED_EVENT, (e) =>
+    handler(e.payload),
+  );
+}

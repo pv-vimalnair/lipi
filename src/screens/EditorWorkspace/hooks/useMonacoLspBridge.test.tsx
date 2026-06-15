@@ -124,6 +124,13 @@ vi.mock('@/ipc/lsp', () => {
       installHint: 'npm i -g typescript-language-server',
       version: '4.3.3',
     })),
+    // Phase 9.5 — the store's
+    // `ensureCrashListener` calls
+    // `onLspCrashed` to subscribe to
+    // `lsp://crashed` events. Tests
+    // don't simulate real crashes, so
+    // we return a no-op unlisten.
+    onLspCrashed: vi.fn(async () => () => undefined),
   };
 });
 
@@ -256,9 +263,27 @@ beforeEach(() => {
   };
   fakeContentListeners = [];
   fakeModelListeners = [];
+  // Phase 9.5 — the store's
+  // `crashUnlisten` /
+  // `handleToWorkspace` /
+  // `respawnTimers` / `startPromises` are
+  // closure-scoped and persist across
+  // tests. Without the reset, the
+  // `ensureCrashListener` from a prior
+  // test short-circuits and any
+  // `lsp://crashed` events this test
+  // fires go to a detached handler. We
+  // also clear any live clients left
+  // over from a previous test (the
+  // `afterEach` `void client.shutdown()`
+  // is fire-and-forget, so the client
+  // may still be alive when the next
+  // test starts).
+  useLspClientStore.getState().__resetLspClientStoreForTests();
   useLspClientStore.setState({
     clients: new Map(),
     statusByWorkspace: new Map(),
+    crashByWorkspace: new Map(),
   });
   useWorkspaceStore.setState({
     workspaces: [],
@@ -277,24 +302,27 @@ afterEach(async () => {
   // (Phase 9.6: independent of the master
   // kill switch, defaults to `false`).
   setUseRealServerForCompletion(false);
-  // Tear down any live LspClient so the
-  // previous test's reader loop doesn't
-  // consume `__lspQ` entries meant for the
-  // next test's new client. The mock IPC
-  // doesn't respond to `shutdown`, so we
-  // use `void` (fire-and-forget) on the
-  // dispose and clear the maps
-  // synchronously.
-  const liveClients = Array.from(
-    useLspClientStore.getState().clients.values(),
+  // Phase 9.5 — tear down any live
+  // LspClient so the previous test's
+  // reader loop doesn't consume
+  // `__lspQ` entries meant for the next
+  // test's new client. The store's
+  // `dispose` is async (it awaits
+  // `client.shutdown()`); without
+  // awaiting it, the new test starts
+  // before the old client is gone, and
+  // both readers race for the shared
+  // `__lspQ`.
+  const liveWorkspaces = Array.from(
+    useLspClientStore.getState().clients.keys(),
   );
-  for (const client of liveClients) {
-    void client.shutdown();
+  for (const workspaceRoot of liveWorkspaces) {
+    await useLspClientStore.getState().dispose(workspaceRoot);
   }
-  useLspClientStore.setState({
-    clients: new Map(),
-    statusByWorkspace: new Map(),
-  });
+  // Reset the closure-scoped state too
+  // (handle map, crash listener, respawn
+  // timers).
+  useLspClientStore.getState().__resetLspClientStoreForTests();
 });
 
 describe('useMonacoLspBridge', () => {

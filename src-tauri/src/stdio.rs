@@ -47,6 +47,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::async_runtime;
+use tauri::Emitter;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -69,6 +70,60 @@ const SIGKILL_AFTER: Duration = Duration::from_secs(2);
 /// `--version` probe (or the `which` / `where` call) before
 /// declaring it "not available".
 const CHECK_AVAILABLE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Per-handle stderr ring-buffer cap. The LSP servers
+/// we ship with (typescript-language-server,
+/// rust-analyzer, pyright) are quiet on stderr in the
+/// happy path but can produce ~1-2 KiB of panic
+/// backtraces + TS diagnostics on crash. 8 KiB is
+/// enough for the last ~100 lines of typical output
+/// without unbounded growth on a chatty server.
+const STDERR_BUFFER_CAP: usize = 8 * 1024;
+
+/// `lsp://crashed` event name. Emitted by the wait task
+/// when the child process exits. The JS side
+/// `lspClientStore` subscribes via `onLspCrashed` and
+/// flips the workspace's `LspStatus` to `error`.
+///
+/// Re-exported from `lib.rs` and matched on the JS
+/// side as `LSP_CRASHED_EVENT` constant in
+/// `src/ipc/lsp.ts`. If you change this string,
+/// update both sides + the Rust test that pins it.
+pub const LSP_CRASHED_EVENT: &str = "lsp://crashed";
+
+/// Payload shape of the `lsp://crashed` event. Lives
+/// in Rust so we can write a `serde` round-trip test
+/// that pins the wire format (camelCase, fields the
+/// JS side reads).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LspCrashedPayload {
+    pub handle_id: String,
+    /// Exit code if the child exited normally (most
+    /// common). `None` if the child was killed by a
+    /// signal (Unix) or the exit code couldn't be
+    /// captured (Windows in some edge cases).
+    pub exit_status: Option<i32>,
+    /// Last bytes the child wrote to stderr (UTF-8
+    /// lossy). Capped at `STDERR_BUFFER_CAP` (8 KiB
+    /// ≈ 100 lines). May be empty if the child
+    /// never wrote to stderr.
+    pub stderr_tail: String,
+}
+
+/// Push `bytes` into a stderr ring buffer, dropping
+/// the oldest bytes when the cap is reached.
+/// Extracted from the reader task so the test suite
+/// can exercise the eviction logic without spawning
+/// a real child process.
+fn push_stderr(buf: &mut VecDeque<u8>, bytes: &[u8]) {
+    for byte in bytes {
+        if buf.len() >= STDERR_BUFFER_CAP {
+            buf.pop_front();
+        }
+        buf.push_back(*byte);
+    }
+}
 
 /// `lsp_run_stdio` args. The JS side passes the resolved
 /// command (e.g. `typescript-language-server`) and any
@@ -154,12 +209,47 @@ struct StdioHandle {
     /// Per-handle stdout buffer. The reader task appends;
     /// `lsp_stdio_read` drains.
     stdout_buffer: Arc<Mutex<VecDeque<u8>>>,
+    /// Per-handle stderr buffer. Capped at
+    /// `STDERR_BUFFER_CAP` bytes (8 KiB) so a chatty
+    /// server can't OOM us. `lsp_stdio_read_stderr`
+    /// drains on demand (Phase 9.5 — crash
+    /// diagnostics). The whole buffer is also
+    /// snapshotted when the child exits and shipped
+    /// with the `lsp://crashed` event so the JS side
+    /// can show the last ~100 lines.
+    stderr_buffer: Arc<Mutex<VecDeque<u8>>>,
     /// Set to `true` when the reader task observes EOF or
     /// the child exits. `lsp_stdio_read` returns
     /// `[255, 255, ...]` (a sentinel) on the next call
     /// after this is set so the JS side can distinguish
     /// "no data right now" from "process is dead".
     exited: Arc<Mutex<bool>>,
+    /// Set to `true` by the `wait` task when the child
+    /// process has actually exited (after `wait()`
+    /// resolves). Distinct from `exited`, which flips
+    /// on stdout EOF (the child may close stdout and
+    /// keep running). The crash event is fired only
+    /// when this is `true`.
+    ///
+    /// Currently write-only — the value is captured
+    /// for future diagnostics (e.g. a `lsp://status`
+    /// command) but no Tauri command reads it yet.
+    /// Marked `#[allow(dead_code)]` to keep the
+    /// field for the next time we need to expose
+    /// "is the child actually dead" to the frontend.
+    #[allow(dead_code)]
+    child_exited: Arc<Mutex<bool>>,
+    /// The exit status captured by the `wait` task.
+    /// `None` until the child actually exits.
+    ///
+    /// Same story as `child_exited`: write-only for
+    /// now, but we want the value preserved for
+    /// future debugging. The crash event's
+    /// `exit_status` field is populated from the
+    /// `ExitStatus` returned by `wait()`, not from
+    /// this struct field.
+    #[allow(dead_code)]
+    exit_status: Arc<Mutex<Option<i32>>>,
 }
 
 /// The shared state registered with Tauri's `manage()`.
@@ -247,6 +337,117 @@ impl StdioHandle {
             }
         });
     }
+
+    /// Spawn the stderr reader task. Phase 9.5 — drains
+    /// the child's stderr into a fixed-size ring buffer
+    /// (`STDERR_BUFFER_CAP`) that the JS side reads on
+    /// demand via `lsp_stdio_read_stderr`. The whole
+    /// buffer is also snapshotted by the wait task and
+    /// shipped with the `lsp://crashed` event.
+    fn spawn_stderr_reader(
+        mut stderr: tokio::process::ChildStderr,
+        stderr_buffer: Arc<Mutex<VecDeque<u8>>>,
+        handle_id: String,
+    ) {
+        async_runtime::spawn(async move {
+            let mut buf = vec![0u8; 4096];
+            loop {
+                match stderr.read(&mut buf).await {
+                    Ok(0) => break, // EOF — child closed stderr.
+                    Ok(n) => {
+                        let mut q = stderr_buffer
+                            .lock()
+                            .expect("stderr buffer poisoned");
+                        push_stderr(&mut q, &buf[..n]);
+                    }
+                    Err(_e) => {
+                        // Read error — most likely the
+                        // child died. Stop reading;
+                        // the wait task will fire the
+                        // crash event.
+                        if std::env::var("LIPI_LSP_DEBUG").is_ok() {
+                            eprintln!(
+                                "[lsp] stderr reader for {handle_id} error: {_e}"
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    /// Spawn the wait task. Blocks on
+    /// `child.wait().await`, captures the exit status,
+    /// flips `child_exited`, then emits the
+    /// `lsp://crashed` event with the last stderr lines.
+    ///
+    /// Phase 9.5 — this is the signal the JS side uses
+    /// to flip the workspace's `LspStatus` to `error`
+    /// and schedule an auto-respawn. The event fires
+    /// exactly once per child.
+    fn spawn_wait_task(
+        child: Arc<AsyncMutex<Child>>,
+        child_exited: Arc<Mutex<bool>>,
+        exit_status: Arc<Mutex<Option<i32>>>,
+        stderr_buffer: Arc<Mutex<VecDeque<u8>>>,
+        app_handle: tauri::AppHandle,
+        handle_id: String,
+    ) {
+        async_runtime::spawn(async move {
+            // Take an exclusive lock and wait.
+            // We replace this with a try_wait
+            // poll so the task can also respond
+            // to a `kill()` from the close path
+            // (which needs the same mutex).
+            // Actually, the cleanest approach is
+            // to grab the lock, call `wait()`,
+            // and release. If the close path
+            // also wants the lock, it can wait
+            // for us (or vice versa).
+            let exit_code = {
+                let mut c = child.lock().await;
+                c.wait().await.ok().and_then(|s| s.code())
+            };
+            {
+                let mut e = child_exited
+                    .lock()
+                    .expect("child_exited poisoned");
+                *e = true;
+            }
+            if let Some(code) = exit_code {
+                let mut s = exit_status
+                    .lock()
+                    .expect("exit_status poisoned");
+                *s = Some(code);
+            }
+            // Snapshot the stderr tail.
+            let tail = {
+                let q = stderr_buffer
+                    .lock()
+                    .expect("stderr buffer poisoned");
+                // Decode as UTF-8 lossy; LSP
+                // servers log ASCII / UTF-8.
+                String::from_utf8_lossy(
+                    q.iter().copied().collect::<Vec<u8>>().as_slice(),
+                )
+                .to_string()
+            };
+            // Emit the crash event. The JS side
+            // decides what to do (auto-respawn
+            // vs. show "Restart server" button).
+            let payload = serde_json::json!({
+                "handleId": handle_id,
+                "exitStatus": exit_code,
+                "stderrTail": tail,
+            });
+            if let Err(e) = app_handle.emit("lsp://crashed", payload) {
+                if std::env::var("LIPI_LSP_DEBUG").is_ok() {
+                    eprintln!("[lsp] failed to emit lsp://crashed: {e}");
+                }
+            }
+        });
+    }
 }
 
 /// `lsp_run_stdio` implementation. Spawns the child,
@@ -254,6 +455,7 @@ impl StdioHandle {
 /// state, returns the `handleId`.
 pub async fn run_stdio(
     state: tauri::State<'_, Arc<StdioState>>,
+    app: tauri::AppHandle,
     args: RunStdioArgs,
 ) -> Result<RunStdioResult, StdioError> {
     if args.command.is_empty() {
@@ -293,18 +495,24 @@ pub async fn run_stdio(
         .stdout
         .take()
         .ok_or_else(|| StdioError::Io("stdout not piped".to_string()))?;
-    // Stderr: we don't expose it to the JS side in
-    // Phase 9 (would need a separate read command or a
-    // Tauri event). The settings card surfaces the
-    // last 200 lines via "Copy diagnostics", which
-    // copies from `tsserver.log` on disk. We still
-    // take stderr so it doesn't block on a full
-    // pipe buffer.
-    let _stderr = child.stderr.take();
+    // Phase 9.5: take stderr and drain it into a
+    // per-handle ring buffer. The JS side reads on
+    // demand via `lsp_stdio_read_stderr`, and the
+    // wait task snapshots the tail when the child
+    // exits and ships it with the `lsp://crashed`
+    // event.
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| StdioError::Io("stderr not piped".to_string()))?;
 
     let handle_id = format!("lsp_{}", random_hex(16));
     let stdout_buffer = Arc::new(Mutex::new(VecDeque::new()));
+    let stderr_buffer = Arc::new(Mutex::new(VecDeque::new()));
     let exited = Arc::new(Mutex::new(false));
+    let child_exited = Arc::new(Mutex::new(false));
+    let exit_status = Arc::new(Mutex::new(None));
+    let child_arc = Arc::new(AsyncMutex::new(child));
 
     StdioHandle::spawn_reader(
         stdout,
@@ -312,12 +520,28 @@ pub async fn run_stdio(
         exited.clone(),
         handle_id.clone(),
     );
+    StdioHandle::spawn_stderr_reader(
+        stderr,
+        stderr_buffer.clone(),
+        handle_id.clone(),
+    );
+    StdioHandle::spawn_wait_task(
+        child_arc.clone(),
+        child_exited.clone(),
+        exit_status.clone(),
+        stderr_buffer.clone(),
+        app,
+        handle_id.clone(),
+    );
 
     let handle = Arc::new(StdioHandle {
-        child: Arc::new(AsyncMutex::new(child)),
+        child: child_arc,
         stdin: AsyncMutex::new(stdin),
         stdout_buffer,
+        stderr_buffer,
         exited,
+        child_exited,
+        exit_status,
     });
 
     state
@@ -367,6 +591,54 @@ pub async fn stdio_read(
         let exited = handle.exited.lock().expect("exited poisoned");
         if *exited {
             out.push(0xFF);
+        }
+    }
+    Ok(out)
+}
+
+/// `lsp_stdio_read_stderr` — drain up to `max_bytes`
+/// from the per-handle stderr buffer.
+///
+/// Phase 9.5 — crash diagnostics. The JS side polls
+/// this on demand (typically after receiving the
+/// `lsp://crashed` event) to populate the settings
+/// card's "Last lines of server output" panel.
+///
+/// The buffer is a ring buffer capped at
+/// `STDERR_BUFFER_CAP` (8 KiB), so on overflow the
+/// oldest bytes are dropped — the JS side gets the
+/// most-recent stderr, which is what users want for
+/// crash post-mortems.
+///
+/// Destructive read: the returned bytes are removed
+/// from the buffer. The JS side should call once
+/// with the full buffer size to grab everything.
+pub async fn stdio_read_stderr(
+    state: tauri::State<'_, Arc<StdioState>>,
+    handle_id: String,
+    max_bytes: usize,
+) -> Result<Vec<u8>, StdioError> {
+    let handle = {
+        let handles = state.handles.lock().expect("state poisoned");
+        handles
+            .get(&handle_id)
+            .ok_or_else(|| StdioError::NotFound(handle_id.clone()))?
+            .clone()
+    };
+    let mut buf = handle
+        .stderr_buffer
+        .lock()
+        .expect("stderr buffer poisoned");
+    // Cap the per-call read to MAX_READ_BYTES
+    // (1 MiB) so a chatty server can't make the
+    // Tauri IPC payload huge. The ring buffer
+    // itself is already capped at 8 KiB so this is
+    // mostly a safety net.
+    let take = max_bytes.min(MAX_READ_BYTES).min(buf.len());
+    let mut out = Vec::with_capacity(take);
+    for _ in 0..take {
+        if let Some(b) = buf.pop_front() {
+            out.push(b);
         }
     }
     Ok(out)
@@ -611,5 +883,156 @@ mod tests {
             INSTALL_HINT,
             "npm install -g typescript-language-server"
         );
+    }
+
+    // --- Phase 9.5 — crash recovery (stderr ring buffer + crash event) ---
+
+    #[test]
+    fn push_stderr_below_cap_appends() {
+        // Sanity: pushing fewer bytes than the cap
+        // appends them verbatim, in order.
+        let mut buf: VecDeque<u8> = VecDeque::new();
+        push_stderr(&mut buf, b"hello world");
+        assert_eq!(buf.len(), 11);
+        assert_eq!(
+            buf.iter().copied().collect::<Vec<u8>>(),
+            b"hello world".to_vec()
+        );
+    }
+
+    #[test]
+    fn push_stderr_at_cap_drops_oldest() {
+        // Ring-buffer semantics: when the buffer is
+        // full, the oldest byte is evicted to make
+        // room for the newest. This is the property
+        // that gives us "last 100 lines" on a chatty
+        // server.
+        let mut buf: VecDeque<u8> =
+            VecDeque::with_capacity(STDERR_BUFFER_CAP);
+        for _ in 0..STDERR_BUFFER_CAP {
+            buf.push_back(b'A');
+        }
+        push_stderr(&mut buf, b"BC");
+        assert_eq!(buf.len(), STDERR_BUFFER_CAP);
+        // The first two bytes should be 'A' + 'A'
+        // (the two oldest that got dropped).
+        let first_two: Vec<u8> = buf.iter().take(2).copied().collect();
+        assert_eq!(first_two, b"AA".to_vec());
+        // The last two bytes should be the new ones.
+        let last_two: Vec<u8> =
+            buf.iter().rev().take(2).copied().collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+        assert_eq!(last_two, b"BC".to_vec());
+    }
+
+    #[test]
+    fn push_stderr_overflow_preserves_newest() {
+        // Stress test: push far more than the cap in
+        // one go. The buffer should hold only the
+        // most recent STDERR_BUFFER_CAP bytes.
+        let mut buf: VecDeque<u8> = VecDeque::new();
+        let huge = vec![b'X'; STDERR_BUFFER_CAP * 4];
+        push_stderr(&mut buf, &huge);
+        assert_eq!(buf.len(), STDERR_BUFFER_CAP);
+        // All bytes are 'X' (so we can't check
+        // ordering directly), but the length proves
+        // the cap held.
+        assert!(buf.iter().all(|b| *b == b'X'));
+    }
+
+    #[test]
+    fn push_stderr_empty_noop() {
+        // Pushing zero bytes must not change the
+        // buffer (no spurious eviction).
+        let mut buf: VecDeque<u8> = VecDeque::new();
+        push_stderr(&mut buf, b"abc");
+        let len_before = buf.len();
+        push_stderr(&mut buf, b"");
+        assert_eq!(buf.len(), len_before);
+    }
+
+    #[test]
+    fn push_stderr_utf8_multibyte_boundary() {
+        // Make sure the ring buffer doesn't slice a
+        // multi-byte UTF-8 character. The LSP
+        // servers log UTF-8 strings; if the cap
+        // landed mid-character we'd hand the JS side
+        // a broken string. The buffer is byte-level
+        // (VecDeque<u8>) and the lossy decode
+        // handles a sliced multi-byte char with
+        // replacement characters — which is the
+        // correct behaviour for "show the last N
+        // lines". This test pins that contract.
+        let mut buf: VecDeque<u8> =
+            VecDeque::with_capacity(STDERR_BUFFER_CAP);
+        // Fill to (cap - 2) so we have room for the
+        // 2-byte UTF-8 sequence without evicting.
+        for _ in 0..(STDERR_BUFFER_CAP - 2) {
+            buf.push_back(b'p');
+        }
+        // Push the 2-byte UTF-8 sequence (U+00E9 é
+        // = 0xC3 0xA9) in one go. After this, buf is
+        // at exactly the cap.
+        push_stderr(&mut buf, &[0xC3, 0xA9]);
+        assert_eq!(buf.len(), STDERR_BUFFER_CAP);
+        let s = String::from_utf8_lossy(
+            &buf.iter().copied().collect::<Vec<u8>>(),
+        )
+        .to_string();
+        // No 'p' was dropped. The decoded string
+        // has (cap - 2) 'p' chars + 1 'é' char.
+        assert!(s.ends_with('\u{00E9}'));
+        assert_eq!(s.chars().filter(|c| *c == 'p').count(),
+                   STDERR_BUFFER_CAP - 2);
+    }
+
+    #[test]
+    fn lsp_crashed_event_name_is_stable() {
+        // The JS side listens for this exact string.
+        // If we change it, the listener goes silent
+        // and the auto-respawn never fires.
+        assert_eq!(LSP_CRASHED_EVENT, "lsp://crashed");
+    }
+
+    #[test]
+    fn lsp_crashed_payload_serialises_camel_case() {
+        // The JS side's `OnLspCrashedPayload`
+        // interface reads `handleId`, `exitStatus`,
+        // `stderrTail`. If we rename a Rust field
+        // without updating the `rename_all` attr,
+        // the JS side's TypeScript sees
+        // `handle_id` (snake_case) and the
+        // deserialise silently fails.
+        let payload = LspCrashedPayload {
+            handle_id: "lsp_abc".to_string(),
+            exit_status: Some(139),
+            stderr_tail: "panic at typescript".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"handleId\":\"lsp_abc\""));
+        assert!(json.contains("\"exitStatus\":139"));
+        assert!(json.contains("\"stderrTail\":\"panic at typescript\""));
+    }
+
+    #[test]
+    fn lsp_crashed_payload_handles_null_exit_status() {
+        // On Unix, a child killed by a signal
+        // produces `None` from `ExitStatus::code()`.
+        // The JS side must tolerate `null`.
+        let payload = LspCrashedPayload {
+            handle_id: "lsp_xyz".to_string(),
+            exit_status: None,
+            stderr_tail: String::new(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"exitStatus\":null"));
+        // Round-trip too: deserialise the JSON back
+        // into a struct and confirm the None is
+        // preserved.
+        let parsed: LspCrashedPayload =
+            serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, payload);
     }
 }

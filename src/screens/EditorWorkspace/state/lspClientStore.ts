@@ -47,8 +47,11 @@ import {
   lspStdioRead,
   lspStdioWrite,
   lspStdioClose,
+  onLspCrashed,
+  type OnLspCrashedPayload,
   type RunStdioResult,
 } from '@/ipc/lsp';
+import { getUseRealServer } from '@/screens/EditorWorkspace/state/lspKillSwitch';
 
 /**
  * The lifecycle status of an LSP server for a given
@@ -61,9 +64,63 @@ import {
  *   - `ready`: the server has responded to `initialize`
  *     and the `initialized` notification has been sent
  *   - `error`: the child died, the spawn failed, or the
- *     `initialize` request timed out
+ *     `initialize` request timed out. When the cause is
+ *     a crash, `crashByWorkspace` has the details and
+ *     an auto-respawn is scheduled.
  */
 export type LspStatus = 'stopped' | 'starting' | 'ready' | 'error';
+
+/**
+ * Phase 9.5 — auto-respawn backoff schedule. When a
+ * child crashes the store schedules a respawn on
+ * this exponential ladder, capped at
+ * `MAX_RESPAWN_BACKOFF_MS` (30s). After 5
+ * consecutive crashes at the cap, the store gives
+ * up and stops respawning (the user has to click
+ * "Restart server" manually — useful when the
+ * server is, e.g., a misconfigured
+ * `typescript-language-server` that crashes on
+ * startup).
+ */
+const RESPAWN_BACKOFF_STEPS_MS: readonly number[] = [
+  1_000,   // 1s  — first crash
+  2_000,   // 2s
+  4_000,   // 4s
+  8_000,   // 8s
+  16_000,  // 16s
+  30_000,  // 30s — cap
+];
+/** How many consecutive crashes at the cap before
+ *  the store stops auto-respawning. */
+const MAX_CONSECUTIVE_CRASHES = 5;
+
+/** Per-workspace crash details. Set when an
+ *  `lsp://crashed` event fires and the store
+ *  flips the workspace's status to `error`.
+ *  Cleared when a new client successfully
+ *  transitions to `ready` (so the settings card
+ *  doesn't keep showing a stale crash). */
+export interface LspCrashInfo {
+  /** Last 100 lines of server stderr (UTF-8 lossy). */
+  stderrTail: string;
+  /** Exit code if available, `null` if the child
+   *  was killed by a signal. */
+  exitStatus: number | null;
+  /** Wall-clock time the crash was observed
+   *  (ms since epoch). The settings card uses
+   *  this to render a "Crashed 12s ago" line. */
+  crashedAt: number;
+  /** How many consecutive crashes this workspace
+   *  has seen. Reset to 0 when a respawn
+   *  succeeds. Backs off auto-respawn when it
+   *  hits `MAX_CONSECUTIVE_CRASHES`. */
+  consecutiveCrashes: number;
+  /** How many milliseconds until the next
+   *  auto-respawn, or `null` if no respawn is
+   *  scheduled. The card uses this for its
+   *  "Auto-restarting in Ns..." message. */
+  respawnInMs: number | null;
+}
 
 /**
  * A JSON-RPC 2.0 message — request, response, or
@@ -376,14 +433,26 @@ export class LspClient {
     });
 
     this.initializeResult = initResult;
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log('[lsp] start: initialize response received, id:', initResult);
+    }
 
     // Send `initialized` notification (no response
     // expected). The `initialized` notification is
     // the LSP spec's "the client is now ready for
     // normal traffic" signal.
     await this._notify('initialized', {});
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log('[lsp] start: initialized sent');
+    }
 
     this._setStatus('ready');
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log('[lsp] start: status set to ready');
+    }
     return initResult;
   }
 
@@ -492,12 +561,36 @@ export class LspClient {
    */
   async shutdown(): Promise<void> {
     if (this._closed) return;
-    this._closed = true;
+    // Send `shutdown` + `exit` (best-effort —
+    // the child may already be dead).
+    // We DON'T await these — the response
+    // delivery depends on the reader loop,
+    // which we're about to tear down. The
+    // await would hang the caller (the
+    // store's `dispose`, the bridge's
+    // `useEffect` cleanup) forever in the
+    // case where the child has already
+    // exited (no response coming) or
+    // where the reader is paused. Fire
+    // the JSON-RPC messages and move on.
+    if (this.handleId) {
+      void this._request('shutdown', null).catch(() => {
+        // ignore
+      });
+      void this._notify('exit', null).catch(() => {
+        // ignore
+      });
+      void lspStdioClose(this.handleId).catch(() => {
+        // ignore
+      });
+    }
+    // Tear down the reader + reject any
+    // in-flight requests + flip the
+    // closed flag.
     if (this._readerTimer !== null) {
       clearTimeout(this._readerTimer);
       this._readerTimer = null;
     }
-    // Reject all in-flight requests.
     for (const [, pending] of this._pending) {
       pending.reject(new Error('LspClient closed'));
     }
@@ -505,25 +598,7 @@ export class LspClient {
     // Wake up any read() waiters with `null`.
     for (const waiter of this._messageWaiters) waiter(null);
     this._messageWaiters = [];
-    // Send `shutdown` + `exit` (best-effort —
-    // the child may already be dead).
-    if (this.handleId) {
-      try {
-        await this._request('shutdown', null);
-      } catch {
-        // ignore
-      }
-      try {
-        await this._notify('exit', null);
-      } catch {
-        // ignore
-      }
-      try {
-        await lspStdioClose(this.handleId);
-      } catch {
-        // ignore
-      }
-    }
+    this._closed = true;
     this._setStatus('stopped');
   }
 
@@ -621,8 +696,13 @@ export class LspClient {
         }
         continue;
       }
-      // eslint-disable-next-line no-console
-      console.log('[lsp] dispatched message id:', (message as { id?: unknown }).id);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.log(
+          '[lsp] dispatched message id:',
+          (message as { id?: unknown }).id,
+        );
+      }
       this._dispatchMessage(message);
     }
   }
@@ -711,6 +791,14 @@ interface LspClientStoreState {
   statusByWorkspace: Map<string, LspStatus>;
 
   /**
+   * Per-workspace crash details. Set when an
+   * `lsp://crashed` event fires; cleared when a
+   * new client successfully transitions to
+   * `ready` (or when the workspace is disposed).
+   */
+  crashByWorkspace: Map<string, LspCrashInfo>;
+
+  /**
    * Get the existing LspClient for a workspace,
    * or create a new one (and start it
    * asynchronously). The first call to
@@ -723,9 +811,39 @@ interface LspClientStoreState {
   /**
    * Dispose the LspClient for a workspace.
    * Sends `shutdown` + `exit`, closes the
-   * handle, removes the client from the map.
+   * handle, removes the client from the map,
+   * and cancels any pending auto-respawn.
    */
   dispose(workspaceRoot: string): Promise<void>;
+
+  /**
+   * Force an immediate respawn of a workspace's
+   * client. Cancels any pending auto-respawn,
+   * disposes the current client, and starts a
+   * fresh one. The settings card's "Restart
+   * server" button calls this.
+   *
+   * The new client's `consecutiveCrashes`
+   * counter is reset to 0 (a manual restart
+   * is a "I know what I'm doing" signal — the
+   * auto-respawn ladder is no longer
+   * relevant).
+   */
+  respawn(workspaceRoot: string): Promise<void>;
+
+  /**
+   * Test-only helper. Tears down the
+   * closure-scoped state that
+   * `setState` can't reach (pending
+   * respawn timers, the handleId →
+   * workspace map, the global crash
+   * listener, the per-workspace
+   * in-flight start-promise cache).
+   * Exposed under the `__` prefix so
+   * it's clear it's not part of the
+   * public surface.
+   */
+  __resetLspClientStoreForTests(): void;
 }
 
 export const useLspClientStore = create<LspClientStoreState>((set, get) => {
@@ -736,13 +854,156 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
   // spawn.
   const startPromises: Map<string, Promise<LspClient>> = new Map();
 
+  // Reverse map: handleId → workspaceRoot. The
+  // crash listener uses this to look up the
+  // affected workspace when a `lsp://crashed`
+  // event fires.
+  const handleToWorkspace: Map<string, string> = new Map();
+
+  // Pending auto-respawn timers, one per
+  // workspace. Phase 9.5 — the store schedules
+  // a respawn on a backoff ladder when a child
+  // crashes; cancelling the timer (on dispose
+  // or manual restart) prevents the respawn
+  // from firing.
+  const respawnTimers: Map<string, ReturnType<typeof setTimeout>> =
+    new Map();
+
+  // Module-level unlisten for the
+  // `lsp://crashed` event listener. Stored at
+  // store-construction time so it lives for
+  // the lifetime of the app — only the test
+  // suite resets it (via the
+  // `__resetLspClientStoreForTests` helper
+  // below).
+  let crashUnlisten: (() => void) | null = null;
+
+  function clearRespawnTimer(workspaceRoot: string): void {
+    const t = respawnTimers.get(workspaceRoot);
+    if (t !== undefined) {
+      clearTimeout(t);
+      respawnTimers.delete(workspaceRoot);
+    }
+  }
+
+  function scheduleRespawn(
+    workspaceRoot: string,
+    consecutiveCrashes: number,
+  ): void {
+    clearRespawnTimer(workspaceRoot);
+    // Past the cap, give up auto-respawning.
+    if (consecutiveCrashes >= MAX_CONSECUTIVE_CRASHES) {
+      set((state) => {
+        const next = new Map(state.crashByWorkspace);
+        const prev = next.get(workspaceRoot);
+        if (prev) {
+          next.set(workspaceRoot, { ...prev, respawnInMs: null });
+        }
+        return { crashByWorkspace: next };
+      });
+      return;
+    }
+    const stepIndex = Math.min(
+      consecutiveCrashes - 1,
+      RESPAWN_BACKOFF_STEPS_MS.length - 1,
+    );
+    const delay = RESPAWN_BACKOFF_STEPS_MS[stepIndex]!;
+    set((state) => {
+      const next = new Map(state.crashByWorkspace);
+      const prev = next.get(workspaceRoot);
+      if (prev) {
+        next.set(workspaceRoot, { ...prev, respawnInMs: delay });
+      }
+      return { crashByWorkspace: next };
+    });
+    const timer = setTimeout(() => {
+      respawnTimers.delete(workspaceRoot);
+      // Bail if the kill switch flipped off in
+      // the interim (we don't want to respawn
+      // a server the user just disabled).
+      if (!getUseRealServer()) {
+        return;
+      }
+      // The user may have closed the workspace
+      // in the meantime; the map will be empty
+      // for that workspace, so `getOrCreate`
+      // will start a fresh one. We don't need
+      // to check explicitly.
+      void get()
+        .respawn(workspaceRoot)
+        .catch(() => {
+          // `respawn` already routes failures
+          // through the store's error path; this
+          // catch just prevents an unhandled
+          // promise rejection.
+        });
+    }, delay);
+    respawnTimers.set(workspaceRoot, timer);
+  }
+
+  function onChildCrashed(payload: OnLspCrashedPayload): void {
+    const workspaceRoot = handleToWorkspace.get(payload.handleId);
+    if (!workspaceRoot) {
+      // Stale crash event for a handle we've
+      // already disposed. Ignore.
+      return;
+    }
+    // Honour the kill switch: if the user
+    // turned the LSP off, don't auto-respawn.
+    const useReal = getUseRealServer();
+    const prevCrash = get().crashByWorkspace.get(workspaceRoot);
+    const consecutiveCrashes = (prevCrash?.consecutiveCrashes ?? 0) + 1;
+    const info: LspCrashInfo = {
+      stderrTail: payload.stderrTail,
+      exitStatus: payload.exitStatus,
+      crashedAt: Date.now(),
+      consecutiveCrashes,
+      respawnInMs: useReal ? null : null,
+    };
+    set((state) => {
+      const nextStatus = new Map(state.statusByWorkspace);
+      nextStatus.set(workspaceRoot, 'error');
+      const nextCrash = new Map(state.crashByWorkspace);
+      nextCrash.set(workspaceRoot, info);
+      return {
+        statusByWorkspace: nextStatus,
+        crashByWorkspace: nextCrash,
+      };
+    });
+    if (useReal) {
+      scheduleRespawn(workspaceRoot, consecutiveCrashes);
+    }
+  }
+
+  // Subscribe exactly once. Wrapped in a
+  // function so the test suite can swap the
+  // subscriber for a mock.
+  function ensureCrashListener(): void {
+    if (crashUnlisten) return;
+    void onLspCrashed(onChildCrashed).then((un) => {
+      crashUnlisten = un;
+    });
+  }
+
   return {
     clients: new Map(),
     statusByWorkspace: new Map(),
+    crashByWorkspace: new Map(),
 
     async getOrCreate(workspaceRoot) {
+      ensureCrashListener();
       const existing = get().clients.get(workspaceRoot);
       if (existing) return existing;
+      // If a respawn is already scheduled for
+      // this workspace, the user is opening a
+      // tab that the store has already decided
+      // to revive. Clear the timer so the
+      // scheduled respawn doesn't double-fire
+      // (it would race with the new client
+      // we're about to start). The new
+      // `getOrCreate` replaces the scheduled
+      // restart with an immediate one.
+      clearRespawnTimer(workspaceRoot);
       const inflight = startPromises.get(workspaceRoot);
       if (inflight) {
         // A `getOrCreate` for this workspace is
@@ -775,6 +1036,16 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
         set((state) => {
           const next = new Map(state.statusByWorkspace);
           next.set(workspaceRoot, s);
+          // On `ready`, clear any crash info —
+          // the user is back online.
+          if (s === 'ready') {
+            const nextCrash = new Map(state.crashByWorkspace);
+            nextCrash.delete(workspaceRoot);
+            return {
+              statusByWorkspace: next,
+              crashByWorkspace: nextCrash,
+            };
+          }
           return { statusByWorkspace: next };
         });
       });
@@ -783,15 +1054,31 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
         nextClients.set(workspaceRoot, client);
         const nextStatus = new Map(state.statusByWorkspace);
         nextStatus.set(workspaceRoot, client.status);
+        // Successful start → drop any crash
+        // info for this workspace.
+        const nextCrash = new Map(state.crashByWorkspace);
+        nextCrash.delete(workspaceRoot);
         return {
           clients: nextClients,
           statusByWorkspace: nextStatus,
+          crashByWorkspace: nextCrash,
         };
       });
 
       const promise = (async () => {
         try {
           await client.start();
+          // Register the new handle in the
+          // reverse map AFTER the spawn
+          // completes — the crash listener
+          // looks up by handleId, so a crash
+          // event for a still-spawning child
+          // (none in practice — `start()`
+          // awaits the spawn IPC) would
+          // otherwise be lost.
+          if (client.handleId) {
+            handleToWorkspace.set(client.handleId, workspaceRoot);
+          }
           return client;
         } catch (e) {
           // Spawn or initialize failed —
@@ -819,6 +1106,14 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
 
     async dispose(workspaceRoot) {
       const client = get().clients.get(workspaceRoot);
+      // Cancel any pending respawn for this
+      // workspace — disposing means the user
+      // doesn't want this server anymore.
+      clearRespawnTimer(workspaceRoot);
+      // Clear the handleId → workspace map.
+      if (client?.handleId) {
+        handleToWorkspace.delete(client.handleId);
+      }
       if (!client) return;
       // Remove from the map FIRST so a concurrent
       // `getOrCreate` doesn't return this (now
@@ -828,9 +1123,12 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
         nextClients.delete(workspaceRoot);
         const nextStatus = new Map(state.statusByWorkspace);
         nextStatus.set(workspaceRoot, 'stopped');
+        const nextCrash = new Map(state.crashByWorkspace);
+        nextCrash.delete(workspaceRoot);
         return {
           clients: nextClients,
           statusByWorkspace: nextStatus,
+          crashByWorkspace: nextCrash,
         };
       });
       // Clear the `startPromises` entry so a
@@ -847,6 +1145,58 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       // close) — so we clear it here too.
       startPromises.delete(workspaceRoot);
       await client.shutdown();
+    },
+
+    async respawn(workspaceRoot) {
+      // Manual restart = "I know what I'm
+      // doing". Drop the auto-respawn ladder.
+      clearRespawnTimer(workspaceRoot);
+      set((state) => {
+        const nextCrash = new Map(state.crashByWorkspace);
+        nextCrash.delete(workspaceRoot);
+        return { crashByWorkspace: nextCrash };
+      });
+      // Dispose the current client (no-op if
+      // it already crashed and the dispose
+      // was a no-op).
+      await get().dispose(workspaceRoot);
+      // Start a fresh one. If it crashes
+      // again, the crash listener will reset
+      // consecutiveCrashes to 1 and start the
+      // backoff ladder from the top — which is
+      // the right behaviour (we don't want
+      // a single bad restart to burn through
+      // all 5 attempts).
+      await get().getOrCreate(workspaceRoot);
+    },
+    /**
+     * Test-only helper. Tears down the
+     * closure-scoped state that
+     * `setState` can't reach:
+     *   - pending respawn timers,
+     *   - the handleId → workspace map,
+     *   - the global crash listener
+     *     registration,
+     *   - the per-workspace in-flight
+     *     start-promise cache.
+     *
+     * The public surface hides it under
+     * the `__` prefix; the test suite
+     * imports it directly from the
+     * module so the call site stays
+     * outside React.
+     */
+    __resetLspClientStoreForTests(): void {
+      for (const t of respawnTimers.values()) {
+        clearTimeout(t);
+      }
+      respawnTimers.clear();
+      handleToWorkspace.clear();
+      startPromises.clear();
+      if (crashUnlisten) {
+        crashUnlisten();
+        crashUnlisten = null;
+      }
     },
   };
 });

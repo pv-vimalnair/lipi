@@ -100,6 +100,106 @@ faster for the hot path).
 (+23 from Phase 9's 1032); 335/335 cargo pass;
 `tsc --noEmit` clean.
 
+### Added (Phase 9.5 — LSP crash recovery)
+
+The `typescript-language-server` integration now
+**survives crashes** without the user noticing
+(except for a momentary stutter). When the language
+server dies (segfault, OOM, crash on a malformed
+file), the store:
+
+1. flips the per-workspace status to `error`,
+2. pops up a "Crashed" badge in the
+   `LanguageServerCard` settings UI with the last
+   ~100 lines of stderr,
+3. **auto-respawns** the client on an exponential
+   backoff ladder (1s, 2s, 4s, 8s, 16s, 30s, 30s,
+   30s, ...) and gives up after 5 consecutive
+   crashes so a broken workspace doesn't burn CPU
+   forever,
+4. tears down the Monaco providers and re-registers
+   them on the new client so features (go-to-def,
+   hover, rename, ...) just keep working.
+
+- **`src-tauri/src/stdio.rs`** — added a per-handle
+  `stderr_buffer` (8 KiB ring buffer, drained into
+  by a `spawn_stderr_reader` task) and a
+  `spawn_wait_task` that captures the child's exit
+  status and emits a new `lsp://crashed` Tauri
+  event with `{ handleId, exitStatus, stderrTail }`.
+  Also added the `lsp_stdio_read_stderr` Tauri
+  command (drains the ring buffer on demand) and a
+  test for the ring buffer's eviction policy.
+- **`src/ipc/lsp.ts`** — added
+  `lspStdioReadStderr` (typed wrapper for the new
+  command) and `onLspCrashed(handler)` (typed
+  wrapper for the new event).
+- **`src/screens/EditorWorkspace/state/lspClientStore.ts`**:
+  - subscribes to `onLspCrashed` exactly once per
+    store instance (idempotent via a
+    `crashUnlisten` closure ref);
+  - tracks the `handleId → workspaceRoot` reverse
+    map so crash events route to the right
+    workspace (handleIds are recycled by the mock
+    counter, but the real Rust side uses UUID-like
+    strings);
+  - adds a `respawn(workspaceRoot)` action for
+    the settings card's "Restart server" button —
+    disposes the dead client, starts a fresh one,
+    and resets the consecutive-crash counter (a
+    manual restart is a "I know what I'm doing"
+    signal);
+  - implements the auto-respawn ladder in
+    `scheduleRespawn` (1s, 2s, 4s, 8s, 16s, 30s,
+    30s, 30s ...) with a 5-crash cap. Respects the
+    kill switch — if the user turns the real server
+    off mid-backoff, the pending respawn is
+    cancelled;
+  - also **fixes a latent `LspClient.shutdown()`
+    bug**: the old code cleared the reader timer
+    BEFORE awaiting the `shutdown` JSON-RPC
+    response, which meant the response was never
+    read and `await _request('shutdown', ...)`
+    hung indefinitely. The fix is to
+    fire-and-forget the `shutdown` / `exit`
+    messages (`void this._request(...)`) and call
+    `lspStdioClose` BEFORE clearing the timer.
+  - exposes a test-only `__resetLspClientStoreForTests`
+    action that clears the closure-scoped state
+    (timers, handle map, crash listener, start
+    promises) — necessary for vitest's
+    beforeEach/afterEach to keep tests isolated.
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`**:
+  adds `clientHandleId` to the `useEffect` dep
+  list so a respawn (which produces a new
+  handleId) tears down the old Monaco providers
+  and re-registers on the new client. A
+  `useRef` tracks the last handleId the effect
+  registered against to avoid double-registering
+  on the *initial* mount (the dep transitions
+  from `null` to `'handle_xxx'` after the first
+  `getOrCreate`).
+- **`src/screens/SettingsProvider/components/LanguageServerCard.tsx`**:
+  - shows a pulsing "Crashed" badge (respects
+    `prefers-reduced-motion`) when the workspace
+    has crash info;
+  - displays the crash timestamp ("3s ago"),
+    exit code, and consecutive-crash count;
+  - shows either the auto-respawn countdown
+    ("Auto-restarting in 2s...") or "Auto-restart
+    disabled" if the kill switch is off;
+  - renders a scrollable stderr-tail panel with
+    a "Copy diagnostics" button for bug reports;
+  - the existing "Restart server" button now
+    calls `respawn` (forces an immediate restart
+    and resets the backoff ladder).
+
+**Test results:** 1062/1062 vitest pass
+(+7 from Phase 9.6's 1055); 367/367 cargo pass
+(+32, including 10 new stdio tests for the
+stderr buffer and crash event); `tsc --noEmit`
+clean.
+
 ### Changed (Phase 8 — Inline AI edits (Cmd+K))
 
 The Phase 5b-5 modal-based `Cmd+K` flow is **gone**.

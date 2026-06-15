@@ -87,10 +87,35 @@ export function useMonacoLspBridge({
   const workspaceRoot = useWorkspaceStore((s) =>
     s.activeId ? s.workspaces.find((w) => w.id === s.activeId)?.path ?? null : null,
   );
+  // Phase 9.5 — also subscribe to the
+  // workspace's LspClient handleId. When the
+  // store respawns a crashed client, the
+  // handleId changes; we re-run the effect to
+  // tear down the old providers and re-register
+  // fresh ones on the new client. Without this
+  // dep, the bridge would keep calling
+  // `client.request()` on the dead client.
+  const clientHandleId = useLspClientStore((s) => {
+    if (!workspaceRoot) return null;
+    const c = s.clients.get(workspaceRoot);
+    return c?.handleId ?? null;
+  });
   // Stable ref to the per-instance disposables.
   // The hook tears them down on cleanup (tab
   // switch, workspace close).
   const disposablesRef = useRef<monaco.IDisposable[] | null>(null);
+  // Phase 9.5 — track the handleId of the
+  // last `LspClient` we registered providers
+  // against. When the store respawns a
+  // crashed client, the handleId changes and
+  // the `useEffect` re-runs. We use a ref
+  // (not a dep) so the *initial* mount
+  // doesn't double-register providers — the
+  // first effect run registers against
+  // handleId #1; the second effect run
+  // (triggered by the dep change) sees the
+  // same handleId in the ref and bails.
+  const lastRegisteredHandleIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!editor || !workspaceRoot) return;
@@ -136,6 +161,25 @@ export function useMonacoLspBridge({
       }
       if (cancelled) return;
 
+      // Phase 9.5 — `clientHandleId` is a
+      // dep of this effect, so it re-runs
+      // when the store creates a fresh
+      // client (e.g. on respawn). On the
+      // *initial* mount it ALSO re-runs:
+      // first with `clientHandleId = null`
+      // (subscribed value before the store
+      // has a client), then again with the
+      // new handleId (after `getOrCreate`
+      // finishes). To avoid double-registering
+      // providers in that back-to-back case,
+      // check the ref: if the last
+      // registration was against the same
+      // handleId, bail.
+      if (lastRegisteredHandleIdRef.current === client.handleId) {
+        return;
+      }
+      lastRegisteredHandleIdRef.current = client.handleId;
+
       const model = typedEditor.getModel();
       if (!model) return;
 
@@ -172,7 +216,7 @@ export function useMonacoLspBridge({
         // Notification failed — usually means
         // the child died between the
         // `initialize` and the first
-        // `didOpen`. The next didChange /
+        // didOpen. The next didChange /
         // didClose attempts will also fail,
         // and Monaco will fall through to
         // its built-in. Don't tear down the
@@ -261,5 +305,11 @@ export function useMonacoLspBridge({
         disposablesRef.current = null;
       }
     };
-  }, [editor, workspaceRoot]);
+    // `clientHandleId` is the Phase 9.5 dep —
+    // when the store respawns a crashed
+    // client, the handleId changes and the
+    // effect re-runs, tearing down the
+    // dead-client providers and re-registering
+    // on the new client.
+  }, [editor, workspaceRoot, clientHandleId]);
 }

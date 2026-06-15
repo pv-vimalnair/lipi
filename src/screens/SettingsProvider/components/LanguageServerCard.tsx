@@ -80,6 +80,41 @@ const STATUS_BLURB: Record<LspStatus, string> = {
     'The server failed to start. The most common cause is `typescript-language-server` not being on PATH — see the install hint below.',
 };
 
+/**
+ * Format a crash time as "Xs ago". Used in the
+ * "Last lines of server output" panel to give
+ * the user a quick sense of when the crash
+ * happened.
+ *
+ * The `nowSec` argument is passed in (rather
+ * than calling `Date.now()` inside) so the
+ * caller can re-render at a fixed cadence via
+ * a `useEffect` interval — keeps the label in
+ * lockstep with the auto-respawn countdown.
+ */
+function formatAgo(ms: number, nowSec: number): string {
+  const seconds = Math.max(0, nowSec - Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
+
+/**
+ * Take the last 100 lines of a stderr tail.
+ * Used to keep the diagnostics panel compact
+ * even if the child wrote a 1000-line panic
+ * backtrace (the buffer is capped at 8 KiB on
+ * the Rust side, but a chatty server can
+ * produce up to ~1000 lines of 8-byte avg).
+ */
+function lastNLines(s: string, n: number): string {
+  const lines = s.split('\n');
+  if (lines.length <= n) return s;
+  return lines.slice(-n).join('\n');
+}
+
 export function LanguageServerCard() {
   // The active workspace (same source of truth
   // as the rest of the editor).
@@ -97,6 +132,39 @@ export function LanguageServerCard() {
         ? s.statusByWorkspace.get(activeWorkspaceRoot) ?? 'stopped'
         : 'stopped'),
   );
+  // Phase 9.5 — per-workspace crash info.
+  // `null` when the workspace is healthy
+  // (stopped / starting / ready); populated
+  // when the child process has crashed at
+  // least once since the workspace was last
+  // mounted. The "crashed" badge + the
+  // "Last lines of server output" panel +
+  // the auto-respawn countdown all read
+  // from this.
+  const crashInfo = useLspClientStore(
+    (s) =>
+      (activeWorkspaceRoot
+        ? s.crashByWorkspace.get(activeWorkspaceRoot) ?? null
+        : null),
+  );
+  // Phase 9.5 — re-render every second while
+  // a respawn is scheduled, so the
+  // "Auto-restarting in Ns..." countdown
+  // ticks down. We use a single state field
+  // (the current second-since-epoch) so all
+  // countdown labels in the card update in
+  // lockstep without each one running its
+  // own interval.
+  const [nowSec, setNowSec] = useState<number>(
+    () => Math.floor(Date.now() / 1000),
+  );
+  useEffect(() => {
+    if (!crashInfo?.respawnInMs) return;
+    const id = setInterval(() => {
+      setNowSec(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [crashInfo?.respawnInMs]);
   // The available / install-hint probe.
   const [probe, setProbe] = useState<CheckAvailableResult | null>(null);
   // The kill switch toggle.
@@ -178,21 +246,43 @@ export function LanguageServerCard() {
 
   const handleRestart = useCallback(() => {
     if (!activeWorkspaceRoot) return;
-    void useLspClientStore.getState().dispose(activeWorkspaceRoot);
-    void useLspClientStore.getState().getOrCreate(activeWorkspaceRoot);
+    // Phase 9.5 — use the new `respawn` action
+    // instead of `dispose` + `getOrCreate`. It
+    // cancels any pending auto-respawn timer
+    // (so the scheduled respawn doesn't race
+    // with the manual one) and resets the
+    // `consecutiveCrashes` counter (so a
+    // manual restart doesn't burn through the
+    // 5-attempt auto-respawn ladder if the
+    // user is just testing config changes).
+    void useLspClientStore.getState().respawn(activeWorkspaceRoot);
   }, [activeWorkspaceRoot]);
 
   const badge = BADGE_LABEL[status];
+  // Phase 9.5 — when we have crash info AND
+  // the status is `error`, override the badge
+  // to a "Crashed" label so the user
+  // immediately sees the cause. The base
+  // `Error` badge is still used for the
+  // non-crash error path (spawn failed,
+  // `initialize` timeout).
+  const crashed = status === 'error' && crashInfo !== null;
+  const crashBadge = crashed
+    ? {
+        label: 'Crashed',
+        className: styles.badgeCrashed ?? styles.badgeError,
+      }
+    : null;
 
   return (
     <div className={styles.card} data-testid="language-server-card">
       <div className={styles.cardHeader}>
         <h3 className={styles.cardTitle}>TypeScript language server</h3>
         <span
-          className={`${styles.badge} ${badge.className}`}
+          className={`${styles.badge} ${(crashBadge ?? badge).className}`}
           data-testid="lsp-status-badge"
         >
-          {badge.label}
+          {(crashBadge ?? badge).label}
         </span>
       </div>
       <p className={styles.cardDescription}>
@@ -202,6 +292,84 @@ export function LanguageServerCard() {
         nvim / helix / zed use).
       </p>
       <p className={styles.statusLine}>{STATUS_BLURB[status]}</p>
+      {/* Phase 9.5 — crash diagnostics panel.
+          Rendered when the store has crash info
+          for this workspace (i.e. the child
+          process exited at least once and the
+          event listener captured the
+          `lsp://crashed` payload). Shows:
+            - The "Auto-restarting in Ns..." or
+              "Restart failed" countdown (only
+              when a respawn is scheduled)
+            - The "Last lines of server output"
+              panel with the last 100 lines of
+              stderr (UTF-8 lossy)
+            - A "Copy diagnostics" button so the
+              user can paste the full stderr
+              into a bug report. */}
+      {crashInfo && (
+        <div className={styles.crashPanel} data-testid="lsp-crash-panel">
+          <div className={styles.crashHeader}>
+            <strong>
+              Crashed {formatAgo(crashInfo.crashedAt, nowSec)}
+              {crashInfo.exitStatus !== null &&
+                ` (exit code ${crashInfo.exitStatus})`}
+              {crashInfo.consecutiveCrashes > 1 &&
+                ` — ${crashInfo.consecutiveCrashes} in a row`}
+              .
+            </strong>
+            {crashInfo.respawnInMs !== null && (
+              <span data-testid="lsp-respawn-countdown">
+                {' '}
+                Auto-restarting in{' '}
+                {Math.max(0, Math.ceil(crashInfo.respawnInMs / 1000))}s…
+              </span>
+            )}
+            {crashInfo.respawnInMs === null &&
+              crashInfo.consecutiveCrashes >= 5 && (
+                <span data-testid="lsp-respawn-giveup">
+                  {' '}
+                  Auto-restart disabled after {crashInfo.consecutiveCrashes}{' '}
+                  consecutive crashes — click <em>Restart server</em> to try
+                  again.
+                </span>
+              )}
+          </div>
+          {crashInfo.stderrTail && (
+            <pre
+              className={styles.crashStderr}
+              data-testid="lsp-crash-stderr"
+            >
+              {lastNLines(crashInfo.stderrTail, 100)}
+            </pre>
+          )}
+          <button
+            type="button"
+            className={styles.crashCopyButton}
+            onClick={() => {
+              void navigator.clipboard
+                .writeText(
+                  `lipi LSP crash\n` +
+                    `Workspace: ${activeWorkspaceRoot}\n` +
+                    `Exit: ${crashInfo.exitStatus ?? 'unknown'}\n` +
+                    `When: ${new Date(crashInfo.crashedAt).toISOString()}\n` +
+                    `\n--- stderr ---\n${crashInfo.stderrTail}`,
+                )
+                .catch(() => {
+                  // Clipboard is best-effort
+                  // (may be blocked in some
+                  // iframes / WebView
+                  // contexts). The user can
+                  // still select the text
+                  // manually.
+                });
+            }}
+            data-testid="lsp-crash-copy"
+          >
+            Copy diagnostics
+          </button>
+        </div>
+      )}
       {!probe?.available && (
         <div className={styles.installHint} data-testid="lsp-install-hint">
           <strong>Not installed.</strong> Run{' '}

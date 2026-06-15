@@ -106,9 +106,13 @@ loader.config({
  * Phase 2c wiring:
  *   - TabStrip is owned by the editor pane (not the screen) so the
  *     strip and the editor always move together.
- *   - When the active tab changes, we mount a fresh Monaco instance
- *     pointed at that tab's content. We use `onChange` to push edits
- *     back to the store; the store recomputes the dirty bit.
+ *   - D-145: a single Monaco instance is mounted for
+ *     the lifetime of the pane. When the active tab
+ *     changes, the `<Editor>` component's `path` prop
+ *     triggers an in-place `editor.setModel(model)`
+ *     (no remount, no instance swap). We use `onChange`
+ *     to push edits back to the store; the store
+ *     recomputes the dirty bit.
  *   - Ctrl/Cmd+S calls `useEditorTabs().saveActive()`. We register
  *     the shortcut here (not in the workspace) so it only fires
  *     when the editor pane is mounted.
@@ -118,11 +122,29 @@ loader.config({
  *     `editorControllerStore` so features outside the pane
  *     (currently `AIPanel/CmdKModal`, later the command palette
  *     and the diff view) can read the current selection, replace
- *     text, and call other editor methods. We clear the handle
- *     in the `onMount`-pair cleanup so a stale editor from a
- *     closed tab doesn't leak. The local `editorRef` is still
- *     used for the `useEffect` that syncs external content
- *     into Monaco on tab switch.
+ *     text, and call other editor methods.
+ *
+ * D-145 (Phase 9.2f follow-up) — single Monaco instance:
+ *   The pre-D-145 design keyed `<ActiveEditor>` on
+ *   `key={activeTab.id}` so the Monaco instance was destroyed
+ *   and remounted on every tab switch. That was correct but
+ *   expensive: the controller store flashed `null` between
+ *   unmount + remount (CmdKModal briefly lost its handle), the
+ *   `useMonacoLspBridge` effect re-ran (re-discovering all
+ *   models, re-registering per-kind provider sets), and
+ *   `useInlineEditOverlay` tore down + re-mounted its
+ *   widget / decorations / keybindings.
+ *
+ *   D-145 drops the `key={activeTab.id}`. The
+ *   `@monaco-editor/react` `Editor` component handles the
+ *   model swap in place — when the `path` prop changes, it
+ *   looks up an existing model by URI, restores the saved
+ *   view state (scroll / selection / undo stack), and calls
+ *   `editor.setModel(model)`. No instance swap, no effect
+ *   re-run, no store flash. The 9.2f bridge aggregator
+ *   tracks models globally via `monaco.editor.getModels()` +
+ *   `onDidCreateModel`, so the persistent-editor design is
+ *   fully forward-compatible with the bridge.
  */
 export function EditorPane() {
   const activeTab = useEditorTabsStore(editorTabsSelectors.activeTab);
@@ -193,8 +215,18 @@ export function EditorPane() {
         <TabStrip position="top" />
         <div className={styles.body}>
           {activeTab ? (
+            // D-145: no `key={activeTab.id}` — the
+            // Monaco instance persists across tab
+            // switches. The `@monaco-editor/react`
+            // `Editor` component handles the model
+            // swap in place when the `path` prop
+            // changes (looks up the model by URI,
+            // restores view state, calls
+            // `editor.setModel(model)`). This is the
+            // whole point of D-145 — no instance
+            // remount, no effect re-run, no
+            // controller-store flash.
             <ActiveEditor
-              key={activeTab.id}
               tabId={activeTab.id}
               path={activeTab.path}
               language={activeTab.language}
@@ -248,14 +280,35 @@ function ActiveEditor({
     (s) => s.setPendingReveal,
   );
 
-  // Push external content into Monaco (e.g. when switching tabs and
-  // the new content is different from what Monaco has internally).
+  // Push external content into Monaco (e.g. when the
+  // active file is reloaded from disk by the file
+  // watcher, or when the AI panel applies an edit).
+  //
+  // D-145: this effect is now ONLY for "external
+  // content update while the active tab is the same".
+  // Tab switches go through the `<Editor>` component's
+  // `path` prop, which calls `editor.setModel(model)`
+  // internally with the new tab's pre-existing model
+  // (already loaded with B's content). The `[content,
+  // path]` dep + the "path changed" early-return makes
+  // the two code paths non-overlapping: the
+  // `setValue` branch only fires for a same-tab
+  // content change (e.g. external reload), and the
+  // tab-switch path is owned entirely by the
+  // `Editor` component's internal model swap.
   useEffect(() => {
     if (!editorRef.current) return;
+    // D-145: skip on tab switch. The `<Editor>`
+    // component's `path`-driven `setModel` is the
+    // authority on what content Monaco shows; the
+    // `setValue` below is only for same-tab external
+    // updates (file-watcher reload, AI panel apply).
+    const currentPath = editorRef.current.getModel()?.uri.path;
+    if (currentPath !== path) return;
     if (editorRef.current.getValue() === content) return;
     suppressNextChange.current = true;
     editorRef.current.setValue(content);
-  }, [content]);
+  }, [content, path]);
 
   const handleMount: OnMount = useCallback((editor) => {
     editorRef.current = editor;
@@ -271,30 +324,68 @@ function ActiveEditor({
     // the first mount (idempotent), then apply
     // whatever `compilerOptions` the
     // `tsConfigStore` has for the active
-    // workspace. Re-runs on every tab switch
-    // (the new editor instance may need the
-    // same options re-applied — `setCompilerOptions`
-    // is global state, so this is technically a
-    // no-op for the second+ invocation, but it's
-    // defensive and cheap).
+    // workspace. D-145: this runs only on the
+    // first mount now (the editor instance
+    // persists across tab switches), so the
+    // "re-applies on every tab switch" comment
+    // is stale — the TS service is global state
+    // and the model swap doesn't need a
+    // re-configure.
     configureTsServiceOnce();
     applyDiscoveredTsConfig();
-    // Phase S: if a `pendingReveal` is queued
-    // for this exact path, apply it now and
-    // clear the request. We compare paths
-    // exactly (the JS side uses the absolute
-    // path the search returned, which is the
-    // same one Monaco just mounted).
-    const pending = useEditorControllerStore.getState().pendingReveal;
-    if (pending && pending.path === path) {
-      const line = Math.max(1, pending.line);
-      const column = Math.max(1, pending.column);
-      editor.revealLineInCenter(line);
-      editor.setPosition({ lineNumber: line, column });
-      editor.focus();
-      setPendingReveal(null);
-    }
-  }, [path, setControllerEditor, setPendingReveal]);
+  }, [setControllerEditor]);
+
+  // Phase S: apply a `pendingReveal` request when the
+  // active tab's path matches the queued request.
+  // D-145: this used to live inside `handleMount`
+  // (which only fires once now, on first mount).
+  // We now subscribe to the editor's
+  // `onDidChangeModel` event so we fire whenever
+  // Monaco swaps models (i.e. whenever the
+  // `<Editor>` component's internal `useUpdate`
+  // calls `editor.setModel(newModel)` in response
+  // to the `path` prop changing). This is the
+  // exact "model swap just happened" event we
+  // need — checking `path` against the new
+  // model's URI is robust to whatever order the
+  // `Editor` component's effects run in.
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const subscription = editor.onDidChangeModel(() => {
+      const pending = useEditorControllerStore.getState().pendingReveal;
+      const currentPath = editor.getModel()?.uri.path;
+      // `currentPath` is the Monaco URI's `.path`
+      // (e.g. `/c:/path/to/file.ts` on Windows,
+      // `/path/to/file.ts` on POSIX). The search
+      // panel stores the absolute path it received
+      // from `findInFiles`, which Monaco uses
+      // verbatim to construct the URI. We compare
+      // suffixes: the pending path is the
+      // workspace-relative-or-absolute path the
+      // user searched for; the model URI's path
+      // includes the scheme-stripped absolute.
+      // The pre-D-145 code compared full paths
+      // verbatim; the new code is `endsWith` to
+      // handle Windows drive-letter differences
+      // between the search hit and the URI
+      // construction.
+      if (
+        pending &&
+        currentPath &&
+        (currentPath === pending.path ||
+          currentPath.endsWith(pending.path))
+      ) {
+        const line = Math.max(1, pending.line);
+        const column = Math.max(1, pending.column);
+        editor.revealLineInCenter(line);
+        editor.setPosition({ lineNumber: line, column });
+        editor.focus();
+        setPendingReveal(null);
+      }
+    });
+    return () => subscription.dispose();
+  }, [setPendingReveal]);
 
   // Phase 7: re-apply the discovered `compilerOptions`
   // whenever the `tsConfigStore` updates — that covers
@@ -311,11 +402,17 @@ function ActiveEditor({
   }, [tsConfigUpdatedAt]);
 
   // 5b-5: clear the controller-store handle when
-  // the active editor unmounts (tab switch,
-  // screen navigation). Without this a closed
-  // tab's editor would still be reachable via
-  // the store, leading to "apply" buttons that
-  // operate on stale data.
+  // the active editor unmounts. D-145: with the
+  // single-Monaco refactor, `ActiveEditor` no
+  // longer remounts on tab switch — the cleanup
+  // below now only fires on real screen
+  // navigation (when the whole `EditorPane`
+  // dies), which is exactly the case it was
+  // designed to handle. Pre-D-145 this effect
+  // also fired on every tab switch, briefly
+  // flashing the controller store to `null` and
+  // forcing `CmdKModal` + `useInlineEditOverlay`
+  // to re-mount; D-145 fixes that.
   useEffect(() => {
     return () => {
       setControllerEditor(null);

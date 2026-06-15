@@ -1226,6 +1226,155 @@ parity in a test.
   `cargo test --lib stdio` 29/29
   pass; `cargo check` clean.
 
+### Added (Phase 9.45 — D-145: single Monaco instance across tab switches)
+
+The pre-D-145 `EditorPane` keyed
+`<ActiveEditor>` on
+`key={activeTab.id}` so the
+Monaco instance was destroyed
+and remounted on every tab
+switch. That was correct but
+expensive. D-145 drops the
+`key` so one Monaco instance
+persists across tab switches;
+the `@monaco-editor/react`
+`Editor` component handles the
+model swap in place via
+`editor.setModel(model)`.
+
+- **`src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx`**
+  — dropped `key={activeTab.id}`
+  on `<ActiveEditor>`. The
+  library's `path` prop drives
+  the model swap: when the prop
+  changes, the library looks up
+  the model by URI, calls
+  `setModel(model)`, and
+  restores the saved view state
+  (scroll / selection / undo
+  stack) automatically. No
+  instance remount, no effect
+  re-run, no controller-store
+  flash. The 9.2f bridge
+  aggregator stays mounted for
+  the pane's lifetime.
+- **`src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx`**
+  — the `[content]` effect is
+  now path-aware: it skips
+  `setValue` when the model's
+  URI doesn't match the active
+  `path` (i.e. on a tab switch,
+  where the `<Editor>` library
+  owns the model swap). The
+  `setValue` branch is now
+  reserved for "external
+  content update on the same
+  tab" (file-watcher reload,
+  AI panel apply).
+- **`src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx`**
+  — the `pendingReveal` check
+  moved out of `handleMount`
+  (which only fires on first
+  mount now) into a
+  `useEffect` that subscribes
+  to the editor's
+  `onDidChangeModel` event. The
+  reveal fires whenever Monaco
+  swaps models — exactly when
+  a file is opened from the
+  search panel and needs to be
+  scrolled / focused to the
+  match line.
+- **`src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx`**
+  — the `setControllerEditor(null)`
+  cleanup now only fires on
+  real `EditorPane` unmount
+  (screen navigation), not on
+  tab switch. Pre-D-145 it
+  fired on every tab switch,
+  briefly flashing the store
+  to `null` and forcing
+  `CmdKModal` + `useInlineEditOverlay`
+  to re-mount.
+- **`src/screens/EditorWorkspace/components/EditorPane/EditorPane.test.tsx`**
+  *(new, 5 tests)*:
+  - `writes the editorControllerStore
+    on first mount with the
+    active tab path` —
+    verifies the controller
+    store gets the editor
+    handle on first mount.
+  - `forwards the new tab
+    path to the <Editor> on
+    tab switch (D-145 in-place
+    model swap)` — verifies
+    the `<Editor>` is the
+    same React element across
+    tab switches (the
+    `path` prop flows through
+    as a prop change, not a
+    remount).
+  - `does NOT clear the
+    editorControllerStore on
+    tab switch (D-145 — no
+    controller flash)` —
+    the contract the pre-D-145
+    design violated.
+  - `clears the
+    editorControllerStore on
+    real unmount (D-145 still
+    handles the
+    screen-navigation case)`
+    — the cleanup still
+    works for the legitimate
+    "user navigates away from
+    the editor" case.
+  - `does not re-run the LSP
+    bridge effect on tab
+    switch (D-145 — bridge
+    stays mounted)` — the
+    bridge aggregator
+    (shipped in 9.2f) is now
+    forward-compatible with
+    the single-Monaco design;
+    it mounts once for the
+    pane's lifetime.
+- **Design decisions**:
+  - **D-149**: The
+    `[content]` effect is
+    path-aware (it reads
+    `editorRef.current.getModel()?.uri.path`
+    and skips `setValue` if
+    it doesn't match the
+    active `path`). This is
+    the cleanest separation:
+    the `<Editor>` library
+    owns the "tab switch"
+    path, the effect owns
+    the "external content
+    update" path, and the
+    two are non-overlapping.
+  - **D-150**: The
+    `pendingReveal` check
+    moved from `handleMount`
+    to a `useEffect` that
+    subscribes to
+    `editor.onDidChangeModel`.
+    This is the correct
+    event for "model just
+    swapped" — it fires
+    after the library's
+    `useUpdate` on `path`
+    has run, so the
+    `currentPath` check sees
+    the new model's URI, not
+    the previous tab's.
+- **Test results**: `vitest`
+  1167/1167 pass (was 1162;
+  +5 from this slice); `tsc
+  --noEmit` clean; `cargo
+  check` clean.
+
 ### Added (Phase 9.7 — LSP live server output panel)
 
 The `LanguageServerCard` settings UI now has a

@@ -15,6 +15,7 @@ import {
 import { useEditorTabs } from '../../hooks/useEditorTabs';
 import { useEditorControllerStore } from '../../state/editorControllerStore';
 import { useInlineEditOverlay } from '../../hooks/useInlineEditOverlay';
+import { useMonacoLspBridge } from '../../hooks/useMonacoLspBridge';
 import { useTsConfigStore } from '../../state/tsConfigStore';
 import {
   useWorkspaceStore,
@@ -343,6 +344,17 @@ function ActiveEditor({
   // a custom event.
   const liveEditor = useEditorControllerStore((s) => s.editor);
   useInlineEditOverlay({ editor: liveEditor });
+  // Phase 9 (Tiniest scope) — wire the live
+  // Monaco editor to the real
+  // `typescript-language-server` for
+  // cross-file go-to-def, find-references,
+  // rename, code actions, etc. The bridge
+  // is a no-op when the user has flipped
+  // the kill switch in settings or when
+  // the LSP server isn't on PATH.
+  useMonacoLspBridge({
+    editor: liveEditor,
+  });
 
   if (load.kind === 'loading') {
     return (

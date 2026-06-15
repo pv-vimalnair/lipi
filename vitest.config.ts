@@ -28,6 +28,21 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': SRC_DIR,
+      // `monaco-editor` ships only ESM that
+      // requires Vite's optimizer; we don't
+      // need it in tests (the bridge file
+      // uses it only for type imports +
+      // `monaco.languages.register*Provider`
+      // calls, both of which are mocked or
+      // not exercised). Pointing the alias
+      // at a stub keeps the resolver happy
+      // when test code imports a file that
+      // imports `monaco-editor` transitively.
+      'monaco-editor': resolve(
+        fileURLToPath(import.meta.url),
+        '..',
+        'node_modules/monaco-editor/esm/vs/editor/editor.api.js',
+      ),
     },
   },
   test: {

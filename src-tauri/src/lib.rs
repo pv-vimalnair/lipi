@@ -169,6 +169,13 @@ pub use custom_tool::{
 mod command;
 pub use command::{run_command as run_command_rs, RunCommandArgs, RunCommandError, RunCommandResult};
 
+mod stdio;
+pub use stdio::{
+    check_available as stdio_check_available_rs, run_stdio as stdio_run_stdio_rs,
+    stdio_close as stdio_close_rs, stdio_read as stdio_read_rs, stdio_write as stdio_write_rs,
+    CheckAvailableResult, RunStdioArgs, RunStdioResult, StdioError, StdioState,
+};
+
 mod http;
 pub use http::{http_request as http_request_rs, HttpRequestArgs, HttpRequestError, HttpRequestResult};
 
@@ -488,6 +495,53 @@ fn fs_path_exists(path: String) -> bool {
 #[tauri::command]
 async fn run_command(args: RunCommandArgs) -> Result<RunCommandResult, RunCommandError> {
     run_command_rs(args).await
+}
+
+// Phase 9 (Tiniest scope) — `lsp_run_stdio` /
+// `lsp_stdio_read` / `lsp_stdio_write` /
+// `lsp_stdio_close` / `lsp_check_available`. These wrap
+// the child-process stdio in a Tauri IPC boundary so the
+// renderer can drive a long-lived process (a real
+// `typescript-language-server`) without needing Rust
+// knowledge of the LSP protocol. See `stdio.rs` for the
+// full design.
+#[tauri::command]
+async fn lsp_run_stdio(
+    state: tauri::State<'_, Arc<StdioState>>,
+    args: RunStdioArgs,
+) -> Result<RunStdioResult, StdioError> {
+    stdio_run_stdio_rs(state, args).await
+}
+
+#[tauri::command]
+async fn lsp_stdio_read(
+    state: tauri::State<'_, Arc<StdioState>>,
+    handle_id: String,
+    max_bytes: usize,
+) -> Result<Vec<u8>, StdioError> {
+    stdio_read_rs(state, handle_id, max_bytes).await
+}
+
+#[tauri::command]
+async fn lsp_stdio_write(
+    state: tauri::State<'_, Arc<StdioState>>,
+    handle_id: String,
+    bytes: Vec<u8>,
+) -> Result<usize, StdioError> {
+    stdio_write_rs(state, handle_id, bytes).await
+}
+
+#[tauri::command]
+async fn lsp_stdio_close(
+    state: tauri::State<'_, Arc<StdioState>>,
+    handle_id: String,
+) -> Result<(), StdioError> {
+    stdio_close_rs(state, handle_id).await
+}
+
+#[tauri::command]
+async fn lsp_check_available() -> Result<CheckAvailableResult, StdioError> {
+    stdio_check_available_rs().await
 }
 
 #[tauri::command]
@@ -1602,6 +1656,11 @@ pub fn run() {
             ai_cancel_stream,
             run_command,
             http_request,
+            lsp_run_stdio,
+            lsp_stdio_read,
+            lsp_stdio_write,
+            lsp_stdio_close,
+            lsp_check_available,
             read_lipi_tools,
             write_lipi_tools,
             stt_list_models,
@@ -1631,6 +1690,7 @@ pub fn run() {
             updater_health_check,
         ])
         .manage(Arc::new(TerminalState::new()))
+        .manage(Arc::new(StdioState::new()))
         .menu(|app| menu::build_main_menu(app))
         .on_menu_event(|app, event| {
             // F.4: forward the menu item id to the frontend as a

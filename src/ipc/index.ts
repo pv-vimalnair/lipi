@@ -26,3 +26,4 @@ export * from './workspaceSearch';
 export * from './licensing';
 export * from './iap';
 export * from './updaterHealth';
+export * from './lsp';

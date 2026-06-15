@@ -6197,6 +6197,326 @@ row.
   clean (frontend-only
   phase)
 
+### Added (Phase 9 — Real `typescript-language-server` via stdio pipe)
+
+**Scope: "Phase 9 Tiniest"** —
+4-6 hour path. User installs
+`typescript-language-server`
+globally (`npm i -g
+typescript-language-server`),
+Lipi spawns it as a child process
+and pipes its stdio over Tauri
+IPC. The frontend drives the
+LSP via Monaco's built-in
+`monaco.languages.register*Provider`
+APIs — **no
+`monaco-languageclient` dependency**
+(pulled-in 30+ sub-packages and
+would require a major Monaco-
+loading refactor).
+
+**New Rust stdio module** (`src-tauri/src/stdio.rs`)
+
+- `lsp_run_stdio({ command, args, cwd? })` —
+  spawn the child process,
+  return a process-wide
+  `handleId` (random hex)
+  + the resolved command
+  string.
+- `lsp_stdio_read(handleId, maxBytes)` —
+  drain up to `maxBytes`
+  from the child's stdout
+  buffer (returns a
+  `Vec<u8>` so Tauri's
+  `serde_wasm_bindgen`
+  maps it cleanly to a
+  `Uint8Array` on the JS
+  side).
+- `lsp_stdio_write(handleId, bytes)` —
+  write a JSON-RPC frame
+  to the child's stdin.
+- `lsp_stdio_close(handleId)` —
+  send `shutdown` +
+  `exit`, then `kill()`
+  the child.
+- `lsp_check_available()` —
+  probe for
+  `typescript-language-server`
+  on `PATH` (or in the
+  nvm / pnpm shim
+  directories) + return
+  the install hint
+  the user can copy
+  + paste.
+- 6 unit tests cover
+  `random_hex`,
+  IPC argument /
+  result camelCase
+  serde, error
+  `kind` tag, and
+  the install-hint
+  string.
+
+**`LspClient` (TypeScript class) + `useLspClientStore` (Zustand)**
+
+- Per-workspace
+  `LspClient` instance.
+  `getOrCreate(workspaceRoot)`
+  spawns the child (or
+  reuses an existing one),
+  runs the `initialize`
+  JSON-RPC handshake,
+  flips the per-workspace
+  `LspStatus` to `ready`.
+- `dispose(workspaceRoot)`
+  sends `shutdown` +
+  `exit` and `kill()`s
+  the child.
+- Polling reader loop
+  (1 ms `setTimeout`
+  yielding to the event
+  loop) drains stdout
+  via `lspStdioRead`
+  and dispatches
+  parsed JSON-RPC
+  messages to the
+  pending-request
+  resolver or the
+  message queue.
+- Per-call request
+  IDs are monotonic
+  counters; pending
+  requests are
+  resolved on
+  response, rejected
+  on error or
+  `dispose`.
+
+**Monaco bridge hook** (`useMonacoLspBridge.tsx`)
+
+- Mounted in
+  `EditorPane` next
+  to `useInlineEditOverlay`.
+  Keyed by
+  `(editor, workspaceRoot)`.
+- Wires Monaco's
+  `onDidChangeModelContent`
+  → `textDocument/didChange`
+  (full content
+  replacement for
+  simplicity; the
+  LSP supports
+  incremental edits
+  but Monaco's event
+  payload makes
+  this easier).
+- Wires Monaco's
+  `onDidChangeModel`
+  → `textDocument/didClose`
+  (old URI) +
+  `textDocument/didOpen`
+  (new model).
+- Calls
+  `registerLspProviders(client, monaco, [model.getLanguageId()])`
+  on mount; disposes
+  the returned
+  `IDisposable[]` on
+  unmount.
+
+**LSP provider adapters** (`lspProviders.ts`)
+
+- Thin (~20 lines
+  each) adapters
+  for Monaco's
+  built-in
+  `monaco.languages.register*Provider`
+  APIs: definition,
+  references, rename,
+  implementation,
+  documentSymbol,
+  codeAction, hover,
+  signatureHelp,
+  inlayHints. Each
+  converts the
+  Monaco provider
+  interface to an
+  LSP
+  `textDocument/*`
+  method call and
+  converts the
+  response back
+  to Monaco types.
+- Completion stays
+  on Monaco's
+  Phase 7 built-in
+  service (the real
+  server's 50-200ms
+  round-trip is
+  too slow for
+  inline autocomplete).
+- Inlay hints are
+  guarded by
+  `client.initializeResult.capabilities.inlayHintProvider`
+  so we only register
+  the provider if
+  the server supports
+  it.
+
+**Kill switch** (`lspKillSwitch.ts`)
+
+- `localStorage` key
+  `lipi:lsp:useRealServer:v1`
+  — the bridge hook
+  reads it on mount
+  and bails out
+  when disabled.
+  The settings card
+  toggles it. Flipping
+  it off disposes
+  the live client
+  so the child
+  process is gone.
+- localStorage (not
+  Zustand / not
+  `toolSettingsStore`
+  v3) — a one-liner
+  read/write with no
+  schema migration.
+
+**`LanguageServerCard` (Settings screen)**
+
+- New card under
+  Editor → Language
+  Servers. Status
+  badge (Stopped /
+  Starting / Ready /
+  Error) sourced
+  from the LspClient
+  store. Install hint
+  when
+  `lspCheckAvailable`
+  reports
+  `available: false`.
+  Version line when
+  available. Kill
+  switch toggle.
+  "Restart server"
+  button (visible
+  when a server is
+  alive or starting).
+
+**Tests**
+
+- 4
+  `lspClientStore`
+  tests cover:
+  `getOrCreate`
+  spawns + flips
+  to `ready`,
+  same-workspace
+  returns same
+  client,
+  `dispose`
+  removes the
+  client + flips
+  status to
+  `stopped`, spawn
+  failure flips
+  to `error`.
+- 3
+  `useMonacoLspBridge`
+  tests cover: no-op
+  when kill switch
+  is off, creates
+  client + registers
+  providers when on,
+  sends `didClose`
+  + `didOpen` on
+  model change.
+- 3
+  `LanguageServerCard`
+  tests cover: Ready
+  badge, install hint
+  when CLI is
+  missing, kill switch
+  toggle persists to
+  `localStorage`
+  and disposes the
+  live client.
+
+**Verification.**
+- `npx tsc --noEmit` —
+  clean.
+- `npx vitest run` —
+  **1032/1032 pass**
+  (was 1022 before
+  Phase 9, +3 files
+  / +10 tests).
+- `cargo test --lib stdio` —
+  **6/6 pass** (the
+  new `stdio::tests`
+  module).
+- `npm run build` —
+  clean (the bundle
+  delta is the
+  +~400 lines of
+  Phase 9 source).
+
+**Known limitations (Tiniest scope)**
+
+- No incremental
+  `didChange` —
+  we re-send the
+  full text on
+  every edit.
+  Negligible perf
+  impact for files
+  <10k lines, but
+  a follow-up slice
+  could compute
+  the diff.
+- No multi-server
+  support (no
+  `rust-analyzer`,
+  no per-language
+  server resolution
+  beyond the hard-
+  coded
+  `typescript-language-server`
+  command). The
+  `LspClient` class
+  + stdio IPC are
+  server-agnostic;
+  the only fixed
+  part is the
+  default command
+  in
+  `lspCheckAvailable`
+  + the install
+  hint.
+- No LSP crash
+  recovery — if
+  the child process
+  dies, the bridge
+  logs the error
+  and falls back
+  to Monaco's
+  Phase 7 built-in
+  TS service. A
+  "Restart server"
+  button is the
+  manual recovery
+  path (the user
+  doesn't have to
+  restart Lipi).
+- Completion
+  intentionally
+  stays on Monaco's
+  built-in (see the
+  rationale in
+  `lspProviders.ts`'s
+  header comment).
+
 ## [0.0.2] — 2026-06-09
 
 ### Added (Phase 5e — persistent per-decision activity log)

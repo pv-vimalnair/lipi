@@ -1,0 +1,176 @@
+/* LanguageServerCard — Phase 9 (Tiniest scope).
+
+   The "TypeScript language server" card under
+   Editor → Language Servers in the Settings
+   screen. Mirrors the established
+   `OnDeviceCard` / `WebSpeechCard` /
+   `NativeDictationCard` class vocabulary
+   (`.card`, `.cardHeader`, `.cardTitle`,
+   `.badge`, `.toggleRow`, `.toggleLabel`,
+   `.toggleHint`, `.errorCard`) so the card
+   reads as a natural sibling. Per Rule 4,
+   all spacing / colors / typography come
+   from the design tokens in
+   `src/shared/styles/tokens.css`. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background-color: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 6px);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.cardTitle {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm, 2px);
+  font-size: var(--font-size-xs, 12px);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.badgeReady {
+  background-color: var(--color-success-bg, #1a3a23);
+  color: var(--color-success-fg, #5cdd8a);
+}
+
+.badgeStarting {
+  background-color: var(--color-warning-bg, #3a2c0c);
+  color: var(--color-warning-fg, #f5c244);
+}
+
+.badgeError {
+  background-color: var(--color-error-bg, #3a1a1a);
+  color: var(--color-error-fg, #f57a7a);
+}
+
+.badgeStopped {
+  background-color: var(--color-bg-muted, #2a2a2a);
+  color: var(--color-text-secondary, #aaa);
+}
+
+.cardDescription {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.cardDescription code {
+  font-family: var(--font-family-mono, monospace);
+  font-size: 0.9em;
+  padding: 1px var(--space-1);
+  background-color: var(--color-bg-muted, #1a1a1a);
+  border-radius: var(--radius-sm, 2px);
+}
+
+.toggleRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  background-color: var(--color-bg-base, #1a1a1a);
+  border-radius: var(--radius-sm, 4px);
+}
+
+.toggleLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.toggleLabel input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+.toggleHint {
+  font-size: var(--font-size-xs, 12px);
+  color: var(--color-text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.installHint {
+  padding: var(--space-3);
+  background-color: var(--color-bg-muted, #2a2a2a);
+  border-left: 3px solid var(--color-warning-fg, #f5c244);
+  border-radius: var(--radius-sm, 2px);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: 1.4;
+}
+
+.installHint code {
+  font-family: var(--font-family-mono, monospace);
+  font-size: 0.9em;
+  padding: 2px var(--space-1);
+  background-color: var(--color-bg-base, #1a1a1a);
+  border-radius: var(--radius-sm, 2px);
+  user-select: all;
+}
+
+.buttonRow {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.button {
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-bg-elevated, #2a2a2a);
+  border: 1px solid var(--color-border-subtle, #444);
+  border-radius: var(--radius-sm, 4px);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: border-color 80ms linear, background-color 80ms linear;
+}
+
+.button:hover {
+  border-color: var(--color-border-strong, #888);
+  background-color: var(--color-bg-muted, #1a1a1a);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.errorCard {
+  padding: var(--space-3);
+  background-color: var(--color-error-bg, #3a1a1a);
+  border-left: 3px solid var(--color-error-fg, #f57a7a);
+  border-radius: var(--radius-sm, 2px);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: 1.4;
+}
+
+.statusLine {
+  font-size: var(--font-size-xs, 12px);
+  color: var(--color-text-secondary);
+  margin: 0;
+  font-family: var(--font-family-mono, monospace);
+}

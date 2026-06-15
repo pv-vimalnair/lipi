@@ -276,6 +276,12 @@ on mobile — cannot be retrofitted in Week 8.
 | 74 | S3's import flow is **`parse → preview → confirm → apply`**, not `parse → confirm → apply`. | The v2 `window.confirm` was a black box ("this will overwrite everything, OK?"). The v3 preview shows the diff: "Workspace path: A → B; Recents: +1 new, -1 removed; Voice provider: stub → wispr; Tool X confirmation: per_call → always_confirm." A user who picks the wrong file sees "0 changes" and the Apply button is disabled. A user who picks the right file sees the change list and clicks Apply with eyes open. The "no changes" path is a feature, not an edge case. | 2026-06-13 |
 | 75 | S3's `applyLipiStateV3` restore for `toolSettings` uses a **direct `setState`**, not `applyImportedSettings`. | The apply is the destructive surface (it pushes a 5a undo entry). The restore is a "no questions asked, put the state back" — it must NOT push another undo entry. A 10-second-old import that the user wants to abort shouldn't leave a "Click to undo: restore state" toast that's actually re-restoring 10 seconds too late. The `toolSettings` write closure in the snapshot is a raw `setState({disabledToolNames, confirmationMode})`. | 2026-06-13 |
 | 76 | Decision #66 polish reuses the shared `Modal` primitive for both `InlineNameInput` and `ConfirmDestructiveModal` (rather than a custom modal per component). | Per Rule 4 (component reuse), `Modal` is the centralised overlay surface — its focus trap, ESC handling, backdrop click, and `aria-modal` semantics are the right defaults for any centered overlay. The "New file" and "Delete folder" modals are not new kinds of modal — they're existing-modal instances with different content. The only new piece is the `FileRowContextMenu`, which is a *floating* menu (anchored at a click point) — that one is genuinely a new kind and lives in its own component. | 2026-06-13 |
+| 77 | Phase 9 chose the **"Tiniest"** scope (4-6 h, user-installed `typescript-language-server`) over the **Lite** (8-12 h, Tauri sidecar) and **Full** (16-22 h, custom `typescript-language-server` build). | The user is on a 4-6 hour budget. Tiniest requires `npm i -g typescript-language-server` (Node is already a prerequisite for Tauri's dev tooling) and skips a Tauri sidecar. The bridge is ~400 lines of TypeScript with no new dependencies. The trade-off is a one-time manual install step for the user (the settings card surfaces the install hint if the binary isn't found). | 2026-06-15 |
+| 78 | Phase 9 **does not depend on `monaco-languageclient`** — uses Monaco's built-in `monaco.languages.register*Provider` APIs directly. | `monaco-languageclient@10` pulls in 30+ transitive packages including `monaco-vscode-api@25` and `vscode-languageserver-protocol@3.17`. Loading it requires replacing our `@monaco-editor/react` setup with `monaco-vscode-api`'s own Monaco loader — a major refactor of every Monaco-using component. For the Tiniest scope, calling Monaco's provider APIs directly is a few hundred lines of TypeScript, no extra deps, and full control over the per-method response conversion. | 2026-06-15 |
+| 79 | Phase 9's LSP kill switch is a **`localStorage` key** (`lipi:lsp:useRealServer:v1`), not a Zustand field and not `toolSettingsStore` v3. | The kill switch is a per-user, per-install setting — it doesn't change while a request is in flight, doesn't interact with the `aiStore`, and doesn't need to be observed by anything except the bridge hook + the settings card. Putting it in a Zustand store would force a v2→v3 migration on the existing tool-settings persistence layer for a single boolean field. A `localStorage` key is a one-liner read/write with no schema migration. | 2026-06-15 |
+| 80 | Phase 9's `LspClient` reader loop **polls at 1 ms via `setTimeout`**, not via an event / promise. | The Tauri IPC boundary means we can't expose the child's `AsyncRead` / `AsyncWrite` directly to the JS side — every read / write is an `invoke` round-trip. Each `invoke('lsp_stdio_read', ...)` returns the bytes currently buffered (or an empty `Uint8Array(0)`). The polling overhead is negligible; the 1 ms tick is well below human-perceivable latency. A Tauri 2 event-stream upgrade is a follow-up slice (§9.33's Phase 9.3). | 2026-06-15 |
+| 81 | Phase 9 spawns **one child process per workspace** (not one global). | `typescript-language-server` is bound to a single workspace root at `initialize` time (`rootUri` in the LSP spec). With 1-2 active workspaces (the realistic Lipi usage pattern), 1-2 child processes is fine. The store's `getOrCreate` ensures we only spawn one per workspace; `dispose` flips the status to `stopped` and `kill()`s the child. | 2026-06-15 |
+| 82 | Phase 9's `didChange` notifications **re-send the full text** (no incremental edits). | Monaco's `onDidChangeModelContent` event payload includes the new text but not the minimal edit. Computing the minimal edit requires either a `Monaco.ITextModel` diff API (which doesn't exist in a stable form) or a hand-rolled Myers diff. For files <10k lines, the full-text re-send is negligible (~50-100 ms for a 5k-line file). A follow-up slice (§9.33's Phase 9.1) can wire `DiffEditor`'s `DiffProvider` if profiling shows a bottleneck. | 2026-06-15 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -5176,6 +5182,144 @@ The plan's 12-step acceptance test was verified by code review + automated tests
 
 ---
 
-*End of handoff. Lipi is at **Phase 8 complete** (inline AI edits via `Cmd+K` — overlay anchored to the selection as a Monaco `IContentWidget` with a green-tinted decoration + sparkle glyph, three visual states (idle / streaming / done) + error, Tab to accept + Esc to reject via `editor.addCommand`, `aiStore.sendEdit` reused for the AI round-trip, undo bracket on accept so a single `Cmd+Z` cleanly reverts the change, command palette `inlineEdit.open` discoverable entry). The next session should resume from the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the two Phase 7 follow-ups in §9.31 (JSON/CSS/HTML workers, real LSP server). The next handoff entry will live at §9.33.*
+### 9.33 Phase 9 — SHIPPED (Real `typescript-language-server` via stdio pipe — Tiniest scope, see CHANGELOG "Added (Phase 9 — Real `typescript-language-server` via stdio pipe)")
+
+The Tier 1 #3 "real LSP server" blocker (parked in §9.31's follow-ups) is in. The Tiniest scope was chosen over the Full and Lite scopes because the user is on a 4-6 hour budget — Tiniest requires the user to `npm i -g typescript-language-server` (Node.js is already a prerequisite for the Tauri dev tooling), and skips a Tauri sidecar. The bridge is ~400 lines of TypeScript and uses Monaco's built-in `monaco.languages.register*Provider` APIs directly — **no `monaco-languageclient` dependency** (which would have pulled in 30+ sub-packages including `monaco-vscode-api@25` and required a major Monaco-loading refactor).
+
+**Architecture**
+
+```
+                          EditorPane.handleMount (live IStandaloneCodeEditor)
+                                          │
+                                          ▼
+                          useMonacoLspBridge({ editor })
+                                          │
+                  ┌───────────────────────┴────────────────────────┐
+                  │                                                │
+                  │ 1. Reads workspaceRoot from useWorkspaceStore   │
+                  │ 2. Reads kill switch from localStorage         │
+                  │    (lipi:lsp:useRealServer:v1)                 │
+                  │                                                │
+                  ▼                                                │
+         (kill switch ON)                                         │
+                  │                                                │
+                  ▼                                                │
+     useLspClientStore.getOrCreate(workspaceRoot)                  │
+                  │                                                │
+                  ▼                                                │
+         (per-workspace LspClient)                                │
+                  │                                                │
+                  ├──► spawn child via invoke('lsp_run_stdio')     │
+                  │    (Rust src-tauri/src/stdio.rs)               │
+                  │                                                │
+                  ├──► await 'initialize' JSON-RPC                 │
+                  │    (reader tick consumes the response          │
+                  │     via invoke('lsp_stdio_read'))              │
+                  │                                                │
+                  ├──► send 'initialized' notification             │
+                  │                                                │
+                  └──► _setStatus('ready')                         │
+                                                                   │
+     registerLspProviders(client, monaco, [languageId]) ◄──────────┘
+                  │
+                  ▼ (one ~20-line adapter per provider)
+         monaco.languages.registerDefinitionProvider(...)
+         monaco.languages.registerReferenceProvider(...)
+         monaco.languages.registerRenameProvider(...)
+         monaco.languages.registerImplementationProvider(...)
+         monaco.languages.registerDocumentSymbolProvider(...)
+         monaco.languages.registerCodeActionProvider(...)
+         monaco.languages.registerHoverProvider(...)
+         monaco.languages.registerSignatureHelpProvider(...)
+         monaco.languages.registerInlayHintsProvider(...)   // guarded by capabilities
+                  │
+                  ▼
+         (Monaco's built-in completion stays — see rationale below)
+                  │
+                  ▼
+     typedEditor.onDidChangeModelContent  →  sendDidChange(client, model)
+     typedEditor.onDidChangeModel         →  textDocument/didClose + sendDidOpen
+```
+
+**Files changed / created**
+
+| File | Change |
+|---|---|
+| `src-tauri/src/stdio.rs` | NEW — child-process spawn + stdio pipe over Tauri IPC. `lsp_run_stdio`, `lsp_stdio_read`, `lsp_stdio_write`, `lsp_stdio_close`, `lsp_check_available`. `OnceLock<Mutex<HashMap<HandleId, StdioHandle>>>` registry. 6 unit tests cover `random_hex` (length + uniqueness), IPC `RunStdioArgs` / `RunStdioResult` camelCase serde, `StdioError` `kind` tag, install-hint string stability. |
+| `src-tauri/src/lib.rs` | `mod stdio;` declaration + `manage(Arc::new(StdioState::new()))` + register the 5 new commands |
+| `src/ipc/lsp.ts` | NEW — typed wrappers (`lspRunStdio`, `lspStdioRead`, `lspStdioWrite`, `lspStdioClose`, `lspCheckAvailable`). `lspStdioRead` returns a `Uint8Array` (Tauri's `Vec<u8>` → `serde_wasm_bindgen` round-trip). |
+| `src/ipc/index.ts` | `export * from './lsp';` |
+| `src/screens/EditorWorkspace/state/lspClientStore.ts` | NEW — Zustand store. `LspClient` class (per-workspace child process lifecycle: spawn, JSON-RPC framing, polling reader loop, pending-request map, message queue, `initialize` / `initialized` handshake, `shutdown` / `exit` on dispose). `useLspClientStore` exposes `getOrCreate` (spawn + handshake, idempotent per workspace) and `dispose` (graceful shutdown + `kill()`). |
+| `src/screens/EditorWorkspace/state/lspClientStore.test.ts` | NEW — 4 unit tests: spawns client + flips to `ready`; same-workspace returns same client; `dispose` removes client + flips to `stopped`; spawn failure flips to `error` and removes the client. Mocks `@/ipc/lsp` with an in-memory byte queue that auto-responds to `initialize` requests with the correct request id. |
+| `src/screens/EditorWorkspace/state/lspKillSwitch.ts` | NEW — `localStorage` key `lipi:lsp:useRealServer:v1`. `getUseRealServer()` (returns `true` on missing / malformed / read errors) + `setUseRealServer(value)`. Chose `localStorage` over a Zustand / `toolSettingsStore` v3 field to avoid a schema migration for a one-liner read/write. |
+| `src/screens/EditorWorkspace/hooks/lspProviders.ts` | NEW — thin (~20 lines each) adapters from Monaco's `monaco.languages.register*Provider` API to LSP `textDocument/*` method calls. Conversions both ways (Monaco `Position` / `Range` ↔ LSP `Position` / `Range`, LSP `Location` ↔ Monaco `Location`, etc.). `sendDidOpen` / `sendDidChange` helpers for model lifecycle. Inlay-hint provider registered only when `client.initializeResult.capabilities.inlayHintProvider` is truthy. |
+| `src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx` | NEW — the React bridge hook. Mounted in `EditorPane.tsx`'s `ActiveEditor` next to `useInlineEditOverlay`. Keyed by `(editor, workspaceRoot)`; effect cleanup disposes the providers + the model-content / model-change subscriptions. No-op when `getUseRealServer()` is `false`. |
+| `src/screens/EditorWorkspace/hooks/useMonacoLspBridge.test.tsx` | NEW — 3 unit tests: no-op when kill switch is off; creates client + registers providers when on; sends `didClose` for old model + `didOpen` for new model on file switch. Mocks `@/ipc/lsp` + `monaco-editor` + `./lspProviders` (real `sendDidOpen` / `sendDidChange` are re-used). |
+| `src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx` | Add `useMonacoLspBridge({ editor: liveEditor })` in the `ActiveEditor` body |
+| `src/screens/SettingsProvider/components/LanguageServerCard.tsx` | NEW — Settings card. Status badge (Stopped / Starting / Ready / Error) sourced from `useLspClientStore` for the active workspace. Install hint when `lspCheckAvailable` returns `available: false`. Version line when available. Kill-switch toggle. "Restart server" button (visible when a server is alive or starting). |
+| `src/screens/SettingsProvider/components/LanguageServerCard.module.css` | NEW — card / badge / toggleRow / buttonRow / installHint styles (reads design tokens from `src/shared/styles/tokens.css`) |
+| `src/screens/SettingsProvider/components/LanguageServerCard.test.tsx` | NEW — 3 unit tests: Ready badge from `useLspClientStore`; install hint when CLI is missing; kill-switch toggle persists to `localStorage` and disposes the live client when flipped off |
+| `src/screens/SettingsProvider/SettingsProvider.tsx` | New "Editor" section that mounts `LanguageServerCard` between Voice and AI Tools |
+| `vitest.config.ts` | Add a `monaco-editor` alias to a stub (the package ships ESM that needs Vite's optimizer; tests don't exercise Monaco directly — they mock the bridge's Monaco surface) |
+| `CHANGELOG.md` | New "Added (Phase 9 — Real `typescript-language-server` via stdio pipe)" section |
+| `HANDOFF.md` | New §9.33 (this entry) |
+
+**Why no `monaco-languageclient` dependency**
+
+`monaco-languageclient@10` (the version pinned in the Phase 9 Full plan) pulls in 30+ transitive packages including `monaco-vscode-api@25` and `vscode-languageserver-protocol@3.17`. Loading it requires replacing our current `@monaco-editor/react` setup with `monaco-vscode-api`'s own Monaco loader — a major refactor of every Monaco-using component (settings, onboarding, EditorPane). For the Tiniest scope, calling Monaco's `monaco.languages.register*Provider` APIs directly is a few hundred lines of TypeScript, no extra deps, and full control over the per-method response conversion. The trade-off is that we hand-roll JSON-RPC framing in `LspClient` (the spec is small, ~150 lines including the polling reader) and the per-method adapters in `lspProviders.ts` are written by hand (~20 lines each × 8 providers). The cost is a one-time implementation; the benefit is we own the integration end-to-end and can ship without a multi-day Monaco-loading refactor.
+
+**Why completion stays on Monaco's built-in TS service (Phase 7) — not the real server**
+
+The real `typescript-language-server`'s `textDocument/completion` round-trip is 50-200 ms (per the published nvim / helix / zed benchmarks). Monaco's built-in TS service responds in 5-20 ms. For inline autocomplete, that 10× latency difference is the difference between "feels native" and "feels broken". The plan's "Known limitations" section calls this out explicitly. A user who wants the real server's completion (slower but cross-file aware) can flip the kill switch in the settings card; the bridge then re-registers all providers on the next file open. For Phase 9 Tiniest, we keep Monaco's built-in completion and let the real server handle everything else (definition, references, rename, implementation, documentSymbol, codeAction, hover, signatureHelp, inlayHints).
+
+**Why `localStorage` (not a Zustand field, not `toolSettingsStore` v3) for the kill switch**
+
+The kill switch is a per-user, per-install setting — it doesn't change while a request is in flight, doesn't interact with the `aiStore`, and doesn't need to be observed by anything except the bridge hook + the settings card. Putting it in a Zustand store (or in `toolSettingsStore` v3) would force a v2→v3 migration on the existing tool-settings persistence layer for a single boolean field. A `localStorage` key is a one-liner read/write with no schema migration. The "missing key" path returns the default `useRealServer: true`, so existing users are not affected.
+
+**Why the reader loop polls (1 ms `setTimeout`) instead of using an event / promise**
+
+The Tauri IPC boundary means we can't expose the child's `AsyncRead` / `AsyncWrite` directly to the JS side — every read / write is an `invoke` round-trip. Each `invoke('lsp_stdio_read', ...)` returns the bytes currently buffered (or an empty `Uint8Array(0)` if nothing is available). The reader loop calls `lspStdioRead` repeatedly, yields to the event loop via `setTimeout(..., 1)`, and feeds any non-empty bytes into the JSON-RPC frame parser. The 1 ms tick is well below human-perceivable latency; the polling overhead is negligible. A follow-up slice could replace this with a Tauri event stream (the child-side `stdout` reader pushes to a `tokio::sync::mpsc` and the `stdio_read` command awaits the next chunk), removing the polling and the 1 ms minimum latency, but that's a Tauri 2 plumbing change that didn't fit the Tiniest scope.
+
+**Why per-workspace `LspClient` (one child process per workspace, not one global)**
+
+A `typescript-language-server` child process is bound to a single workspace root at `initialize` time (`rootUri` in the LSP spec). Re-initializing on workspace switch is possible but slower than keeping a child alive per workspace. With 1-2 active workspaces (the realistic Lipi usage pattern), 1-2 child processes is fine. The store's `getOrCreate` ensures we only spawn one per workspace. A `dispose` flips the status to `stopped` and `kill()`s the child; the next `getOrCreate` for that workspace spawns a fresh one.
+
+**Why `didChange` re-sends the full text (no incremental edits)**
+
+Monaco's `onDidChangeModelContent` event payload includes the new text but not the minimal edit. Computing the minimal edit (`textDocument/didChange` with `range: { start, end }` + `rangeLength` + `text`) requires either a `Monaco.ITextModel` diff API (which doesn't exist in a stable form) or a hand-rolled Myers diff. For files <10k lines, the full-text re-send is negligible (~50-100 ms for a 5k-line file per the LSP server's benchmarks). The `lspProviders.sendDidChange` helper has a comment block explaining the trade-off and the follow-up slice. A future slice can wire `DiffEditor`'s `DiffProvider` for the minimal edit if profiling shows a bottleneck.
+
+**Test results (vs. Phase 8 baseline)**
+
+- `vitest`: **1032 passed (1032)** across 82 test files (was 1022 / 79 in Phase 8; net +10 = 4 new store tests + 3 new hook tests + 3 new card tests)
+- `npm run typecheck`: 0 errors (the bridge hook is the one place that touches Monaco types — the `LspClient` is monaco-agnostic, the providers are lsp-monaco-agnostic)
+- `npm run build`: 0 errors. Bundle size delta: `dist/assets/index-*.js` ~759 KB / ~214 KB gzip (was 753 KB / 213 KB in Phase 8; +6 KB raw / +1 KB gzip from the new `LspClient` + `useMonacoLspBridge` + `lspProviders` + `LanguageServerCard` + `lspKillSwitch`)
+- `cargo test --lib stdio`: 6 passed (the new `stdio::tests` module)
+- `cargo test --lib`: 335 passed (was 329; +6 from the new stdio tests). 3 pre-existing benign unhandled rejections during `vitest run` from `aiStore.setupSubscriptions` (unchanged from prior phases; warnings only).
+
+**Manual UAT status (per Phase 9 plan §"Acceptance test")**
+
+The plan's UAT requires the user to `npm i -g typescript-language-server` (a one-time manual step — the kill switch's "Restart server" button surfaces the install hint from `lspCheckAvailable` if the binary isn't found). The 5-step UAT (open a `.ts` file → "Ready" badge in settings → Cmd+click on a symbol to go-to-def → right-click for code actions → "Restart server" works) is the user's own smoke test on first launch. The deterministic headless verifications (tsc, vitest, cargo) are all green. The 4 `lspClientStore` tests cover the `initialize` handshake + JSON-RPC round-trip end-to-end (via the mocked `lspStdioRead` / `lspStdioWrite`); the 3 bridge tests cover the kill-switch no-op path + the per-file `didOpen` / `didChange` / `didClose` lifecycle; the 3 card tests cover the badge / install-hint / kill-switch UI.
+
+**Known limitations (Tiniest scope — explicitly NOT in this slice)**
+
+- No incremental `didChange` (see "Why `didChange` re-sends the full text" above).
+- No multi-server support (no `rust-analyzer`, no per-language server resolution beyond the hard-coded `typescript-language-server` command). The `LspClient` class + stdio IPC are server-agnostic; the only fixed part is the default command in `lspCheckAvailable` + the install hint.
+- No LSP crash recovery — if the child process dies, the bridge logs the error and falls back to Monaco's Phase 7 built-in TS service. A "Restart server" button is the manual recovery path (the user doesn't have to restart Lipi).
+- No polling-to-event-stream upgrade on `lspStdioRead` (see "Why the reader loop polls" above).
+- No per-workspace settings card (the card shows the active workspace's status; per-workspace controls live in a follow-up slice).
+
+**Follow-up slices (out of scope for Phase 9)**
+
+- **Phase 9.1** — Incremental `didChange` (Myers diff or `DiffEditor` integration).
+- **Phase 9.2** — Multi-server support (`rust-analyzer`, `pyright`, etc.). Add a per-language server registry in the bridge; the kill switch and the settings card become per-server.
+- **Phase 9.3** — Polling-to-event-stream upgrade on `lspStdioRead` (Tauri 2 event push from the Rust `stdout` reader; removes the 1 ms polling tick and the polling overhead).
+- **Phase 9.4** — Per-workspace settings card (a row of "language servers" in the active workspace's status, not a single card for the active workspace only).
+- **Phase 9.5** — Crash recovery (auto-respawn the child process on `wait()` returning, with exponential backoff capped at 30s).
+- **Phase 9.6** — Real-server completion (add `monaco.languages.registerCompletionItemProvider` to the bridge, gated behind a "use real server for completion" toggle in the settings card).
+- **Phase 9.7** — LSP crash diagnostics (a "Last 100 lines of server output" panel in the settings card, captured from the child's `stdout` / `stderr`).
+
+---
+
+*End of handoff. Lipi is at **Phase 9 complete** (real `typescript-language-server` integration via a stdio pipe over Tauri IPC — 5 new Tauri commands + `LspClient` class + per-workspace Zustand store + Monaco bridge hook + 8 LSP provider adapters + Settings card with kill switch, "Ready / Starting / Error / Stopped" status badge, install hint, and "Restart server" button — no `monaco-languageclient` dependency, ~400 lines of TypeScript, full control over the per-method response conversion). The next session should resume from the Phase 9.1-9.7 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.34.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

@@ -33,6 +33,7 @@ import { CustomToolEditor } from './CustomToolEditor';
 import { OnDeviceCard } from './components/OnDeviceCard';
 import { WebSpeechCard } from './components/WebSpeechCard';
 import { NativeDictationCard } from './components/NativeDictationCard';
+import { LanguageServerCard } from './components/LanguageServerCard';
 import { PrivacyDataCard } from './components/PrivacyDataCard';
 import { LicenseCard } from './components/LicenseCard';
 import type { LipiToolEntry } from '@/ipc';
@@ -194,6 +195,20 @@ export function SettingsProvider() {
               `status: 'not-applicable'` and shows
               the iOS / Android-only blurb. */}
           <NativeDictationCard />
+          {/* Phase 9 (Tiniest scope) — Editor /
+              Language Servers section. Sits below
+              the Voice section and above the AI
+              Tools section because the language
+              server is a per-workspace editor
+              feature, not an AI provider. */}
+          <h2 className={styles.sectionHeading}>Editor</h2>
+          <p className={styles.sectionLede}>
+            Editor-level integrations. The TypeScript language server adds
+            real cross-file go-to-def, find-references, rename, code actions,
+            signature help, and inlay hints on top of Monaco&apos;s built-in
+            service.
+          </p>
+          <LanguageServerCard />
           <h2 className={styles.sectionHeading}>AI Tools</h2>
           <p className={styles.sectionLede}>
             The AI can use these built-in tools to help with your code.

@@ -68,6 +68,45 @@ vi.mock('@/ipc/lsp', () => {
         resolvedCommand: 'typescript-language-server',
       };
     }),
+    // Phase 9.2b — the store now calls
+    // `kindToSpawnSpec` (a pure function over
+    // a string-literal union) instead of
+    // hard-coding the TS-LS binary. The
+    // default test mock returns the TS
+    // spawn-spec, matching the pre-9.2b
+    // wire format. Tests that want a
+    // different kind (e.g. `rust_analyzer`)
+    // can override this with
+    // `mockImplementation`.
+    kindToSpawnSpec: vi.fn((kind: string) => {
+      if (kind === 'rust_analyzer') {
+        return {
+          command: 'rust-analyzer',
+          args: [],
+          installHint: 'rustup component add rust-analyzer',
+        };
+      }
+      // Phase 9.2c — `pyright` arm.
+      // Mirrors the JS
+      // `kindToSpawnSpec('pyright')` in
+      // `ipc/lsp.ts` and the Rust
+      // `server_kind_spec(Pyright).binary`
+      // in `src-tauri/src/stdio.rs`.
+      if (kind === 'pyright') {
+        return {
+          command: 'pyright-langserver',
+          args: ['--stdio'],
+          installHint: 'npm install -g pyright',
+        };
+      }
+      // `typescript` (default) + fallback
+      // for any unexpected kind
+      return {
+        command: 'typescript-language-server',
+        args: ['--stdio'],
+        installHint: 'npm install -g typescript-language-server',
+      };
+    }),
     lspStdioRead: vi.fn(async (_handleId: string, maxBytes: number) => {
       // Pop up to `maxBytes` from the
       // queue. If the queue is empty, return
@@ -238,6 +277,20 @@ const INIT_RESPONSE = {
 // (closure-scoped, so it has to live on
 // the actions object, not in `setState`).
 import { useLspClientStore as importedStore } from './lspClientStore';
+import { workspaceKindKey } from './lspClientStore';
+// Phase 9.2d — every test fixture below
+// that previously used a bare
+// `'/workspace/x'` string as a map key now
+// uses `'/workspace/x')`, which
+// produces the composite key
+// `'/workspace/x//typescript'`. The TS kind
+// is the implicit default for pre-9.2b call
+// sites; all the legacy tests use the
+// default kind. Tests that need a
+// non-default kind import `workspaceKindKey`
+// directly and pass the kind explicitly.
+const tsKey = (workspaceRoot: string): string =>
+  workspaceKindKey(workspaceRoot, 'typescript');
 let useLspClientStore: typeof importedStore = importedStore;
 
 beforeEach(() => {
@@ -274,8 +327,22 @@ beforeEach(() => {
   nextHandleIdCounter = 1;
   // Default the kill switch ON for most
   // tests; per-test overrides set it OFF
-  // and back as needed.
-  localStorage.setItem('lipi:lsp:useRealServer:v1', 'true');
+  // and back as needed. Phase 9.2e — the
+  // v2 per-kind record is the source of
+  // truth; we seed it explicitly to keep
+  // tests independent of the v1→v2
+  // migration logic (so a stray v1 key
+  // from another suite can't bleed in).
+  localStorage.setItem(
+    'lipi:lsp:useRealServerByKind:v1',
+    JSON.stringify({
+      typescript: true,
+      rust_analyzer: true,
+      pyright: true,
+      unknown: true,
+    }),
+  );
+  localStorage.removeItem('lipi:lsp:useRealServer:v1');
   vi.clearAllMocks();
 });
 
@@ -304,6 +371,7 @@ afterEach(() => {
   // Drain any pending crash listeners.
   crashListeners = [];
   localStorage.removeItem('lipi:lsp:useRealServer:v1');
+  localStorage.removeItem('lipi:lsp:useRealServerByKind:v1');
 });
 
 describe('lspClientStore', () => {
@@ -319,7 +387,7 @@ describe('lspClientStore', () => {
       .getState()
       .getOrCreate('/workspace/a');
     expect(client).toBeDefined();
-    expect(useLspClientStore.getState().statusByWorkspace.get('/workspace/a')).toBe(
+    expect(useLspClientStore.getState().statusByWorkspace.get(tsKey('/workspace/a'))).toBe(
       'ready',
     );
   });
@@ -345,8 +413,8 @@ describe('lspClientStore', () => {
     // flips the status; the async shutdown
     // continues in the background.
     void useLspClientStore.getState().dispose('/workspace/a');
-    expect(useLspClientStore.getState().clients.has('/workspace/a')).toBe(false);
-    expect(useLspClientStore.getState().statusByWorkspace.get('/workspace/a')).toBe(
+    expect(useLspClientStore.getState().clients.has(tsKey('/workspace/a'))).toBe(false);
+    expect(useLspClientStore.getState().statusByWorkspace.get(tsKey('/workspace/a'))).toBe(
       'stopped',
     );
   });
@@ -364,8 +432,8 @@ describe('lspClientStore', () => {
       await expect(
         useLspClientStore.getState().getOrCreate('/workspace/b'),
       ).rejects.toThrow();
-      expect(useLspClientStore.getState().clients.has('/workspace/b')).toBe(false);
-      expect(useLspClientStore.getState().statusByWorkspace.get('/workspace/b')).toBe(
+      expect(useLspClientStore.getState().clients.has(tsKey('/workspace/b'))).toBe(false);
+      expect(useLspClientStore.getState().statusByWorkspace.get(tsKey('/workspace/b'))).toBe(
         'error',
       );
     } finally {
@@ -427,8 +495,8 @@ describe('lspClientStore', () => {
       stderrTail: 'panic at typescript: out of memory',
     });
     const state = useLspClientStore.getState();
-    expect(state.statusByWorkspace.get('/workspace/crash-1')).toBe('error');
-    const info = state.crashByWorkspace.get('/workspace/crash-1');
+    expect(state.statusByWorkspace.get(tsKey('/workspace/crash-1'))).toBe('error');
+    const info = state.crashByWorkspace.get(tsKey('/workspace/crash-1'));
     expect(info).toBeDefined();
     expect(info?.exitStatus).toBe(139);
     expect(info?.stderrTail).toBe('panic at typescript: out of memory');
@@ -445,7 +513,7 @@ describe('lspClientStore', () => {
     });
     const info = useLspClientStore
       .getState()
-      .crashByWorkspace.get('/workspace/crash-2');
+      .crashByWorkspace.get(tsKey('/workspace/crash-2'));
     expect(info).toBeDefined();
     // First crash on the backoff ladder
     // is 1s (the smallest step). The
@@ -456,12 +524,22 @@ describe('lspClientStore', () => {
   });
 
   it('auto-respawn cancels when the kill switch is OFF', async () => {
-    // The kill switch is OFF. Even on a
-    // crash, the store must NOT schedule a
+    // The kill switch is OFF (Phase 9.2e
+    // — per-kind; we disable the TS kind
+    // for this test). Even on a crash,
+    // the store must NOT schedule a
     // respawn (the user has explicitly
-    // disabled the LSP integration for this
-    // session).
-    localStorage.setItem('lipi:lsp:useRealServer:v1', 'false');
+    // disabled the LSP integration for
+    // this kind).
+    localStorage.setItem(
+      'lipi:lsp:useRealServerByKind:v1',
+      JSON.stringify({
+        typescript: false,
+        rust_analyzer: true,
+        pyright: true,
+        unknown: true,
+      }),
+    );
     await useLspClientStore.getState().getOrCreate('/workspace/crash-3');
     await waitForCrashListener();
     fireCrash({
@@ -473,8 +551,8 @@ describe('lspClientStore', () => {
     // Status is still `error` (the crash
     // happened) but no respawn is
     // scheduled.
-    expect(state.statusByWorkspace.get('/workspace/crash-3')).toBe('error');
-    const info = state.crashByWorkspace.get('/workspace/crash-3');
+    expect(state.statusByWorkspace.get(tsKey('/workspace/crash-3'))).toBe('error');
+    const info = state.crashByWorkspace.get(tsKey('/workspace/crash-3'));
     expect(info).toBeDefined();
     expect(info?.respawnInMs).toBeNull();
   });
@@ -495,7 +573,7 @@ describe('lspClientStore', () => {
     // a stale "crashed" badge for a
     // workspace the user closed).
     expect(
-      useLspClientStore.getState().crashByWorkspace.has('/workspace/crash-4'),
+      useLspClientStore.getState().crashByWorkspace.has(tsKey('/workspace/crash-4')),
     ).toBe(false);
     // Wait past the 1s backoff to confirm
     // no respawn happened. We use a real
@@ -510,7 +588,7 @@ describe('lspClientStore', () => {
     // no auto-respawn should have created
     // a new client for this workspace.
     expect(
-      useLspClientStore.getState().clients.has('/workspace/crash-4'),
+      useLspClientStore.getState().clients.has(tsKey('/workspace/crash-4')),
     ).toBe(false);
   });
 
@@ -529,17 +607,17 @@ describe('lspClientStore', () => {
     await useLspClientStore.getState().respawn('/workspace/crash-5');
     const state = useLspClientStore.getState();
     // Fresh client in the map.
-    const fresh = state.clients.get('/workspace/crash-5');
+    const fresh = state.clients.get(tsKey('/workspace/crash-5'));
     expect(fresh).toBeDefined();
     expect(fresh?.handleId).toBe('mock_handle_2');
     // The status is `ready` (the new
     // client's `initialize` handshake
     // completed — the mock auto-replies
     // to `initialize`).
-    expect(state.statusByWorkspace.get('/workspace/crash-5')).toBe('ready');
+    expect(state.statusByWorkspace.get(tsKey('/workspace/crash-5'))).toBe('ready');
     // The crash info is cleared on a
     // successful respawn.
-    expect(state.crashByWorkspace.has('/workspace/crash-5')).toBe(false);
+    expect(state.crashByWorkspace.has(tsKey('/workspace/crash-5'))).toBe(false);
   });
 
   it('crash event for an unknown handleId is ignored (stale event from a disposed workspace)', async () => {
@@ -569,11 +647,11 @@ describe('lspClientStore', () => {
     const state = useLspClientStore.getState();
     // `/workspace/other` is unaffected
     // (still `ready`).
-    expect(state.statusByWorkspace.get('/workspace/other')).toBe('ready');
+    expect(state.statusByWorkspace.get(tsKey('/workspace/other'))).toBe('ready');
     // `/workspace/never-existed` has no
     // crash info and no client.
-    expect(state.clients.has('/workspace/never-existed')).toBe(false);
-    expect(state.crashByWorkspace.has('/workspace/never-existed')).toBe(false);
+    expect(state.clients.has(tsKey('/workspace/never-existed'))).toBe(false);
+    expect(state.crashByWorkspace.has(tsKey('/workspace/never-existed'))).toBe(false);
   });
 
   it('consecutive crashes escalate the backoff and stop auto-respawning after the cap', async () => {
@@ -597,7 +675,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .crashByWorkspace.get('/workspace/crash-6')?.respawnInMs,
+        .crashByWorkspace.get(tsKey('/workspace/crash-6'))?.respawnInMs,
     ).toBe(1_000);
     // Second crash (same handleId — the
     // counter lives in `crashByWorkspace`):
@@ -610,7 +688,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .crashByWorkspace.get('/workspace/crash-6')?.respawnInMs,
+        .crashByWorkspace.get(tsKey('/workspace/crash-6'))?.respawnInMs,
     ).toBe(2_000);
     // Third crash: 4s.
     fireCrash({
@@ -621,7 +699,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .crashByWorkspace.get('/workspace/crash-6')?.respawnInMs,
+        .crashByWorkspace.get(tsKey('/workspace/crash-6'))?.respawnInMs,
     ).toBe(4_000);
     // Fourth: 8s.
     fireCrash({
@@ -632,7 +710,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .crashByWorkspace.get('/workspace/crash-6')?.respawnInMs,
+        .crashByWorkspace.get(tsKey('/workspace/crash-6'))?.respawnInMs,
     ).toBe(8_000);
     // Fifth: cap reached (30s) — no more
     // auto-respawn.
@@ -644,7 +722,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .crashByWorkspace.get('/workspace/crash-6')?.respawnInMs,
+        .crashByWorkspace.get(tsKey('/workspace/crash-6'))?.respawnInMs,
     ).toBeNull();
   });
 
@@ -668,7 +746,7 @@ describe('lspClientStore', () => {
     });
     const entry = useLspClientStore
       .getState()
-      .lspOutputByWorkspace.get('/workspace/log-1');
+      .lspOutputByWorkspace.get(tsKey('/workspace/log-1'));
     expect(entry).toBeDefined();
     expect(entry!.lines).toEqual([
       'info: parsed foo.ts',
@@ -690,7 +768,7 @@ describe('lspClientStore', () => {
     });
     let entry = useLspClientStore
       .getState()
-      .lspOutputByWorkspace.get('/workspace/log-2');
+      .lspOutputByWorkspace.get(tsKey('/workspace/log-2'));
     expect(entry!.lines).toEqual([]);
     expect(entry!.partialLine).toBe(
       'error: cannot find module "fo',
@@ -702,7 +780,7 @@ describe('lspClientStore', () => {
     });
     entry = useLspClientStore
       .getState()
-      .lspOutputByWorkspace.get('/workspace/log-2');
+      .lspOutputByWorkspace.get(tsKey('/workspace/log-2'));
     expect(entry!.lines).toEqual([
       'error: cannot find module "foo.ts"',
       '  at line 42',
@@ -737,7 +815,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .lspOutputByWorkspace.has('/workspace/log-3'),
+        .lspOutputByWorkspace.has(tsKey('/workspace/log-3')),
     ).toBe(true);
     await useLspClientStore
       .getState()
@@ -745,7 +823,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .lspOutputByWorkspace.has('/workspace/log-3'),
+        .lspOutputByWorkspace.has(tsKey('/workspace/log-3')),
     ).toBe(false);
   });
 
@@ -760,7 +838,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .lspOutputByWorkspace.get('/workspace/log-4')!.lines
+        .lspOutputByWorkspace.get(tsKey('/workspace/log-4'))!.lines
         .length,
     ).toBe(3);
     // Track that we did NOT touch the IPC.
@@ -778,7 +856,7 @@ describe('lspClientStore', () => {
     expect(
       useLspClientStore
         .getState()
-        .lspOutputByWorkspace.has('/workspace/log-4'),
+        .lspOutputByWorkspace.has(tsKey('/workspace/log-4')),
     ).toBe(false);
   });
 
@@ -792,7 +870,7 @@ describe('lspClientStore', () => {
       useLspClientStore
         .getState()
         .lspOutputByWorkspace.has(
-          '/workspace/never-touched',
+          tsKey('/workspace/never-touched'),
         ),
     ).toBe(false);
   });
@@ -812,7 +890,7 @@ describe('lspClientStore', () => {
     await new Promise((r) => setTimeout(r, 10));
     const entry = useLspClientStore
       .getState()
-      .lspOutputByWorkspace.get('/workspace/log-5');
+      .lspOutputByWorkspace.get(tsKey('/workspace/log-5'));
     expect(entry).toBeDefined();
     expect(entry!.lines).toEqual(['pre-subscribe line']);
   });
@@ -832,7 +910,7 @@ describe('lspClientStore', () => {
     }
     const entry = useLspClientStore
       .getState()
-      .lspOutputByWorkspace.get('/workspace/log-6');
+      .lspOutputByWorkspace.get(tsKey('/workspace/log-6'));
     expect(entry!.lines.length).toBe(1000);
     // The first 5 should be dropped; the
     // oldest line now is `line 5`.

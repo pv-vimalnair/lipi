@@ -43,6 +43,7 @@
 
 import { create } from 'zustand';
 import {
+  kindToSpawnSpec,
   lspRunStdio,
   lspStdioRead,
   lspStdioWrite,
@@ -50,6 +51,7 @@ import {
   lspStdioReadStderrLog,
   onLspCrashed,
   onLspLog,
+  type LspServerKind,
   type OnLspCrashedPayload,
   type OnLspLogPayload,
   type RunStdioResult,
@@ -74,61 +76,41 @@ import { getUseRealServer } from '@/screens/EditorWorkspace/state/lspKillSwitch'
 export type LspStatus = 'stopped' | 'starting' | 'ready' | 'error';
 
 /**
- * Phase 9.2 — the *kind* of language server
- * that should serve a given file. The current
- * build only wires up `'typescript'` (the
- * bridge gates every other kind to a no-op);
- * the other values exist so the store /
- * bridge architecture is multi-server from
- * day one, and adding `rust-analyzer` or
- * `pyright` in a future slice is a Rust-side
- * addition, not a refactor of the TS code.
+ * Re-export the canonical `LspServerKind` from
+ * the IPC module. The IPC is the source of
+ * truth (the Rust `LspServerKind` enum in
+ * `src-tauri/src/stdio.rs` defines what
+ * variants are wire-legal; the TS type in
+ * `ipc/lsp.ts` mirrors them with a
+ * string-literal union). The store imports the
+ * same type, so changes to the variant list
+ * (Phase 9.2c+) only need to be made in one
+ * place. Existing callers that import
+ * `LspServerKind` from `lspClientStore` keep
+ * working through this re-export — the
+ * re-export preserves the public surface even
+ * though the type itself moved.
  *
- *   - `'typescript'` — `typescript-language-server`
- *     (the vscode-langservers-extracted Node
- *     CLI). Currently the only kind the
- *     bridge actually spawns.
- *   - `'rust_analyzer'` — `rust-analyzer` (a
- *     Rust binary that speaks LSP over stdio).
- *     **Not yet wired in this slice**; the
- *     inferrer returns this for `.rs` files
- *     so a future Rust slice can pick it up
- *     without a TS refactor.
- *   - `'pyright'` — `pyright-langserver` (a
- *     Node CLI). **Not yet wired**; the
- *     inferrer returns this for `.py` /
- *     `.pyi` files.
- *   - `'unknown'` — anything else (Markdown,
- *     JSON, CSS, HTML, plain text, …). The
- *     bridge treats this as "no real server
- *     for this file"; Monaco's built-in
- *     language services handle the file.
- *
- * The `'unknown'` value is **load-bearing**:
- * it's not an error case. A `.md` file in a
- * TypeScript workspace should NOT spawn a
- * TypeScript server (the server has no model
- * to attach, the user gets no useful
- * features, and we'd be wasting a child
- * process). `unknown` is the bridge's
- * signal to be a no-op.
+ * The doc comment that used to live here is
+ * preserved on the IPC re-export
+ * (`ipc/lsp.ts::LspServerKind`).
  */
-export type LspServerKind =
-  | 'typescript'
-  | 'rust_analyzer'
-  | 'pyright'
-  | 'unknown';
+export type { LspServerKind } from '@/ipc/lsp';
 
 /**
  * The set of server kinds the *current*
- * build wires up. Future slices will add
- * `'rust_analyzer'` and `'pyright'` here
- * when their Rust-side `lsp_run_stdio` arms
- * land. The bridge reads this constant to
- * gate `getOrCreate` calls.
+ * build wires up. Phase 9.2b added
+ * `'rust_analyzer'` and Phase 9.2c added
+ * `'pyright'`. The Rust `lsp_check_available`
+ * arm + the JS `kindToSpawnSpec` entry are
+ * both in place for all three. The bridge
+ * reads this constant to gate `getOrCreate`
+ * calls.
  */
 export const SUPPORTED_LSP_SERVER_KINDS: readonly LspServerKind[] = [
   'typescript',
+  'rust_analyzer',
+  'pyright',
 ] as const;
 
 /**
@@ -255,6 +237,77 @@ const RESPAWN_BACKOFF_STEPS_MS: readonly number[] = [
 /** How many consecutive crashes at the cap before
  *  the store stops auto-respawning. */
 const MAX_CONSECUTIVE_CRASHES = 5;
+
+/** Phase 9.2d — the composite key shape for
+ *  the per-workspace maps. Encodes
+ *  `(workspaceRoot, kind)` as
+ *  `${root}//${kind}`. The `//` separator is
+ *  illegal in a Windows path component (the
+ *  closest thing is the `\\?\` UNC prefix,
+ *  which we don't use — workspaces are
+ *  always local folders in this app) so the
+ *  key is unambiguous and round-trippable
+ *  for the local-folder case.
+ *
+ *  Why a string and not a nested `Map<string,
+ *  Map<LspServerKind, ...>>`?
+ *
+ *   - **Zustand selectors** are simpler with
+ *     flat maps — `s.clients.get(key)` is a
+ *     one-step lookup, not a two-step
+ *     `s.clients.get(root)?.get(kind)` that
+ *     has to handle the missing-parent case.
+ *   - **Maps-of-maps** are harder to *clone*
+ *     in the `set((state) => ...)` style we
+ *     use everywhere — `new Map(state.clients)`
+ *     with a flat `Map` is a one-liner; with
+ *     a nested `Map` you'd have to clone
+ *     *each* inner map too (or do an
+ *     `immer`-style mutation).
+ *   - **Tests** can pin a key with a single
+ *     `expect(s.clients.has(workspaceKindKey
+ *     (root, kind))).toBe(true)` — no extra
+ *     shape to teach.
+ *
+ *  Exported for the test suite (the
+ *  `lspClientStore.test.ts` and bridge test
+ *  files use it to build expected keys).
+ */
+export function workspaceKindKey(
+  workspaceRoot: string,
+  kind: LspServerKind,
+): string {
+  return `${workspaceRoot}//${kind}`;
+}
+
+/** Phase 9.2d — parse a `workspaceKindKey` back
+ *  into its parts. Returns `null` if the key
+ *  doesn't match the `${root}//${kind}` shape
+ *  (which can happen for stale test fixtures
+ *  that pre-date 9.2d). Used by the iteration
+ *  helpers (`disposeAllKindsForWorkspace`) to
+ *  filter the maps. */
+export interface ParsedWorkspaceKindKey {
+  workspaceRoot: string;
+  kind: LspServerKind;
+}
+export function parseWorkspaceKindKey(
+  key: string,
+): ParsedWorkspaceKindKey | null {
+  const sep = key.lastIndexOf('//');
+  if (sep === -1) return null;
+  const root = key.slice(0, sep);
+  const kind = key.slice(sep + 2);
+  if (
+    kind === 'typescript' ||
+    kind === 'rust_analyzer' ||
+    kind === 'pyright' ||
+    kind === 'unknown'
+  ) {
+    return { workspaceRoot: root, kind };
+  }
+  return null;
+}
 
 /** Per-workspace crash details. Set when an
  *  `lsp://crashed` event fires and the store
@@ -506,8 +559,25 @@ export class LspClient {
    *  client; methods close over `this`. */
   readonly transport: LspTransport;
 
-  constructor(opts: { workspaceRoot: string }) {
+  /** Phase 9.2b — the kind of language server
+   *  this client spawns. Set by the constructor;
+   *  `start()` uses it (via `kindToSpawnSpec`) to
+   *  pick the right binary. The bridge passes
+   *  the kind it inferred from the file URI; tests
+   *  default to `'typescript'` for backward compat. */
+  readonly kind: LspServerKind;
+
+  constructor(opts: {
+    workspaceRoot: string;
+    kind?: LspServerKind;
+  }) {
     this.workspaceRoot = opts.workspaceRoot;
+    // Default to `'typescript'` for backward
+    // compat (the pre-9.2b client was
+    // type-script-only and tests still use
+    // single-arg constructors). New callers
+    // (the bridge) pass the kind explicitly.
+    this.kind = opts.kind ?? 'typescript';
     this.transport = {
       read: () => this._transportRead(),
       write: (msg) => this._transportWrite(msg),
@@ -545,18 +615,29 @@ export class LspClient {
    */
   async start(): Promise<NonNullable<LspClient['initializeResult']>> {
     this._setStatus('starting');
+    // Phase 9.2b — pick the spawn spec for
+    // *this* client's kind. The Rust
+    // `lsp_run_stdio` is kind-agnostic (it
+    // spawns whatever command we pass), so all
+    // the per-kind logic lives on the JS side.
+    // The bridge shouldn't have constructed an
+    // `LspClient` with `kind: 'unknown'` (the
+    // `isSupportedKind` gate rejects those),
+    // but we defensively fall through to a
+    // no-op spec in that case.
+    const spec = kindToSpawnSpec(this.kind);
     let spawn: RunStdioResult;
     try {
       spawn = await lspRunStdio({
-        command: 'typescript-language-server',
-        args: ['--stdio'],
+        command: spec.command,
+        args: spec.args,
         cwd: this.workspaceRoot,
       });
     } catch (e) {
       this._setStatus('error');
       throw new Error(
-        `Failed to spawn typescript-language-server: ${(e as Error).message}. ` +
-          `Install with: npm install -g typescript-language-server`,
+        `Failed to spawn ${spec.command || 'lsp server'}: ${(e as Error).message}. ` +
+          `Install with: ${spec.installHint}`,
       );
     }
     this.handleId = spawn.handleId;
@@ -994,31 +1075,44 @@ function pathToFileUri(absolutePath: string): string {
 
 interface LspClientStoreState {
   /**
-   * One LspClient per workspace. Keyed by the
-   * absolute workspace root path.
+   * Phase 9.2d — one LspClient per
+   * `(workspaceRoot, kind)` pair. Keyed by
+   * `workspaceKindKey(root, kind)`. A
+   * workspace can now have one client per
+   * `LspServerKind` running side-by-side
+   * (e.g. a TS client + a rust-analyzer
+   * client + a pyright client in the same
+   * workspace, all live). The bridge picks
+   * the right client for the file the
+   * editor is open on.
+   *
+   * 9.2b's "store is still keyed by
+   * workspaceRoot" comment is now stale —
+   * the store is per-(root, kind).
    */
   clients: Map<string, LspClient>;
 
   /**
-   * The per-workspace status. Mirrored from
-   * `LspClient.status` so React components can
-   * subscribe to it without owning a `LspClient`
-   * directly.
+   * The per-(root, kind) status. Mirrored
+   * from `LspClient.status` so React
+   * components can subscribe to it without
+   * owning a `LspClient` directly.
    */
   statusByWorkspace: Map<string, LspStatus>;
 
   /**
-   * Per-workspace crash details. Set when an
-   * `lsp://crashed` event fires; cleared when a
-   * new client successfully transitions to
-   * `ready` (or when the workspace is disposed).
+   * Per-(root, kind) crash details. Set
+   * when an `lsp://crashed` event fires;
+   * cleared when a new client successfully
+   * transitions to `ready` (or when the
+   * (root, kind) pair is disposed).
    */
   crashByWorkspace: Map<string, LspCrashInfo>;
 
   /**
-   * Phase 9.7 — per-workspace live server
-   * output. Populated by the `lsp://log`
-   * subscription; read by the
+   * Phase 9.7 — per-(root, kind) live
+   * server output. Populated by the
+   * `lsp://log` subscription; read by the
    * `LanguageServerCard`'s "Server output"
    * panel. Cleared on dispose and on a
    * successful restart (so a fresh child
@@ -1027,45 +1121,110 @@ interface LspClientStoreState {
   lspOutputByWorkspace: Map<string, LspOutputEntry>;
 
   /**
-   * Get the existing LspClient for a workspace,
-   * or create a new one (and start it
+   * Get the existing LspClient for a
+   * `(workspaceRoot, kind)` pair, or
+   * create a new one (and start it
    * asynchronously). The first call to
-   * `getOrCreate` for a workspace spawns the
-   * child; subsequent calls return the same
-   * client.
+   * `getOrCreate` for a pair spawns the
+   * child; subsequent calls return the
+   * same client.
+   *
+   * Phase 9.2b added the `kind` argument.
+   * Phase 9.2d made it load-bearing — the
+   * `clients` map is now keyed by
+   * `(workspaceRoot, kind)`, so two
+   * different kinds for the same workspace
+   * produce two different clients.
+   *
+   * `kind` defaults to `'typescript'` for
+   * backward compat with the pre-9.2b
+   * single-arg call sites (the existing
+   * test fixtures). New callers (the
+   * bridge) pass the kind explicitly.
    */
-  getOrCreate(workspaceRoot: string): Promise<LspClient>;
+  getOrCreate(
+    workspaceRoot: string,
+    kind?: LspServerKind,
+  ): Promise<LspClient>;
 
   /**
-   * Dispose the LspClient for a workspace.
-   * Sends `shutdown` + `exit`, closes the
-   * handle, removes the client from the map,
-   * and cancels any pending auto-respawn.
+   * Dispose the LspClient for a
+   * `(workspaceRoot, kind)` pair. Sends
+   * `shutdown` + `exit`, closes the
+   * handle, removes the client from the
+   * map, and cancels any pending
+   * auto-respawn.
+   *
+   * `kind` defaults to `'typescript'` (see
+   * `getOrCreate` for the rationale).
+   *
+   * Phase 9.2d — there is also
+   * `disposeAllKindsForWorkspace(root)`
+   * for callers that want to nuke every
+   * client in a workspace (the card's
+   * kill-switch path). The two functions
+   * are distinct: `dispose` is a
+   * single-pair teardown (used by
+   * `respawn` and by the bridge when the
+   * user closes a single editor tab);
+   * `disposeAllKindsForWorkspace` is a
+   * workspace-wide teardown.
    */
-  dispose(workspaceRoot: string): Promise<void>;
+  dispose(
+    workspaceRoot: string,
+    kind?: LspServerKind,
+  ): Promise<void>;
 
   /**
-   * Force an immediate respawn of a workspace's
-   * client. Cancels any pending auto-respawn,
-   * disposes the current client, and starts a
-   * fresh one. The settings card's "Restart
+   * Phase 9.2d — dispose **every** client
+   * for a workspace, regardless of kind.
+   * Used by the settings card's kill-switch
+   * path (the user clicks "Stop all servers"
+   * and we shut down the TS one, the
+   * rust-analyzer one, and the pyright one
+   * in one go).
+   *
+   * Idempotent — no-op if the workspace has
+   * no live clients. Resolves once every
+   * underlying `dispose` has finished.
+   */
+  disposeAllKindsForWorkspace(workspaceRoot: string): Promise<void>;
+
+  /**
+   * Force an immediate respawn of a
+   * `(workspaceRoot, kind)` pair. Cancels
+   * any pending auto-respawn, disposes the
+   * current client, and starts a fresh
+   * one. The settings card's "Restart
    * server" button calls this.
    *
    * The new client's `consecutiveCrashes`
    * counter is reset to 0 (a manual restart
-   * is a "I know what I'm doing" signal — the
-   * auto-respawn ladder is no longer
+   * is a "I know what I'm doing" signal —
+   * the auto-respawn ladder is no longer
    * relevant).
+   *
+   * `kind` defaults to `'typescript'`. If
+   * the user calls `respawn(root)` with no
+   * kind, we look up the (root, kind) of
+   * the most recently created client in
+   * the workspace (falling back to TS if
+   * there isn't one).
    */
-  respawn(workspaceRoot: string): Promise<void>;
+  respawn(workspaceRoot: string, kind?: LspServerKind): Promise<void>;
 
   /**
-   * Phase 9.7 — clear the per-workspace
-   * "Server output" panel. The settings card's
-   * `Clear` button calls this. Idempotent —
-   * no-op if there's no entry.
+   * Phase 9.7 — clear the per-(root, kind)
+   * "Server output" panel. The settings
+   * card's `Clear` button calls this.
+   * Idempotent — no-op if there's no entry.
+   *
+   * `kind` defaults to `'typescript'`.
    */
-  clearLspOutput(workspaceRoot: string): void;
+  clearLspOutput(
+    workspaceRoot: string,
+    kind?: LspServerKind,
+  ): void;
 
   /**
    * Test-only helper. Tears down the
@@ -1084,24 +1243,39 @@ interface LspClientStoreState {
 
 export const useLspClientStore = create<LspClientStoreState>((set, get) => {
   // Track the in-flight `start()` promise per
-  // workspace so concurrent `getOrCreate` calls
-  // (e.g. a fast workspace switch that mounts
-  // and unmounts the bridge) share a single
-  // spawn.
+  // `(workspaceRoot, kind)` pair so concurrent
+  // `getOrCreate` calls (e.g. a fast workspace
+  // switch that mounts and unmounts the
+  // bridge) share a single spawn. Phase 9.2d —
+  // keyed by `workspaceKindKey(root, kind)`
+  // (not just `workspaceRoot`) so two different
+  // kinds for the same workspace each have
+  // their own in-flight promise.
   const startPromises: Map<string, Promise<LspClient>> = new Map();
 
-  // Reverse map: handleId → workspaceRoot. The
-  // crash listener uses this to look up the
-  // affected workspace when a `lsp://crashed`
-  // event fires.
-  const handleToWorkspace: Map<string, string> = new Map();
+  // Reverse map: handleId → workspaceKindKey
+  // (`${workspaceRoot}//${kind}`). The crash
+  // + log listeners use this to look up the
+  // affected `(root, kind)` pair when a
+  // `lsp://crashed` or `lsp://log` event fires.
+  //
+  // Phase 9.2d — the value is the full key (not
+  // just `workspaceRoot`) so the listeners can
+  // flip the right per-(root, kind) status /
+  // crash / output entries. The Rust side
+  // doesn't know about kinds; the JS side
+  // has to remember.
+  const handleToWorkspaceKey: Map<string, string> = new Map();
 
   // Pending auto-respawn timers, one per
-  // workspace. Phase 9.5 — the store schedules
-  // a respawn on a backoff ladder when a child
-  // crashes; cancelling the timer (on dispose
-  // or manual restart) prevents the respawn
-  // from firing.
+  // `(workspaceRoot, kind)` pair. Phase 9.5 —
+  // the store schedules a respawn on a backoff
+  // ladder when a child crashes; cancelling
+  // the timer (on dispose or manual restart)
+  // prevents the respawn from firing. Phase
+  // 9.2d — keyed by `workspaceKindKey` so two
+  // different kinds for the same workspace
+  // can have independent timers.
   const respawnTimers: Map<string, ReturnType<typeof setTimeout>> =
     new Map();
 
@@ -1178,26 +1352,26 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
     };
   }
 
-  function clearRespawnTimer(workspaceRoot: string): void {
-    const t = respawnTimers.get(workspaceRoot);
+  function clearRespawnTimer(key: string): void {
+    const t = respawnTimers.get(key);
     if (t !== undefined) {
       clearTimeout(t);
-      respawnTimers.delete(workspaceRoot);
+      respawnTimers.delete(key);
     }
   }
 
   function scheduleRespawn(
-    workspaceRoot: string,
+    key: string,
     consecutiveCrashes: number,
   ): void {
-    clearRespawnTimer(workspaceRoot);
+    clearRespawnTimer(key);
     // Past the cap, give up auto-respawning.
     if (consecutiveCrashes >= MAX_CONSECUTIVE_CRASHES) {
       set((state) => {
         const next = new Map(state.crashByWorkspace);
-        const prev = next.get(workspaceRoot);
+        const prev = next.get(key);
         if (prev) {
-          next.set(workspaceRoot, { ...prev, respawnInMs: null });
+          next.set(key, { ...prev, respawnInMs: null });
         }
         return { crashByWorkspace: next };
       });
@@ -1210,27 +1384,37 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
     const delay = RESPAWN_BACKOFF_STEPS_MS[stepIndex]!;
     set((state) => {
       const next = new Map(state.crashByWorkspace);
-      const prev = next.get(workspaceRoot);
+      const prev = next.get(key);
       if (prev) {
-        next.set(workspaceRoot, { ...prev, respawnInMs: delay });
+        next.set(key, { ...prev, respawnInMs: delay });
       }
       return { crashByWorkspace: next };
     });
     const timer = setTimeout(() => {
-      respawnTimers.delete(workspaceRoot);
+      respawnTimers.delete(key);
       // Bail if the kill switch flipped off in
       // the interim (we don't want to respawn
-      // a server the user just disabled).
-      if (!getUseRealServer()) {
+      // a server the user just disabled). The
+      // kill switch is per-kind in Phase 9.2e;
+      // we recover the kind from the key.
+      const parsedKey = parseWorkspaceKindKey(key);
+      if (parsedKey && !getUseRealServer(parsedKey.kind)) {
         return;
       }
       // The user may have closed the workspace
       // in the meantime; the map will be empty
-      // for that workspace, so `getOrCreate`
-      // will start a fresh one. We don't need
-      // to check explicitly.
+      // for that key, so `getOrCreate` will
+      // start a fresh one. We don't need to
+      // check explicitly.
+      //
+      // Phase 9.2d — `respawn` takes a kind
+      // arg. We pass the kind we recovered from
+      // the key (parseWorkspaceKindKey).
+      const parsed = parseWorkspaceKindKey(key);
+      const workspaceRoot = parsed?.workspaceRoot ?? key;
+      const respawnKind = parsed?.kind ?? 'typescript';
       void get()
-        .respawn(workspaceRoot)
+        .respawn(workspaceRoot, respawnKind)
         .catch(() => {
           // `respawn` already routes failures
           // through the store's error path; this
@@ -1238,20 +1422,25 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
           // promise rejection.
         });
     }, delay);
-    respawnTimers.set(workspaceRoot, timer);
+    respawnTimers.set(key, timer);
   }
 
   function onChildCrashed(payload: OnLspCrashedPayload): void {
-    const workspaceRoot = handleToWorkspace.get(payload.handleId);
-    if (!workspaceRoot) {
+    const key = handleToWorkspaceKey.get(payload.handleId);
+    if (!key) {
       // Stale crash event for a handle we've
       // already disposed. Ignore.
       return;
     }
     // Honour the kill switch: if the user
     // turned the LSP off, don't auto-respawn.
-    const useReal = getUseRealServer();
-    const prevCrash = get().crashByWorkspace.get(workspaceRoot);
+    // The kill switch is per-kind in Phase
+    // 9.2e; we recover the kind from the key.
+    const parsedKey = parseWorkspaceKindKey(key);
+    const useReal = parsedKey
+      ? getUseRealServer(parsedKey.kind)
+      : true;
+    const prevCrash = get().crashByWorkspace.get(key);
     const consecutiveCrashes = (prevCrash?.consecutiveCrashes ?? 0) + 1;
     const info: LspCrashInfo = {
       stderrTail: payload.stderrTail,
@@ -1262,16 +1451,16 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
     };
     set((state) => {
       const nextStatus = new Map(state.statusByWorkspace);
-      nextStatus.set(workspaceRoot, 'error');
+      nextStatus.set(key, 'error');
       const nextCrash = new Map(state.crashByWorkspace);
-      nextCrash.set(workspaceRoot, info);
+      nextCrash.set(key, info);
       return {
         statusByWorkspace: nextStatus,
         crashByWorkspace: nextCrash,
       };
     });
     if (useReal) {
-      scheduleRespawn(workspaceRoot, consecutiveCrashes);
+      scheduleRespawn(key, consecutiveCrashes);
     }
   }
 
@@ -1286,18 +1475,22 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
   }
 
   // Phase 9.7 — `lsp://log` handler. Looks up
-  // the workspace from the handleId, splits the
-  // chunk into lines, and appends to the
-  // per-workspace entry.
+  // the (root, kind) key from the handleId,
+  // splits the chunk into lines, and appends
+  // to the per-(root, kind) entry. Phase 9.2d
+  // — the entry is keyed by the full key, not
+  // just the root, so a TS child's logs and a
+  // rust-analyzer child's logs don't share a
+  // panel.
   function onLspLogReceived(payload: OnLspLogPayload): void {
-    const workspaceRoot = handleToWorkspace.get(payload.handleId);
-    if (!workspaceRoot) {
+    const key = handleToWorkspaceKey.get(payload.handleId);
+    if (!key) {
       // Stale log event for a handle we've
       // already disposed. Ignore.
       return;
     }
     set((state) => {
-      const prev = state.lspOutputByWorkspace.get(workspaceRoot);
+      const prev = state.lspOutputByWorkspace.get(key);
       // We always create the entry on first
       // log so the panel has something to
       // render (even if the child is producing
@@ -1307,7 +1500,7 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       const entry = prev ?? makeEmptyOutputEntry();
       const next = appendOutputChunk(entry, payload.chunk);
       const nextMap = new Map(state.lspOutputByWorkspace);
-      nextMap.set(workspaceRoot, next);
+      nextMap.set(key, next);
       return { lspOutputByWorkspace: nextMap };
     });
   }
@@ -1329,25 +1522,33 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
     crashByWorkspace: new Map(),
     lspOutputByWorkspace: new Map(),
 
-    async getOrCreate(workspaceRoot) {
+    async getOrCreate(workspaceRoot, kind) {
       ensureCrashListener();
       ensureLogListener();
-      const existing = get().clients.get(workspaceRoot);
+      // Phase 9.2d — `kind` is now load-bearing.
+      // We default to `'typescript'` for callers
+      // that omit it (pre-9.2b call sites in the
+      // test suite). The bridge always passes an
+      // explicit kind.
+      const resolvedKind: LspServerKind = kind ?? 'typescript';
+      const key = workspaceKindKey(workspaceRoot, resolvedKind);
+      const existing = get().clients.get(key);
       if (existing) return existing;
       // If a respawn is already scheduled for
-      // this workspace, the user is opening a
-      // tab that the store has already decided
-      // to revive. Clear the timer so the
-      // scheduled respawn doesn't double-fire
-      // (it would race with the new client
-      // we're about to start). The new
-      // `getOrCreate` replaces the scheduled
-      // restart with an immediate one.
-      clearRespawnTimer(workspaceRoot);
-      const inflight = startPromises.get(workspaceRoot);
+      // this (workspaceRoot, kind) pair, the
+      // user is opening a tab that the store
+      // has already decided to revive. Clear
+      // the timer so the scheduled respawn
+      // doesn't double-fire (it would race
+      // with the new client we're about to
+      // start). The new `getOrCreate` replaces
+      // the scheduled restart with an
+      // immediate one.
+      clearRespawnTimer(key);
+      const inflight = startPromises.get(key);
       if (inflight) {
-        // A `getOrCreate` for this workspace is
-        // already in flight (or has just
+        // A `getOrCreate` for this (root, kind)
+        // is already in flight (or has just
         // resolved but hasn't been re-added to
         // the `clients` map after a `setState`
         // reset — common in tests). Wait for it
@@ -1356,9 +1557,9 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
         const client = await inflight;
         set((state) => {
           const nextClients = new Map(state.clients);
-          nextClients.set(workspaceRoot, client);
+          nextClients.set(key, client);
           const nextStatus = new Map(state.statusByWorkspace);
-          nextStatus.set(workspaceRoot, client.status);
+          nextStatus.set(key, client.status);
           return {
             clients: nextClients,
             statusByWorkspace: nextStatus,
@@ -1367,7 +1568,7 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
         return client;
       }
 
-      const client = new LspClient({ workspaceRoot });
+      const client = new LspClient({ workspaceRoot, kind: resolvedKind });
       // Mirror status changes into the store
       // before `start()` is called (so the
       // status is `starting` from the moment
@@ -1375,12 +1576,12 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       client.onStatusChange((s) => {
         set((state) => {
           const next = new Map(state.statusByWorkspace);
-          next.set(workspaceRoot, s);
+          next.set(key, s);
           // On `ready`, clear any crash info —
           // the user is back online.
           if (s === 'ready') {
             const nextCrash = new Map(state.crashByWorkspace);
-            nextCrash.delete(workspaceRoot);
+            nextCrash.delete(key);
             return {
               statusByWorkspace: next,
               crashByWorkspace: nextCrash,
@@ -1391,13 +1592,13 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       });
       set((state) => {
         const nextClients = new Map(state.clients);
-        nextClients.set(workspaceRoot, client);
+        nextClients.set(key, client);
         const nextStatus = new Map(state.statusByWorkspace);
-        nextStatus.set(workspaceRoot, client.status);
+        nextStatus.set(key, client.status);
         // Successful start → drop any crash
-        // info for this workspace.
+        // info for this (root, kind).
         const nextCrash = new Map(state.crashByWorkspace);
-        nextCrash.delete(workspaceRoot);
+        nextCrash.delete(key);
         return {
           clients: nextClients,
           statusByWorkspace: nextStatus,
@@ -1415,9 +1616,13 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
           // event for a still-spawning child
           // (none in practice — `start()`
           // awaits the spawn IPC) would
-          // otherwise be lost.
+          // otherwise be lost. Phase 9.2d —
+          // the value is the *full key* (not
+          // just the root) so the crash +
+          // log listeners can flip the right
+          // per-(root, kind) entries.
           if (client.handleId) {
-            handleToWorkspace.set(client.handleId, workspaceRoot);
+            handleToWorkspaceKey.set(client.handleId, key);
             // Phase 9.7 — drain the Rust log
             // buffer ONCE on first registration
             // to catch up on any stderr the
@@ -1441,13 +1646,13 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
                 ).decode(bytes);
                 set((state) => {
                   const prev =
-                    state.lspOutputByWorkspace.get(workspaceRoot) ??
+                    state.lspOutputByWorkspace.get(key) ??
                     makeEmptyOutputEntry();
                   const next = appendOutputChunk(prev, chunk);
                   const nextMap = new Map(
                     state.lspOutputByWorkspace,
                   );
-                  nextMap.set(workspaceRoot, next);
+                  nextMap.set(key, next);
                   return {
                     lspOutputByWorkspace: nextMap,
                   };
@@ -1471,9 +1676,9 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
           // `dispose` + `getOrCreate`.
           set((state) => {
             const nextClients = new Map(state.clients);
-            nextClients.delete(workspaceRoot);
+            nextClients.delete(key);
             const nextStatus = new Map(state.statusByWorkspace);
-            nextStatus.set(workspaceRoot, 'error');
+            nextStatus.set(key, 'error');
             return {
               clients: nextClients,
               statusByWorkspace: nextStatus,
@@ -1481,22 +1686,31 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
           });
           throw e;
         } finally {
-          startPromises.delete(workspaceRoot);
+          startPromises.delete(key);
         }
       })();
-      startPromises.set(workspaceRoot, promise);
+      startPromises.set(key, promise);
       return promise;
     },
 
-    async dispose(workspaceRoot) {
-      const client = get().clients.get(workspaceRoot);
+    async dispose(workspaceRoot, kind) {
+      // Phase 9.2d — `kind` is now load-bearing.
+      // We default to `'typescript'` for callers
+      // that omit it (pre-9.2b call sites in the
+      // test suite + the kill-switch card path,
+      // which currently nukes just the TS client).
+      // For the "kill all kinds" path, use
+      // `disposeAllKindsForWorkspace` instead.
+      const resolvedKind: LspServerKind = kind ?? 'typescript';
+      const key = workspaceKindKey(workspaceRoot, resolvedKind);
+      const client = get().clients.get(key);
       // Cancel any pending respawn for this
-      // workspace — disposing means the user
+      // (root, kind) — disposing means the user
       // doesn't want this server anymore.
-      clearRespawnTimer(workspaceRoot);
-      // Clear the handleId → workspace map.
+      clearRespawnTimer(key);
+      // Clear the handleId → workspaceKey map.
       if (client?.handleId) {
-        handleToWorkspace.delete(client.handleId);
+        handleToWorkspaceKey.delete(client.handleId);
       }
       if (!client) return;
       // Remove from the map FIRST so a concurrent
@@ -1504,20 +1718,20 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       // being-shut-down) client.
       set((state) => {
         const nextClients = new Map(state.clients);
-        nextClients.delete(workspaceRoot);
+        nextClients.delete(key);
         const nextStatus = new Map(state.statusByWorkspace);
-        nextStatus.set(workspaceRoot, 'stopped');
+        nextStatus.set(key, 'stopped');
         const nextCrash = new Map(state.crashByWorkspace);
-        nextCrash.delete(workspaceRoot);
-        // Phase 9.7 — drop the per-workspace
+        nextCrash.delete(key);
+        // Phase 9.7 — drop the per-(root, kind)
         // "Server output" entry. The child is
         // being shut down; its logs are no
         // longer relevant. A subsequent
-        // `getOrCreate` will start a fresh
-        // entry via the replay-drain in the
-        // spawn path.
+        // `getOrCreate` for the same (root, kind)
+        // will start a fresh entry via the
+        // replay-drain in the spawn path.
         const nextOutput = new Map(state.lspOutputByWorkspace);
-        nextOutput.delete(workspaceRoot);
+        nextOutput.delete(key);
         return {
           clients: nextClients,
           statusByWorkspace: nextStatus,
@@ -1527,7 +1741,7 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       });
       // Clear the `startPromises` entry so a
       // subsequent `getOrCreate` for the same
-      // workspace actually starts a fresh
+      // (root, kind) actually starts a fresh
       // client (the previous one is shutting
       // down — returning its (resolved)
       // promise would hand out a dead client).
@@ -1537,28 +1751,103 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       // `getOrCreate` path (e.g. the bridge
       // `useEffect` cleanup on workspace
       // close) — so we clear it here too.
-      startPromises.delete(workspaceRoot);
+      startPromises.delete(key);
       await client.shutdown();
     },
 
-    async respawn(workspaceRoot) {
+    async disposeAllKindsForWorkspace(workspaceRoot) {
+      // Phase 9.2d — the kill-switch path. Find
+      // every (root, *) pair that has a live
+      // client and dispose them in parallel.
+      // Status/crash/output entries for
+      // (root, *) are cleared by the per-pair
+      // `dispose` calls; this function just
+      // orchestrates the fan-out.
+      //
+      // We collect the (root, kind) pairs *before*
+      // any disposal, because each `dispose` call
+      // mutates `state.clients` and we don't want
+      // to iterate a mutating map.
+      const liveKeys: string[] = [];
+      for (const key of Array.from(get().clients.keys())) {
+        const p = parseWorkspaceKindKey(key);
+        if (p && p.workspaceRoot === workspaceRoot) {
+          liveKeys.push(key);
+        }
+      }
+      // Run all disposes concurrently. The
+      // per-pair `dispose` is idempotent for
+      // missing entries, so re-keying the map
+      // is safe.
+      await Promise.all(
+        liveKeys.map((key) => {
+          const parsed = parseWorkspaceKindKey(key);
+          // `parseWorkspaceKindKey` succeeded
+          // for every key in `liveKeys` (the
+          // loop above filtered on that), so
+          // `parsed` is non-null here.
+          return get().dispose(
+            parsed!.workspaceRoot,
+            parsed!.kind,
+          );
+        }),
+      );
+    },
+
+    async respawn(workspaceRoot, kind) {
       // Manual restart = "I know what I'm
       // doing". Drop the auto-respawn ladder.
-      clearRespawnTimer(workspaceRoot);
+      // Phase 9.2d — `kind` is now an
+      // explicit param. We default to:
+      //   1. The kind the caller passed
+      //      (the card passes it explicitly
+      //      post-9.2d).
+      //   2. The kind of the most recent
+      //      client for this root (so the
+      //      auto-respawn timer callback can
+      //      call `respawn(root)` without a
+      //      kind and still get the right
+      //      target).
+      //   3. `'typescript'` (the pre-9.2b
+      //      fallback).
+      let respawnKind: LspServerKind = kind ?? 'typescript';
+      if (!kind) {
+        // Walk the map for the first client
+        // matching this root, in insertion
+        // order. The map preserves insertion
+        // order, so the first match is the
+        // most recently created client for
+        // this root (later kinds inserted on
+        // top).
+        for (const [key, client] of get().clients) {
+          const parsed = parseWorkspaceKindKey(key);
+          if (parsed && parsed.workspaceRoot === workspaceRoot) {
+            respawnKind = parsed.kind;
+            void client;
+            break;
+          }
+        }
+      }
+      const key = workspaceKindKey(workspaceRoot, respawnKind);
+      clearRespawnTimer(key);
+      // Capture the kind we resolved above
+      // for use later in the function (in
+      // case `get().clients` mutates under
+      // us).
       set((state) => {
         const nextCrash = new Map(state.crashByWorkspace);
-        nextCrash.delete(workspaceRoot);
+        nextCrash.delete(key);
         // Phase 9.7 — also wipe the "Server
         // output" panel. The new child starts
         // with a clean log; showing the
         // previous child's output would be
         // confusing (and could be from a
-        // different workspace root if the user
-        // switched). The replay-drain in
+        // different (root, kind) pair if the
+        // user switched). The replay-drain in
         // `getOrCreate` will repopulate if
         // needed.
         const nextOutput = new Map(state.lspOutputByWorkspace);
-        nextOutput.delete(workspaceRoot);
+        nextOutput.delete(key);
         return {
           crashByWorkspace: nextCrash,
           lspOutputByWorkspace: nextOutput,
@@ -1567,7 +1856,7 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       // Dispose the current client (no-op if
       // it already crashed and the dispose
       // was a no-op).
-      await get().dispose(workspaceRoot);
+      await get().dispose(workspaceRoot, respawnKind);
       // Start a fresh one. If it crashes
       // again, the crash listener will reset
       // consecutiveCrashes to 1 and start the
@@ -1575,7 +1864,11 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       // the right behaviour (we don't want
       // a single bad restart to burn through
       // all 5 attempts).
-      await get().getOrCreate(workspaceRoot);
+      //
+      // Phase 9.2b — pass the kind we captured
+      // above so the respawn target matches
+      // the original spawn spec.
+      await get().getOrCreate(workspaceRoot, respawnKind);
     },
 
     /**
@@ -1590,9 +1883,14 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
      * Idempotent: no-op if there's no entry
      * for the workspace.
      */
-    clearLspOutput(workspaceRoot) {
+    clearLspOutput(workspaceRoot, kind) {
+      // Phase 9.2d — `kind` is now an explicit
+      // param. Defaults to `'typescript'` for
+      // pre-9.2b call sites.
+      const resolvedKind: LspServerKind = kind ?? 'typescript';
+      const key = workspaceKindKey(workspaceRoot, resolvedKind);
       set((state) => {
-        if (!state.lspOutputByWorkspace.has(workspaceRoot)) {
+        if (!state.lspOutputByWorkspace.has(key)) {
           // No entry → nothing to do. Returning
           // the same state ref keeps the
           // selector shallow-equal and avoids
@@ -1600,7 +1898,7 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
           return state;
         }
         const next = new Map(state.lspOutputByWorkspace);
-        next.delete(workspaceRoot);
+        next.delete(key);
         return { lspOutputByWorkspace: next };
       });
     },
@@ -1626,7 +1924,7 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
         clearTimeout(t);
       }
       respawnTimers.clear();
-      handleToWorkspace.clear();
+      handleToWorkspaceKey.clear();
       startPromises.clear();
       if (crashUnlisten) {
         crashUnlisten();

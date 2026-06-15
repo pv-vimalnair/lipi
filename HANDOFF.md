@@ -6202,17 +6202,229 @@ no-op.
 | 114 | `'unknown'` is a **load-bearing** return value, not an error. | A `.md` file in a TypeScript workspace should not spawn a TypeScript server (the server has no model to attach, the user gets no useful features, and we'd be wasting a child process). `'unknown'` is the bridge's signal to be a no-op; Monaco's built-in language services handle the file. |
 | 115 | `SUPPORTED_LSP_SERVER_KINDS` is a **runtime constant** the bridge reads, not a hard-coded check. | A future slice that wires up `rust-analyzer` just extends the list. The bridge code doesn't change. The `isSupportedKind` test `reflects the SUPPORTED_LSP_SERVER_KINDS constant` (Decision 116) pins the invariant. |
 | 116 | The inferrer is **wider** than the supported list (returns `'rust_analyzer'` for `.rs` even though rust-analyzer isn't wired). | This decouples "what file extension maps to what server" (the inferrer's job) from "what we'll actually start" (the supported list's job). A future slice that adds `rust-analyzer` doesn't need to touch the inferrer — it just extends the supported list and adds the Rust-side spawn arm. |
-| 117 | The store's `clients` map is **still keyed by `workspaceRoot`** (not `${root}//${kind}`) in this slice. | The slice only wires up the gate; the second kind is not yet spawned. Re-keying the maps now (with only one kind in use) would be premature. A future slice (when `'rust_analyzer'` is added to `SUPPORTED_LSP_SERVER_KINDS`) re-keys the maps as part of that slice — keeps each slice small and reviewable. |
+| 117 | The store's `clients` map is **still keyed by `workspaceRoot`** (not `${root}//${kind}`) in this slice. | The slice only wires up the gate; the second kind is not yet spawned. Re-keying the maps now (with only one kind in use) would be premature. A future slice (when `'rust_analyzer'` is added to `SUPPORTED_LSP_SERVER_KINDS`) re-keys the maps as part of that slice — keeps each slice small and reviewable. *(Superseded by §9.40 below: the `workspaceRoot`-keyed map is *intentionally* preserved, and `LspClient.kind` is the per-client metadata. Re-keying the map is now Phase 9.2d.)* |
 
 **Follow-up slices (out of scope for Phase 9.2 thin slice)**
 
-- **Rust-side `lsp_run_stdio` arm for `rust-analyzer`.** Add a `LspServerKind` parameter to the `lsp_run_stdio` Tauri command; route to a Rust function that spawns `rust-analyzer` (PATH lookup → `Command::new("rust-analyzer")` → stdio pipe). Add `'rust_analyzer'` to `SUPPORTED_LSP_SERVER_KINDS`. Add `languageId` mapping to `'rust'`. Re-key the store maps to `${root}//${kind}` so a `.ts` and a `.rs` in the same workspace get distinct clients. Estimated 1 day.
+- **Rust-side `lsp_run_stdio` arm for `rust-analyzer`.** Add a `LspServerKind` parameter to the `lsp_run_stdio` Tauri command; route to a Rust function that spawns `rust-analyzer` (PATH lookup → `Command::new("rust-analyzer")` → stdio pipe). Add `'rust_analyzer'` to `SUPPORTED_LSP_SERVER_KINDS`. Add `languageId` mapping to `'rust'`. Re-key the store maps to `${root}//${kind}` so a `.ts` and a `.rs` in the same workspace get distinct clients. Estimated 1 day. *(Shipped as Phase 9.2b — see §9.40 below. The re-keying portion is deferred to Phase 9.2d; the rest is in.)*
 - **Rust-side arm for `pyright`**, mirroring the rust-analyzer slice. Adds `'pyright'` to `SUPPORTED_LSP_SERVER_KINDS`, sets up the spawn. Estimated 0.5 days.
 - **Per-kind settings UI.** The `LanguageServerCard` currently shows one row (TypeScript). Extend to 3 rows (TypeScript, Rust, Python) with per-kind status badges, kill switches, and install hints. The per-kind kill switch becomes a `Record<LspServerKind, boolean>` in `localStorage`. Estimated 1 day.
 - **Per-workspace status row of language servers** (the parked Phase 9.4). A pill in the editor's status bar showing "TS: ready / Rust: stopped / Python: error" — the store's `clients` map is the source of truth. Estimated 0.5 days.
 
+### 9.40 Phase 9.2b — SHIPPED (Rust arm for `rust-analyzer`, see CHANGELOG "Added (Phase 9.2b — Rust arm for `rust-analyzer`)")
+
+The first multi-server follow-up slice to the §9.2 thin slice. The thin slice added the taxonomy (`LspServerKind` + `inferServerKind` + the bridge gate) but only `'typescript'` was actually spawnable — every other kind was a no-op. Phase 9.2b flips the switch on `'rust_analyzer'`: a `.rs` file in a workspace now spawns a real `rust-analyzer` process and goes through the same `initialize` handshake, `didChange` loop, and crash-recovery ladder as the existing TS path.
+
+**What shipped**
+
+- **Rust `LspServerKind` enum** — new enum in `src-tauri/src/stdio.rs` with `Typescript`, `RustAnalyzer`, and `Unknown` variants. `#[serde(rename_all = "snake_case")]` so the wire format matches the TS string-literal union. The `Unknown` variant exists for the bridge's "no real server for this file" signal (a `.md` file shouldn't try to spawn anything).
+- **`CheckAvailableArgs` IPC arg** — new struct passed to `lsp_check_available` (TS side: `lspCheckAvailable({ serverKind })`). `serverKind` is `Option<LspServerKind>`; the Rust side defaults to `Typescript` when the kind is omitted (backward-compatible with the pre-9.2b kind-less call). `rename_all = "camelCase"` on the struct so the TS side can pass `serverKind: 'rust_analyzer'` (no `snake_case_to_camelCase` translation needed at the call site).
+- **`server_kind_spec(kind)` lookup** — a pure function returning `Option<ServerKindSpec { binary, install_hint }>` for each kind. Returns `None` for `Unknown` (the bridge shouldn't have called `check_available` for `Unknown`, but the function is total). The install hint for `'rust_analyzer'` is `rustup component add rust-analyzer` (the canonical install path on every `rustup`-managed toolchain).
+- **`check_available_for(spec)` helper** — the existing `which/where <binary>` + `--version` probe logic moved into a new private helper, now parameterised by `ServerKindSpec` instead of hard-coded for `typescript-language-server`. The `pub async fn check_available` dispatcher is now a thin wrapper that picks the spec and delegates.
+- **TS `kindToSpawnSpec(kind)` helper** — new pure function in `src/ipc/lsp.ts` returning `{ command, args, installHint }` for each kind. `'rust_analyzer'` returns `{ command: 'rust-analyzer', args: [], installHint: 'rustup component add rust-analyzer' }`. (Note: `rust-analyzer` speaks LSP over stdio by default — no `--stdio` flag like TS-LS needs.) The function is total — `'unknown'` and `'pyright'` both return well-formed specs so the type system stays honest.
+- **`LspClient.kind` field** — the `LspClient` class now carries a `readonly kind: LspServerKind` set in the constructor (default `'typescript'` for backward compat in tests). `start()` uses `kindToSpawnSpec(this.kind)` to pick the binary, so the same `LspClient` code path spawns both `typescript-language-server` and `rust-analyzer`.
+- **`getOrCreate(workspaceRoot, kind?)` signature** — the store action now accepts an optional `kind`. New clients use the kind; existing clients (already in the `clients` map) are returned unchanged (the `workspaceRoot → LspClient` map is the source of truth for "what's running here"; re-keying by `(workspaceRoot, kind)` is Phase 9.2d).
+- **Bridge plumbing** — the bridge passes its already-computed `initialKind` (the kind it inferred from the file URI to drive the gate) into `getOrCreate`. No new logic in the bridge; the kind is plumbed through.
+- **`respawn()` captures the previous kind** — the manual `respawn(workspaceRoot)` action now captures the previous client's `kind` *before* calling `dispose` (which removes the client from the map), so a `.rs` workspace's respawn spawns `rust-analyzer` again, not a fallback TS server. Auto-respawn goes through the same `respawn()` action, so it inherits the fix.
+- **Re-export `LspServerKind` from the store** — the canonical type lives in `@/ipc/lsp` (where the IPC contract is) and is re-exported from `lspClientStore` so existing callers (the bridge, the settings card, tests) don't have to update their imports. The local `export type LspServerKind = …` in the store is replaced with `export type { LspServerKind } from '@/ipc/lsp'`.
+
+**Why the `lsp_run_stdio` side didn't need changes**
+
+The Rust `lsp_run_stdio` command was already kind-agnostic: it spawns whatever command the JS side passes. All the per-kind knowledge lives in two places:
+
+1. The JS `kindToSpawnSpec(kind)` table — which binary + args to spawn.
+2. The Rust `server_kind_spec(kind)` table — which binary to PATH-lookup + which install hint to return.
+
+These two tables have to agree on the binary name. The cross-side contract is pinned by the new `kindToSpawnSpec` test (`"returns specs whose binary names match the Rust server_kind_spec table"`) — if either side changes a binary name, that test fails.
+
+**Wire format**
+
+```jsonc
+// TS → Rust (lsp_check_available args)
+{ "serverKind": "rust_analyzer" }   // camelCase, mirrors the TS type
+
+// Rust → TS (lsp_check_available result, unchanged shape)
+{ "available": true, "installHint": "rustup component add rust-analyzer", "version": "1.74.0" }
+```
+
+The `args` field defaults to `null` on the JS side (no args passed) when the call site is the pre-9.2b kind-less call (e.g. the `LanguageServerCard`'s mount-time probe). The Rust `check_available` defaults to `Typescript` in that case, preserving the pre-9.2b behaviour exactly.
+
+**Test results**
+
+- `vitest` 1138/1138 (was 1128 in §9.2 thin slice; +9 IPC + 1 bridge end-to-end `.rs` test).
+- `tsc --noEmit` clean.
+- `cargo test` 358/358 (was 350; +8 stdio: serde round-trip, kind dispatch, install hint stability, unknown arm, default-to-typescript).
+- `cargo build` clean.
+
+**Design decisions**
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 119 | The `LspClient.kind` field is a string-literal union, not a class hierarchy. | The `kind` is metadata for *spawn dispatch*, not a behavioural distinction. A `RustAnalyzerLspClient` subclass would have to duplicate the `LspTransport` / reader-loop / message-queue / pending-request machinery for zero gain — the LSP protocol is identical across kinds (different servers, same wire format). The `kind` is read once, in `start()`, to pick the binary. |
+| 120 | The `kind` is captured *before* `dispose` in `respawn()`. | `dispose()` removes the client from the `clients` map. If we read the kind after `dispose`, the map is empty and we'd fall back to `'typescript'`. By reading it at the top of `respawn()` we guarantee the respawn target is the same kind the original spawn was. |
+| 121 | `kindToSpawnSpec` is total — `'unknown'` and `'pyright'` both return well-formed specs. | The function's return type is `LspSpawnSpec` (a non-`Option`). Throwing on an unexpected kind would force every call site into a try/catch; returning an empty spec lets the call site log the situation and decide what to do. The bridge gate (`isSupportedKind`) rejects `'unknown'` and `'pyright'` before `start()` ever runs, so the empty spec is defensive only. |
+| 122 | The bridge passes the *raw* inferred kind, not the gated kind. | The gate is the bridge's responsibility, not the store's. The store assumes its caller has already decided "yes, spawn something" and trusts the kind it's given. Future Phase 9.2c+ slices that flip the gate (e.g. adding `'pyright'`) don't have to change the bridge or the store — they just remove the kind from the `!== 'pyright'` check in the gate. |
+| 123 | The Rust `install_hint` for `rust-analyzer` is `rustup component add rust-analyzer`, not the `brew install rust-analyzer` / `pacman -S rust-analyzer` variants. | `rustup` is the canonical toolchain manager; almost every Rust user has it. The hint works on every `rustup`-managed toolchain (stable, beta, nightly). Non-rustup installs are rarer and the user can figure it out from the binary name; the hint is the *most common* install path, not an exhaustive list. |
+
+**Test additions**
+
+- `src/ipc/lsp.test.ts` (new, 9 tests) — `kindToSpawnSpec` per kind, cross-side contract (JS spec matches Rust `server_kind_spec` table), `lspCheckAvailable` IPC arg forwarding for each kind.
+- `src/screens/EditorWorkspace/state/lspClientStore.test.ts` — added `kindToSpawnSpec` to the `vi.mock('@/ipc/lsp')` factory (returns the rust-analyzer spec for `'rust_analyzer'`, TS for everything else).
+- `src/screens/EditorWorkspace/hooks/useMonacoLspBridge.test.tsx` — added `kindToSpawnSpec` to the mock factory, added a new end-to-end test (`spawns a rust-analyzer client for a .rs file with the rust-analyzer binary`) that mounts a `.rs` fake editor, asserts the `LspClient` is created with `kind: 'rust_analyzer'`, and asserts `lspRunStdio` was called with `{ command: 'rust-analyzer' }`.
+- `src/screens/EditorWorkspace/state/lspClientStore.inferServerKind.test.ts` — updated the `isSupportedKind` test (the "returns false for rust_analyzer (not yet wired)" assertion is now "returns true for rust_analyzer (Phase 9.2b — Rust arm is wired)").
+- `src-tauri/src/stdio.rs` — 8 new tests: `lsp_server_kind_serialises_to_snake_case`, `lsp_server_kind_deserialises_from_snake_case`, `server_kind_spec_picks_the_right_binary`, `server_kind_spec_returns_none_for_unknown`, `check_available_args_omits_kind_for_backward_compat`, `check_available_args_camel_case_round_trip`, `check_available_for_unknown_returns_unavailable`, `check_available_defaults_to_typescript_when_kind_omitted`. Plus the existing `install_hint_is_stable` test rewritten as `install_hint_is_stable_per_kind` to lock both hints.
+
+**Follow-up slices**
+
+- **Phase 9.2c** — the `pyright-langserver` arm: add the `Pyright` variant to the Rust `LspServerKind` enum, add the `server_kind_spec` arm (binary `pyright-langserver`, install hint `npm install -g pyright`), add `'pyright'` to `SUPPORTED_LSP_SERVER_KINDS`, flip the bridge gate. The JS `kindToSpawnSpec` already has the entry. Roughly 1-2 hours. *(Shipped — see §9.41 below. The slice came in at ~30 minutes; the 9.2b contracts did the heavy lifting.)*
+- **Phase 9.2d** — re-key the store maps from `workspaceRoot` to `(workspaceRoot, kind)` so one workspace can have multiple server kinds running side-by-side (the open `.rs` file gets a rust-analyzer client; the open `.py` file gets a pyright client; the open `.ts` file gets a TS-LS client — all in the same workspace). Plus the per-kind settings UI (separate "Status" / "Restart" rows for each kind on the `LanguageServerCard`).
+- **Phase 9.2e** — `lsp_status_card_no_real_server_kind_omitted` regression. The `LanguageServerCard` currently calls `lspCheckAvailable()` with no args; for a `.rs` / `.py` workspace it gets the TS-default probe and a `npm install -g typescript-language-server` install hint (wrong). 9.2e makes the card pass `inferServerKind(activeFileUri)` so the hint matches the active workspace's kind.
+
 ---
 
-*End of handoff. Lipi is at **Phase 9.2 (thin slice) complete** (Multi-server kind taxonomy + inferrer — `LspServerKind` enum + `inferServerKind` extension-based helper + `isSupportedKind` / `isKnownKind` + `SUPPORTED_LSP_SERVER_KINDS` list + bridge gate + 33 new tests, total 1128 TS + 350 Rust). The next session should resume from the remaining Phase 9.2 follow-up slices (Rust-side `lsp_run_stdio` arm for `rust-analyzer`, then `pyright`, then per-kind re-keying of the store maps, then the per-kind settings UI), plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.40.*
+### 9.41 Phase 9.2c — SHIPPED (Rust arm for `pyright`, see CHANGELOG "Added (Phase 9.2c — Rust arm for `pyright`)")
+
+The second multi-server follow-up slice to the §9.2 thin slice. Phase 9.2b flipped the switch on `'rust_analyzer'`; Phase 9.2c flips it on `'pyright'`. A `.py` / `.pyi` file in a workspace now spawns a real `pyright-langserver` process and goes through the same `initialize` handshake, `didChange` loop, and crash-recovery ladder as the existing TS / Rust paths.
+
+This slice is much smaller than 9.2b because most of the surface was already in place:
+
+- `kindToSpawnSpec('pyright')` returned `{ command: 'pyright-langserver', args: ['--stdio'], installHint: 'npm install -g pyright' }` from Phase 9.2b (the function was made total so adding a kind was a 1-arm change there).
+- The bridge gate was already `isSupportedKind(initialKind)` — flipping the supported list is sufficient, no bridge code change.
+- The `LspClient.kind` field, the `getOrCreate(workspaceRoot, kind?)` signature, and the `respawn()` kind capture were all in place from 9.2b. Phase 9.2c is the first slice to *exercise* them with a third kind (the cross-kind contracts the 9.2b tests pinned are now load-bearing for the Python path too).
+
+**What shipped**
+
+- **Rust `Pyright` variant** — new variant on the `LspServerKind` enum in `src-tauri/src/stdio.rs`. `#[serde(rename_all = "snake_case")]` so the wire literal is `"pyright"`.
+- **Rust `server_kind_spec(Pyright)` arm** — returns `ServerKindSpec { binary: "pyright-langserver", install_hint: "npm install -g pyright" }`. The `pyright-langserver` Node CLI is shipped as part of the `pyright` package, so `npm install -g pyright` is the canonical install.
+- **TS `SUPPORTED_LSP_SERVER_KINDS` extended** — `'pyright'` added to the supported list in `lspClientStore.ts`. The bridge gate now passes `.py` / `.pyi` files through.
+- **No changes to the bridge itself** — the gate is data-driven (`isSupportedKind(initialKind)`); flipping the supported list is the only thing needed.
+
+**Test changes (a study in incremental test updates)**
+
+The smallest-possible test diff:
+
+- The pre-9.2c `.py` bridge test (`is a no-op for a .py file (pyright not yet supported)`) was **flipped** to a positive case (`spawns a pyright client for a .py file (pyright is supported as of Phase 9.2c)`) — it now asserts the bridge spawns a `pyright`-kind `LspClient` for a `.py` URI. Same test machinery, opposite assertion.
+- The pre-9.2c `isSupportedKind` assertion for `'pyright'` was updated from `false` to `true`. Same test, flipped boolean.
+- The `vi.mock('@/ipc/lsp')` factories in `useMonacoLspBridge.test.tsx` and `lspClientStore.test.ts` got a new `pyright` arm in the `kindToSpawnSpec` mock (mirrors the real function).
+- The `lspCheckAvailable` IPC test in `ipc/lsp.test.ts` got a new "forwards the pyright kind" test. **+1 new test.**
+- The Rust tests `install_hint_is_stable_per_kind`, `lsp_server_kind_serialises_to_snake_case`, `lsp_server_kind_deserialises_from_snake_case`, `server_kind_spec_picks_the_right_binary`, and `check_available_args_camel_case_round_trip` each got a `Pyright` assertion added (the new variant is exercised by each test; no new test functions needed). **+0 new test functions.**
+
+The pattern is worth noting: most of the work in 9.2c is *flipping* existing tests (no-op → spawn, false → true, add a row to a cross-side contract table), not writing new ones. The 9.2b tests were written specifically to be reusable across kinds — the `kindToSpawnSpec` cross-side contract test now has three rows instead of two, the `isSupportedKind` test now has three `true` rows instead of one, etc.
+
+**Test results**
+
+- `vitest` 1139/1139 (was 1138 in Phase 9.2b; +1 IPC test, with the other test changes being flips/updates of existing tests).
+- `tsc --noEmit` clean.
+- `cargo test` 358/358 (no new test functions; the existing 9.2b stdio tests now also exercise the new variant).
+- `cargo build` clean.
+
+**Design decisions**
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 124 | Phase 9.2c is a *flipping* slice, not a *building* slice. | The hard work (taxonomy, gate, spawn helper, `LspClient.kind`, `getOrCreate(workspaceRoot, kind?)`, `respawn()` kind capture) all shipped in 9.2b. 9.2c is the first slice where the data-driven contracts 9.2b set up actually pay off — adding a kind is a Rust enum variant + a Rust spec arm + a JS supported-list flip. The test pattern is "flip the assertion that was pinning the not-yet-supported state". |
+| 125 | The `kindToSpawnSpec` cross-side contract test is now a 3-row table (was 2). | Adding a kind means adding a row to *both* the Rust and JS tables, and the test pins that they agree. Future kinds (9.2d+, e.g. `gopls` for Go) will add a 4th row, a 5th, etc. — the test stays a single readable table. |
+| 126 | The pre-9.2c `.py` "no-op" bridge test is *flipped*, not duplicated. | A new "spawns a pyright client for a .py file" test was added in-place; the old "is a no-op for a .py file" test is gone. Keeping both would mean the same fixture runs twice with opposite assertions — a future change that broke one would be hidden by the other. |
+| 127 | The bridge code is *not* touched in 9.2c. | The bridge gate is `isSupportedKind(initialKind)`. Adding `'pyright'` to the supported list is the only thing the bridge needs. This was the explicit goal of the 9.2b design (Decision 122): the store / bridge are kind-agnostic; the supported list is the only gate. |
+| 128 | The `kindToSpawnSpec` mock factory in tests mirrors the real function. | If the real function adds a new kind, the test mocks add a new arm. The test mocks are not just "good enough for the current test" — they're a parallel implementation that catches drift. (The cross-side contract test in `ipc/lsp.test.ts` enforces that the JS spec table and the Rust spec table agree on binary names — the mocks aren't part of that contract, but they should be consistent with it.) |
+
+**Follow-up slices**
+
+- **Phase 9.2d** — re-key the store maps from `workspaceRoot` to `(workspaceRoot, kind)` so one workspace can have multiple server kinds running side-by-side (the open `.rs` file gets a rust-analyzer client; the open `.py` file gets a pyright client; the open `.ts` file gets a TS-LS client — all in the same workspace). Plus the per-kind settings UI (separate "Status" / "Restart" rows for each kind on the `LanguageServerCard`).
+- **Phase 9.2e** — `LanguageServerCard` pass `inferServerKind(activeFileUri)` to the probe so the install hint matches the active workspace's kind (the card currently calls `lspCheckAvailable()` with no args and gets the TS-default hint, wrong for a `.rs` / `.py` workspace).
+
+### 9.42 Phase 9.2d — SHIPPED (Multi-server: per-`(workspace, kind)` re-key, see CHANGELOG "Added (Phase 9.2d — Multi-server: per-`(workspace, kind)` re-key)")
+
+The third multi-server follow-up slice to the §9.2 thin slice. Phase 9.2b established the kind taxonomy + the gate; 9.2c wired `pyright`; 9.2d actually delivers the *structural* change the previous slices were scaffolding toward: the store's per-workspace maps are no longer keyed by `workspaceRoot` alone. They are keyed by `${workspaceRoot}//${kind}`. A single workspace can now have one client per `LspServerKind` running side-by-side.
+
+This is the slice that the 9.2b "store is still keyed by workspaceRoot" comment was deferring. The 9.2b comment was deliberately honest about the deferred scope — the 9.2b contracts (taxonomy, gate, `LspClient.kind`, `kindToSpawnSpec`) were load-bearing infrastructure for this slice.
+
+**`workspaceKindKey(root, kind)` helper.** Exported from `lspClientStore.ts` so the bridge and the test suite can build keys without recomputing the shape. Returns `${root}//${kind}` as a string. The `//` separator is illegal in a Windows path component (the closest thing is the `\\?\` UNC prefix, which lipi doesn't use — workspaces are always local folders) so the key is unambiguous and round-trippable for the local-folder case. Why a string and not a nested `Map<string, Map<LspServerKind, ...>>`? Zustand selectors are simpler with flat maps (one-step lookup, no missing-parent case), `new Map(state.clients)` cloning stays a one-liner, and tests can pin a key with a single `expect(...).toBe(true)`.
+
+**`parseWorkspaceKindKey(key)` helper.** Exported for `disposeAllKindsForWorkspace`'s fan-out path. Returns `{ workspaceRoot, kind } | null` (null for stale pre-9.2d test fixtures that don't match the shape). Used by `disposeAllKindsForWorkspace` to filter the live `clients` map by root.
+
+**Maps re-keyed.** All four public maps (`clients`, `statusByWorkspace`, `crashByWorkspace`, `lspOutputByWorkspace`) plus the three closure-scoped internal maps (`startPromises`, `respawnTimers`, `handleToWorkspaceKey` — renamed from `handleToWorkspace` because the value is the *full key*, not the bare root). The `handleToWorkspaceKey` rename is the trickiest: the Rust `lsp://crashed` and `lsp://log` events only carry the `handleId`, not the kind. The JS side has to remember the kind it used to spawn, stored in the reverse map's value (now the full key string). On a crash event, the lookup is `handleToWorkspaceKey.get(handleId) → key → flip status for that key, schedule respawn for that key`. The per-key `crashByWorkspace` and `statusByWorkspace` entries are independent, so a TS crash doesn't affect a pyright status and vice versa.
+
+**Action signature widening.** `getOrCreate(workspaceRoot, kind?)`, `dispose(workspaceRoot, kind?)`, `respawn(workspaceRoot, kind?)`, and `clearLspOutput(workspaceRoot, kind?)` all take an optional `kind` (defaulting to `'typescript'` for backward compat with the pre-9.2d call sites in the test suite and the kill-switch card path). The new `disposeAllKindsForWorkspace(workspaceRoot)` action is the kill-switch path — walks `clients.keys()`, filters by root, and disposes every matching pair in parallel.
+
+**`respawn`'s kind inference.** When called with no `kind` (the auto-respawn timer callback path), `respawn` walks the `clients` map for the first `(root, *)` pair in insertion order and uses that kind. Map insertion order is the most recently created client first (later kinds inserted on top), so this picks the "active" kind for the workspace without needing the caller to pass it.
+
+**Bridge re-derives the kind on every callback.** The `clientHandleId` Zustand selector now reads the *current* model's URI (via `inferServerKind`), not the one the bridge mounted with. When the user switches from a `.ts` file to a `.py` file in the same workspace, the selector returns a different value, the effect re-runs, the old providers are torn down, and a pyright client is spawned on top of the existing TS one. The two live clients coexist (one per key).
+
+The `onDidChangeModel` callback now splits the `didClose` and `didOpen` across *different* clients when the user is switching kinds (the old model goes to the old client; the new model goes to the new client). When the user stays on the same kind (`.ts` → another `.ts`), both go to the same client. This is the *minimum* behavioural change needed to support the multi-server case — a future 9.2f slice may coalesce per-file subscriptions into a multi-client aggregator with debounced `didChange` per client.
+
+**`LanguageServerCard` minimal change.** The card picks the "active kind" by walking `s.clients.keys()` and returning the first matching `(root, kind)` for the active workspace (insertion order, so the most recently spawned client wins). The `status` / `crashInfo` / `outputEntry` Zustand selectors read the full key, not the bare root. The `respawn` call now passes the active kind (so a `.py` workspace's "Restart" button restarts pyright, not TS). The `dispose` (kill-switch path) now calls `disposeAllKindsForWorkspace(root)`. The `clearLspOutput` call passes the active kind. The probe `lspCheckAvailable()` call now passes `{ serverKind: activeKind }` — fixes the 9.2b TODO comment that flagged the wrong install hint for `.rs` / `.py` workspaces.
+
+Per-kind rows in the card (separate "Status" / "Restart" / "Install hint" / "Kill switch" sections for each kind) are deferred to Phase 9.2e. 9.2d's card change is just enough to make the single-row UI correct under the new keying.
+
+**Test coverage.** New bridge e2e test: `spawns one client per (workspace, kind) — TS + pyright side-by-side`. Mounts a TS bridge and a pyright bridge on the *same* workspace; asserts the store has *two* distinct `LspClient` instances (one per kind). The pyright and TS bridges coexist, each carrying the right `client.kind`. The pre-9.2d test fixtures that used bare `'/workspace/x'` strings as map keys are updated to use `tsKey('/workspace/x')` (a local helper that wraps `workspaceKindKey(root, 'typescript')`). The card test's `setLspStatus` helper takes a root and produces the right composite key. The `dispose` kill-switch test now plants the fake client at the TS key.
+
+**What 9.2d is *not*.** Per-kind card UI (separate rows per kind with per-row install hint, restart, kill switch) is Phase 9.2e. The bridge behaviour for the "same editor, multiple files of different kinds open in tabs" case (5 open tabs, 4 different kinds, 4 different clients) is Phase 9.2f. The per-kind kill switch (`useRealServerByKind: Record<LspServerKind, boolean>` in `localStorage`) is Phase 9.2e. 9.2d is the structural foundation; the UX polish is the next two slices.
+
+**Test results**
+
+- `vitest` 1140/1140 (was 1139 in 9.2c; +1 new multi-server bridge test, all the rest are map-key updates and selector tweaks).
+- `tsc --noEmit` clean.
+- `cargo test` 358/358 (no Rust-side changes; 9.2d is a JS-only slice).
+- `cargo build` clean.
+
+**Decisions**
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 129 | Re-key maps with a flat composite string `${root}//${kind}` instead of a nested `Map<string, Map<LspServerKind, LspClient>>`. | Zustand selectors are simpler with flat maps (no missing-parent case). `new Map(state.clients)` cloning stays a one-liner (with a nested map you'd have to clone *each* inner map too). Tests can pin a key with a single `expect(s.clients.has(key)).toBe(true)`. The `//` separator is illegal in a Windows path component, so the key is unambiguous for the local-folder case. |
+| 130 | Rename `handleToWorkspace` → `handleToWorkspaceKey`. | The value changed semantics: pre-9.2d it was a `workspaceRoot` string; post-9.2d it's a `${root}//${kind}` string. The new name makes the change visible at every call site (5 sites in `lspClientStore.ts`). `parseWorkspaceKindKey` recovers the `(root, kind)` pair for the crash + log listeners. |
+| 131 | `dispose(workspaceRoot, kind?)` defaults to `'typescript'`. | Backward compat with the pre-9.2d call sites in the test suite (20+ `getOrCreate('/workspace/x')` calls without a kind) and the kill-switch card path. New callers (the bridge, the auto-respawn timer) pass the kind explicitly. The semantics are "dispose a single (root, kind) pair" — distinct from `disposeAllKindsForWorkspace(root)`, which disposes *every* pair for the workspace. |
+| 132 | `respawn(workspaceRoot, kind?)` infers the kind from the clients map when called with no kind. | The auto-respawn timer callback calls `respawn(root)` without a kind (it has the key, not the kind). Walking the clients map for the first `(root, *)` pair in insertion order picks the "active" kind without threading the kind through the closure. The map's insertion order means the most recently created client for the root wins, which is the right behaviour (a respawn after a fresh `getOrCreate` targets the freshly-spawned kind). |
+| 133 | Bridge re-derives the kind on every `onDidChangeModelContent` / `onDidChangeModel` callback. | The kind is a function of the *current* model's URI, not the one the bridge mounted with. The 9.2d `clientHandleId` Zustand selector reads the current model's URI, so a kind change re-runs the effect (tears down old providers, sets up new ones). The two `clients.get(workspaceRoot)` reads at L301 / L323 in the pre-9.2d file become `clients.get(workspaceKindKey(root, kind))`, with the kind inferred from the current model inside the callback. |
+| 134 | The `onDidChangeModel` callback splits `didClose` (old model → old client) and `didOpen` (new model → new client) across *different* clients when the user is switching kinds. | The old model (a `.ts` file) needs a `didClose` to the *old* TS client; the new model (a `.py` file) needs a `didOpen` to the *new* pyright client. When the user stays on the same kind, both go to the same client. This is the minimum behavioural change for multi-server support. Phase 9.2f may add a multi-client aggregator with debounced `didChange` per client (for the "5 open tabs, 4 different kinds" case). |
+| 135 | `LanguageServerCard` picks the active kind by walking `s.clients.keys()`. | The card doesn't know what file is open in the editor (it has no editor instance). Walking the clients map in insertion order and picking the first match is the cleanest signal for "what's the user actually using right now". Insertion order means the most recently created client for the root wins, which matches the bridge's behaviour (the most recently used kind is the "active" one). Falls back to `'typescript'` when the workspace has no live clients. |
+| 136 | Per-kind card UI deferred to Phase 9.2e. | 9.2d's card change is *just enough* to make the single-row UI correct under the new keying (per-kind status / crash / output lookups all work; respawn targets the right client; kill-switch disposes *all* kinds). Per-kind rows (separate "Status" / "Restart" / "Install hint" / "Kill switch" sections for each kind, with a "no client" placeholder for kinds that haven't been spawned) are a *display* problem, not a *data model* problem — the 9.2d re-key made the data model right; the per-kind display is a follow-up UI slice. |
+
+### 9.43 Phase 9.2e — SHIPPED (Per-kind card UI + per-kind kill switch, see CHANGELOG "Added (Phase 9.2e — Per-kind card UI + per-kind kill switch)")
+
+The 9.2d handoff explicitly deferred the per-kind card UI + the per-kind kill switch to 9.2e. This slice ships both. The structural foundation is in (9.2d's re-keyed maps, bridge re-derives the kind on every callback, store has per-(root, kind) status / crash / output). 9.2e finishes the per-kind story on the user-facing side: the settings card shows one row per supported kind, and the kill switch is per-kind.
+
+**`useRealServerByKind` per-kind record.** The pre-9.2e single-bool kill switch (`lipi:lsp:useRealServer:v1`) is replaced with a per-kind record (`lipi:lsp:useRealServerByKind:v1`) shaped as `Partial<Record<LspServerKind, boolean>>`. A `Partial<…>` because a freshly installed user has no v2 record at all (per-kind default is `true` at the accessor), and a user who only flipped `rust_analyzer` has a record with one key. Callers that need a full default for every kind should `getUseRealServer(kind)` per-kind instead of reading the record directly.
+
+**v1 → v2 migration (forward, lazy).** The v1 key is read on the *first* access of `getUseRealServerByKind` (or any `getUseRealServer(kind)`) when v2 is missing but v1 exists. The migration: (1) read v1, (2) seed v2 with `{ typescript: v1, rust_analyzer: v1, pyright: v1, unknown: v1 }`, (3) write the seeded v2 to localStorage (best-effort), (4) leave v1 in place. A cold install (no v1, no v2) doesn't pollute localStorage with a default-valued record — the migration is a no-op. A user with both v1 and v2 (e.g. one that manually edited localStorage to seed v1 *after* 9.2e) doesn't get their v2 record clobbered — v2 wins.
+
+**Bridge gate is per-kind.** The `useMonacoLspBridge` hook passes the *inferred* kind into `getUseRealServer(kind)` when deciding whether to bail out at the gate. A `.ts` file's bridge is gated on `getUseRealServer('typescript')`; a `.py` file's bridge is gated on `getUseRealServer('pyright')`. A user who has disabled `pyright` can still use the TS or rust-analyzer servers — disabling one kind doesn't affect the others. The new bridge tests `per-kind kill switch: TS off, pyright on — pyright still spawns` and `per-kind kill switch: pyright off, TS on — .py bridge is a no-op` pin this behaviour.
+
+**LSP store crash + respawn paths are per-kind.** The `onChildCrashed` handler and the auto-respawn timer callback recover the kind from the composite `${root}//${kind}` key and gate the respawn on `getUseRealServer(kind)`. A crashed pyright client doesn't auto-respawn when the user has disabled the pyright kind.
+
+**`LanguageServerCard` renders one row per supported kind.** The pre-9.2e card showed a single "active kind" view (the most recently created client for the workspace, falling back to `'typescript'`). 9.2e replaces that with a vertical stack of rows. Each row is a self-contained `LanguageServerRow` sub-component that owns its own:
+- Status / crash / output-entry selectors (keyed by the composite key).
+- Per-row install-hint probe (`lspCheckAvailable({ serverKind: kind })`).
+- Per-row kill switch (toggles the per-kind localStorage value + disposes *just that kind's* client via `dispose(workspaceRoot, kind)`).
+- Per-row restart button (calls `respawn(workspaceRoot, kind)`).
+- Per-row collapsible "Server output" panel.
+- Per-row `useEffect` for the auto-scroll-to-bottom behaviour.
+
+The card-level wrapper renders one row per `SUPPORTED_LSP_SERVER_KINDS` (with `'unknown'` filtered out — the bridge never spawns a client for an unknown kind, so there's nothing to render). The Phase 9.6 completion sub-toggle is a card-level (global) slot, hidden when *every* kind is off (no real server is in use, so the toggle is meaningless). The `KIND_LABEL` map gives each row a friendly title (e.g. "TypeScript language server", "rust-analyzer language server", "pyright language server") and `KIND_INSTALL_HINT_FALLBACK` provides a per-kind default install command for the `catch` path of the probe (the Rust IPC call may be unreachable in the test environment; the user should still see *something*).
+
+**Per-row kill switch targets just that kind's client.** The pre-9.2e kill switch handler called `disposeAllKindsForWorkspace(root)`, which disposed every `(root, kind)` pair for the workspace. 9.2e's per-row handler calls `dispose(workspaceRoot, kind)` — only that kind's client is removed. Other kinds' clients (and the user's open files) are unaffected. The pre-9.2e "active kind" heuristic (walking `s.clients.keys()` to pick the first match) is gone — each row has its own kind prop and dispatches to the right action without ambiguity.
+
+**Test coverage.** `lspKillSwitch.test.ts` (19 tests) covers the v1→v2 migration (cold install, v1 true, v1 false, v2 already present), per-kind read/write, malformed v2 fallback (non-JSON, array, etc.), and the per-kind independence. `useMonacoLspBridge.test.tsx` (15 tests) covers per-kind gate behaviour (TS off + `.ts` = no spawn; TS off + `.py` = pyright still spawns; pyright off + `.py` = no spawn). `LanguageServerCard.test.tsx` (8 tests) covers the per-row render (3 rows for 3 supported kinds), per-row kill switch (TS row's switch disposes only the TS client; pyright client is unaffected), the "any kind on" visibility of the completion sub-toggle, and the "every kind off" hiding of the completion sub-toggle.
+
+**Test results**
+- `vitest` 1151/1151 (was 1140 in 9.2d; +11: 9 in `lspKillSwitch.test.ts` (rewritten to cover the per-kind API + the v1→v2 migration), 2 in `useMonacoLspBridge.test.tsx` (per-kind gate tests), 0 new in `LanguageServerCard.test.tsx` but the existing 5 are updated to use the per-kind API + 3 new per-row tests are added).
+- `tsc --noEmit` clean.
+- `cargo check` clean (no Rust-side changes; 9.2e is a JS-only slice).
+
+**Decisions**
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 137 | The v1 `useRealServer` key is *not* removed on read; the v2 record is seeded on a lazy v1→v2 migration. | A user with a pre-9.2e v1 key (boolean) gets the same behaviour as before (single kill switch). On the first 9.2e read, the v2 record is seeded with `{ typescript: v1, rust_analyzer: v1, pyright: v1, unknown: v1 }` — every kind gets the v1 value. A user with both v1 and v2 (e.g. one who manually edited localStorage to seed v1 *after* 9.2e) doesn't get their v2 record clobbered — v2 wins on read. A cold install (no v1, no v2) doesn't pollute localStorage with a default-valued record — the migration is a no-op. |
+| 138 | `Partial<Record<LspServerKind, boolean>>` (not `Record<LspServerKind, boolean>`) for the v2 record type. | A freshly installed user has *no* v2 record at all (per-kind default is `true` at the accessor). A user who only flipped `rust_analyzer` has a record with one key. The `getUseRealServerByKind` accessor returns the raw record (callers can `getUseRealServer(kind)` to coerce missing kinds to the default). The `setUseRealServer(kind, value)` helper does a read-merge-write to maintain the partial shape. |
+| 139 | The completion sub-toggle is *not* per-kind — it's a card-level (global) slot. | The per-kind kill switch determines which kinds are enabled at all; the completion sub-toggle determines whether the *enabled* kinds' completion is real-server or built-in. If the user enables completion for the `typescript` kind, they get it for every enabled kind (rust-analyzer, pyright, etc.). Per-kind completion would multiply the toggle count (one per kind) without a clear win — completion behaviour is a cross-kind user preference ("I want the real server to autocomplete everything I've enabled"). |
+| 140 | `LanguageServerRow` is an internal sub-component, not a public export. | The row is only meaningful inside the `LanguageServerCard` shell — it has no standalone use case, the card-level wrapper owns the active-workspace + completion-sub-toggle state. Exporting it would invite coupling to a component that may change. The pre-9.2d `RespawnCountdown` is exported (it has a dedicated `RespawnCountdown.test.tsx`); the row's tests live inside `LanguageServerCard.test.tsx` and assert the rendered structure (the row is an implementation detail of the card). |
+| 141 | The pre-9.2e "active kind" heuristic (walking `s.clients.keys()` to pick the first match) is *removed*. | With one row per kind, the heuristic is unnecessary — each row has its own kind prop and dispatches to the right action without ambiguity. Keeping the heuristic would mean the card does extra work on every render (walking the clients map) and the action dispatches are still unambiguous per-row, so the heuristic's only role was the single-row UI's "which kind am I showing right now" question — gone. |
+| 142 | The kill switch handler calls `dispose(root, kind)`, not `disposeAllKindsForWorkspace(root)`. | The pre-9.2d kill switch was a single global switch; disabling it disposed *every* client for the workspace (the user clearly wanted the LSP gone). The 9.2e per-kind kill switch is per-kind; disabling the `pyright` switch should not affect a running `typescript` client. `dispose(root, kind)` is the right granularity. `disposeAllKindsForWorkspace` is still in the store for the "kill switch everything" path (no current call site uses it post-9.2e; it's preserved for future use, e.g. a workspace-unmount cleanup that wants to dispose every kind). |
+
+---
+
+*End of handoff. Lipi is at **Phase 9.2e complete** (Per-kind card UI + per-kind kill switch — `lspKillSwitch` v1 single-bool replaced with v2 per-kind `useRealServerByKind: Partial<Record<LspServerKind, boolean>>` localStorage record with a lazy v1→v2 forward migration on first read, `getUseRealServer(kind)` + `setUseRealServer(kind, value)` + `setUseRealServerByKind(record)` new API, bridge gate is per-kind (`getUseRealServer(initialKind)` instead of zero-arg), LSP store crash + respawn paths gated per-kind, `LanguageServerCard` refactored to render one `LanguageServerRow` per `SUPPORTED_LSP_SERVER_KINDS` with per-row status badge / install hint / restart / kill switch / server output panel, per-row kill switch dispatches to `dispose(workspaceRoot, kind)` (just that kind's client, not all kinds), card-level Phase 9.6 completion sub-toggle stays global and is hidden when every kind is off, total 1151 TS + 358 Rust tests). The next session should resume from Phase 9.2f (bridge multi-client aggregator for the same-editor-polyglot case: 5 open tabs, 4 different kinds, 4 different clients, debounced `didChange` per client), then the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.50.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

@@ -1,8 +1,15 @@
-/* LanguageServerCard — Phase 9 (Tiniest scope).
+/* LanguageServerCard — Phase 9 / Phase 9.2e
+   (multi-server).
 
-   The "TypeScript language server" card under
+   The "Language servers" card under
    Editor → Language Servers in the Settings
-   screen. Mirrors the established
+   screen. Phase 9.2e renders one stacked
+   row per supported LSP kind (typescript,
+   rust_analyzer, pyright). The card is the
+   outer `.card` shell; each row is a
+   `.row` block inside `.rows`.
+
+   Mirrors the established
    `OnDeviceCard` / `WebSpeechCard` /
    `NativeDictationCard` class vocabulary
    (`.card`, `.cardHeader`, `.cardTitle`,
@@ -21,6 +28,44 @@
   background-color: var(--color-bg-elevated);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md, 6px);
+}
+
+/* Phase 9.2e — the vertical stack of
+   per-kind rows. Each row is a self-contained
+   sub-card. */
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* Phase 9.2e — one per-kind sub-card. The
+   row uses the same internal class vocabulary
+   as the pre-9.2e card (`.cardHeader`,
+   `.badge`, `.toggleRow`, etc.) so the
+   visual style stays consistent. */
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background-color: var(--color-bg-surface, var(--color-bg-elevated));
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm, 4px);
+}
+
+.rowTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.cardDescription {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin: 0;
+  line-height: var(--line-height-snug, 1.4);
 }
 
 .cardHeader {

@@ -26,9 +26,13 @@ vi.mock('@/ipc/lsp', () => ({
 }));
 
 import { lspCheckAvailable } from '@/ipc/lsp';
-import { useLspClientStore } from '@/screens/EditorWorkspace/state/lspClientStore';
+import {
+  useLspClientStore,
+  workspaceKindKey,
+} from '@/screens/EditorWorkspace/state/lspClientStore';
 import {
   setUseRealServer,
+  setUseRealServerByKind,
   getUseRealServer,
   setUseRealServerForCompletion,
   getUseRealServerForCompletion,
@@ -87,7 +91,11 @@ function setLspStatus(workspaceRoot: string, status: 'stopped' | 'starting' | 'r
   act(() => {
     useLspClientStore.setState((s) => {
       const nextStatus = new Map(s.statusByWorkspace);
-      nextStatus.set(workspaceRoot, status);
+      // Phase 9.2d — the status map is
+      // keyed by `${root}//${kind}`. The
+      // test fixture uses the default
+      // TS kind (the pre-9.2b behaviour).
+      nextStatus.set(workspaceKindKey(workspaceRoot, 'typescript'), status);
       return { ...s, statusByWorkspace: nextStatus };
     });
   });
@@ -102,7 +110,16 @@ beforeEach(() => {
     workspaces: [],
     activeId: null,
   });
-  setUseRealServer(true);
+  // Phase 9.2e — reset the per-kind kill switch
+  // to "all kinds on" (the v1 default). Tests
+  // that flip a specific kind do so in the test
+  // body.
+  setUseRealServerByKind({
+    typescript: true,
+    rust_analyzer: true,
+    pyright: true,
+    unknown: true,
+  });
   // Phase 9.6: completion sub-toggle defaults
   // to `false` (built-in is faster for the
   // hot path). Reset to the default in
@@ -112,7 +129,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setUseRealServer(true);
+  setUseRealServerByKind({
+    typescript: true,
+    rust_analyzer: true,
+    pyright: true,
+    unknown: true,
+  });
   setUseRealServerForCompletion(false);
 });
 
@@ -166,7 +188,18 @@ describe('LanguageServerCard', () => {
     act(() => {
       useLspClientStore.setState((s) => {
         const nextClients = new Map(s.clients);
-        nextClients.set('/workspace/a', fakeClient as never);
+        // Phase 9.2d — plant the fake
+        // client at the (root, 'typescript')
+        // composite key. The card's
+        // `activeKind` selector walks
+        // `clients.keys()` and picks the
+        // first match, so planting at
+        // the TS key makes the card
+        // "discover" the TS kind.
+        nextClients.set(
+          workspaceKindKey('/workspace/a', 'typescript'),
+          fakeClient as never,
+        );
         return { ...s, clients: nextClients };
       });
     });
@@ -190,12 +223,21 @@ describe('LanguageServerCard', () => {
       Simulate.change(checkbox, { target: { checked: false } } as any);
       await new Promise((r) => setTimeout(r, 5));
     });
-    // localStorage should now be 'false'.
-    expect(getUseRealServer()).toBe(false);
+    // localStorage should now be 'false' for
+    // the TS kind (the card's kill switch).
+    expect(getUseRealServer('typescript')).toBe(false);
     // The client should have been removed
     // from the store (dispose was called).
+    // Phase 9.2d — the kill-switch path
+    // uses `disposeAllKindsForWorkspace`,
+    // which disposes *every* (root, kind)
+    // pair for the workspace. The fake
+    // client was planted at the TS key, so
+    // that key is the one to check.
     expect(
-      useLspClientStore.getState().clients.has('/workspace/a'),
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/a', 'typescript')),
     ).toBe(false);
     mounted.unmount();
   });
@@ -212,11 +254,22 @@ describe('LanguageServerCard', () => {
    *   - Clicking the sub-toggle persists
    *     the new value to localStorage.
    */
-  it('hides the completion sub-toggle when the master kill switch is OFF', async () => {
-    // Master off → built-in is used for
-    // everything, completion sub-toggle
-    // is hidden.
-    setUseRealServer(false);
+  it('hides the completion sub-toggle when every kind\'s kill switch is OFF', async () => {
+    // Phase 9.2e — the completion
+    // sub-toggle is hidden when *every*
+    // supported kind's kill switch is
+    // OFF (no real server is in use, so
+    // the completion sub-toggle is
+    // meaningless). If at least one
+    // kind is on, the toggle is shown
+    // (it applies to every enabled
+    // kind).
+    setUseRealServerByKind({
+      typescript: false,
+      rust_analyzer: false,
+      pyright: false,
+      unknown: false,
+    });
     addWorkspace('/workspace/a');
     const mounted = mountCard();
     await act(async () => {
@@ -230,7 +283,7 @@ describe('LanguageServerCard', () => {
   });
 
   it('toggles the completion sub-toggle and persists to localStorage', async () => {
-    setUseRealServer(true); // Master on (default)
+    setUseRealServer('typescript', true); // Master on (default)
     setUseRealServerForCompletion(false); // Completion off (default)
     addWorkspace('/workspace/a');
     const mounted = mountCard();
@@ -257,6 +310,115 @@ describe('LanguageServerCard', () => {
     // localStorage should now be 'true'.
     expect(getUseRealServerForCompletion()).toBe(true);
     expect(checkbox.checked).toBe(true);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2e — the card renders one row
+   * per supported kind (typescript,
+   * rust_analyzer, pyright). Each row is
+   * independent — its own status badge,
+   * kill switch, restart button.
+   */
+  it('renders one row per supported LSP kind (Phase 9.2e)', async () => {
+    addWorkspace('/workspace/a');
+    const mounted = mountCard();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    const rows = mounted.container.querySelectorAll(
+      '[data-testid="lsp-row"]',
+    );
+    expect(rows.length).toBe(3);
+    const kinds = Array.from(rows).map(
+      (r) => r.getAttribute('data-kind'),
+    );
+    expect(kinds).toEqual(['typescript', 'rust_analyzer', 'pyright']);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2e — per-row kill switches.
+   * Disabling the TS row's kill switch
+   * disposes only the TS client; the
+   * rust_analyzer and pyright clients
+   * (if any) are unaffected.
+   */
+  it('per-row kill switch targets the right kind (Phase 9.2e)', async () => {
+    addWorkspace('/workspace/a');
+    setLspStatus('/workspace/a', 'ready');
+    // Plant fake clients for two kinds.
+    const tsClient = { dispose: vi.fn() } as unknown as { dispose: () => void };
+    const pyrightClient = { dispose: vi.fn() } as unknown as { dispose: () => void };
+    act(() => {
+      useLspClientStore.setState((s) => {
+        const next = new Map(s.clients);
+        next.set(workspaceKindKey('/workspace/a', 'typescript'), tsClient as never);
+        next.set(workspaceKindKey('/workspace/a', 'pyright'), pyrightClient as never);
+        return { ...s, clients: next };
+      });
+    });
+    const mounted = mountCard();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    // Find the TS row's kill switch.
+    const tsKillSwitch = mounted.container.querySelector(
+      '[data-testid="lsp-kill-switch"][data-kind="typescript"]',
+    ) as HTMLInputElement;
+    expect(tsKillSwitch).toBeTruthy();
+    // Flip the TS kill switch OFF.
+    await act(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      Simulate.change(tsKillSwitch, { target: { checked: false } } as any);
+      await new Promise((r) => setTimeout(r, 5));
+    });
+    // Only the TS kind's localStorage value
+    // changed; rust_analyzer and pyright
+    // remain enabled.
+    expect(getUseRealServer('typescript')).toBe(false);
+    expect(getUseRealServer('rust_analyzer')).toBe(true);
+    expect(getUseRealServer('pyright')).toBe(true);
+    // The TS client was disposed; the
+    // pyright client is still in the store.
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/a', 'typescript')),
+    ).toBe(false);
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/a', 'pyright')),
+    ).toBe(true);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2e — the completion sub-toggle
+   * is visible when *any* kind's kill
+   * switch is on. Disabling all kinds
+   * hides it (already covered above); we
+   * also verify the "any" case.
+   */
+  it('shows the completion sub-toggle when at least one kind is enabled', async () => {
+    // Disable TS and rust-analyzer; leave
+    // pyright enabled.
+    setUseRealServerByKind({
+      typescript: false,
+      rust_analyzer: false,
+      pyright: true,
+      unknown: false,
+    });
+    addWorkspace('/workspace/a');
+    const mounted = mountCard();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    const completionToggle = mounted.container.querySelector(
+      '[data-testid="lsp-completion-toggle"]',
+    );
+    expect(completionToggle).toBeTruthy();
     mounted.unmount();
   });
 });

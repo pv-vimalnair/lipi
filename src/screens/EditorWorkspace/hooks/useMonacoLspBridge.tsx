@@ -50,7 +50,10 @@ import { useEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor';
 
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
-import { useLspClientStore } from '../state/lspClientStore';
+import {
+  useLspClientStore,
+  workspaceKindKey,
+} from '../state/lspClientStore';
 import {
   inferServerKind,
   isSupportedKind,
@@ -100,9 +103,30 @@ export function useMonacoLspBridge({
   // fresh ones on the new client. Without this
   // dep, the bridge would keep calling
   // `client.request()` on the dead client.
+  //
+  // Phase 9.2d — the bridge keys on
+  // `(workspaceRoot, initialKind)`. The kind
+  // is inferred from the *editor's current
+  // model* (the file the user has open). When
+  // the user switches from a `.ts` file to a
+  // `.py` file in the same workspace, the
+  // kind changes, the key changes, and the
+  // effect re-runs (tearing down the TS
+  // providers + the TS client subscription,
+  // then setting up the pyright ones). The
+  // `initialKind` for the first effect run is
+  // computed inside the effect body (the
+  // editor may not have a model at selector-
+  // call time).
   const clientHandleId = useLspClientStore((s) => {
     if (!workspaceRoot) return null;
-    const c = s.clients.get(workspaceRoot);
+    if (!editor) return null;
+    const ed = editor as monaco.editor.IStandaloneCodeEditor;
+    const model = ed.getModel();
+    if (!model) return null;
+    const kind = inferServerKind(model.uri.toString());
+    if (!isSupportedKind(kind)) return null;
+    const c = s.clients.get(workspaceKindKey(workspaceRoot, kind));
     return c?.handleId ?? null;
   });
   // Stable ref to the per-instance disposables.
@@ -132,62 +156,78 @@ export function useMonacoLspBridge({
     // `IStandaloneCodeEditor`.
     const typedEditor = editor as monaco.editor.IStandaloneCodeEditor | null;
     if (!typedEditor) return;
-    // Kill switch: bail out if the user has
-    // disabled the real server. The Phase 7
-    // built-in TS service stays in place.
-    if (!getUseRealServer()) return;
 
     // Phase 9.2 — gate on the inferred
     // server kind. The bridge is multi-server
     // from day one: a `.ts` file spawns
     // `typescript-language-server`; a `.rs`
-    // file would spawn `rust-analyzer` (not
-    // yet wired in this slice — the
-    // inferrer returns `'rust_analyzer'`
-    // but `isSupportedKind` says no, so the
-    // bridge stays a no-op until the
-    // Rust-side arm lands); a `.md` /
-    // `.json` / etc. file has
-    // `serverKind === 'unknown'` and we
-    // never spawn a child.
+    // file spawns `rust-analyzer` (wired in
+    // Phase 9.2b); a `.py` / `.pyi` file
+    // spawns `pyright-langserver` (wired in
+    // Phase 9.2c); a `.md` / `.json` / etc.
+    // file has `serverKind === 'unknown'`
+    // and we never spawn a child.
     //
     // The current build's `SUPPORTED_LSP_SERVER_KINDS`
-    // is `['typescript']`, so this gate is
-    // a no-op for the existing TS path
-    // (every `.ts`/`.tsx`/`.js`/`.jsx` file
-    // passes through). It's a future-proof
-    // hook: a future slice that adds
-    // `rust-analyzer` support just extends
-    // the supported list, no bridge change
-    // needed.
+    // is `['typescript', 'rust_analyzer',
+    // 'pyright']`. The gate is a no-op for
+    // the three wired paths; it's a hook
+    // for future kinds (e.g. a future
+    // `gopls` arm for Go would just extend
+    // the supported list — no bridge change
+    // needed).
     const initialModel = typedEditor.getModel();
     const initialKind: LspServerKind = initialModel
       ? inferServerKind(initialModel.uri.toString())
       : 'unknown';
     if (!isSupportedKind(initialKind)) {
       // Either 'unknown' (e.g. .md, .json)
-      // or a not-yet-supported kind (e.g.
-      // 'rust_analyzer' before the Rust
-      // slice lands). Either way, the
-      // bridge is a no-op: no client
-      // spawned, no providers registered,
-      // no per-workspace status to render.
-      // Monaco's built-in language services
-      // handle the file.
+      // or a not-yet-supported kind (a
+      // future slice could add `'gopls'`
+      // for Go, `'clangd'` for C++, etc.).
+      // Either way, the bridge is a no-op:
+      // no client spawned, no providers
+      // registered, no per-workspace status
+      // to render. Monaco's built-in
+      // language services handle the file.
       return;
     }
+    // Phase 9.2e — kill switch is per-kind.
+    // Bail out if the user has disabled the
+    // real server for *this kind*. A user
+    // who has disabled `pyright` (e.g. they
+    // don't have it installed and the
+    // install hint is annoying) can still
+    // use the TS or rust-analyzer servers;
+    // disabling one kind doesn't affect
+    // the others. The Phase 7 built-in TS
+    // service stays in place for the
+    // disabled kind.
+    if (!getUseRealServer(initialKind)) return;
 
     // Get-or-create the LspClient for this
     // workspace. The first call spawns the
     // child + runs the `initialize` handshake;
     // subsequent calls return the same client.
+    //
+    // Phase 9.2b — pass the kind we already
+    // inferred (and gated on) into the store.
+    // The store uses it to pick the right
+    // binary via `kindToSpawnSpec`. We pass
+    // the *raw* `initialKind` (not the gated
+    // version) so a future Phase 9.2c slice
+    // can flip the gate without changing the
+    // bridge. The gate is the bridge's
+    // responsibility, not the store's; the
+    // store assumes its caller already
+    // decided "yes, spawn something".
     let cancelled = false;
     const startBridge = async (): Promise<void> => {
       let client;
       try {
         client = await useLspClientStore
           .getState()
-          .getOrCreate(workspaceRoot);
+          .getOrCreate(workspaceRoot, initialKind);
       } catch (e) {
         // Spawn or `initialize` failed. The
         // store has already flipped the
@@ -288,11 +328,22 @@ export function useMonacoLspBridge({
     // ~50 KiB.
     const changeSub = typedEditor.onDidChangeModelContent(async (event) => {
       if (cancelled) return;
+      const model = typedEditor.getModel();
+      if (!model) return;
+      // Phase 9.2d — the client for the
+      // *current* model is at
+      // `(workspaceRoot, kindOfCurrentModel)`.
+      // The kind may differ from `initialKind`
+      // if the user has switched files since
+      // mount (we re-run via the `clientHandleId`
+      // dep, which is also a function of the
+      // current kind).
+      const kind = inferServerKind(model.uri.toString());
+      if (!isSupportedKind(kind)) return;
       const client = useLspClientStore
         .getState()
-        .clients.get(workspaceRoot);
-      const model = typedEditor.getModel();
-      if (!client || !model) return;
+        .clients.get(workspaceKindKey(workspaceRoot, kind));
+      if (!client) return;
       try {
         await sendDidChange(client, model, event);
       } catch {
@@ -310,29 +361,63 @@ export function useMonacoLspBridge({
     // model URI).
     const modelSub = typedEditor.onDidChangeModel(async (e: monaco.editor.IModelChangedEvent) => {
       if (cancelled) return;
-      const client = useLspClientStore
-        .getState()
-        .clients.get(workspaceRoot);
-      if (!client) return;
+      // Phase 9.2d — find the client for the
+      // *current* model. The old model (if
+      // any) gets a `didClose` against the
+      // old client; the new model gets a
+      // `didOpen` against the new client.
+      // If the user is switching kinds
+      // (e.g. `.ts` → `.py`), each side
+      // talks to a different client.
+      const newModel = typedEditor.getModel();
+      const newKind: LspServerKind = newModel
+        ? inferServerKind(newModel.uri.toString())
+        : 'unknown';
+      const newClient = isSupportedKind(newKind)
+        ? useLspClientStore
+            .getState()
+            .clients.get(workspaceKindKey(workspaceRoot, newKind)) ?? null
+        : null;
+      if (!newClient) return;
       // Close the old model. `IModelChangedEvent`
       // only gives us the URI (not the model
       // itself — it may have already been
-      // disposed). We send the URI string.
+      // disposed). We send the URI string. The
+      // `didClose` for the old model goes to the
+      // *old* client's kind (the one inferred
+      // from `oldModelUrl`), not the new model's
+      // kind. If the user is staying on the same
+      // kind (e.g. `.ts` → another `.ts`), this
+      // is the same client; if the user is
+      // switching kinds (`.ts` → `.py`), this
+      // is the old client and `newClient` is a
+      // different one.
       if (e.oldModelUrl) {
-        try {
-          await client.notify('textDocument/didClose', {
-            textDocument: { uri: e.oldModelUrl.toString() },
-          });
-        } catch {
-          // ignore
+        const oldKind = inferServerKind(
+          e.oldModelUrl.toString(),
+        );
+        const oldClient = isSupportedKind(oldKind)
+          ? useLspClientStore
+              .getState()
+              .clients.get(
+                workspaceKindKey(workspaceRoot, oldKind),
+              ) ?? null
+          : null;
+        if (oldClient) {
+          try {
+            await oldClient.notify('textDocument/didClose', {
+              textDocument: { uri: e.oldModelUrl.toString() },
+            });
+          } catch {
+            // ignore
+          }
         }
       }
-      // Open the new model.
-      const newModel = typedEditor.getModel();
+      // Open the new model on the *new* client.
       if (newModel) {
         try {
           await sendDidOpen(
-            client,
+            newClient,
             newModel,
             newModel.getLanguageId(),
           );

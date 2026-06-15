@@ -1,35 +1,49 @@
 /**
- * LanguageServerCard — Phase 9 (Tiniest scope).
+ * LanguageServerCard — Phase 9 / Phase 9.2e
+ * (multi-server).
  *
- * The "TypeScript language server" card under
- * Editor → Language Servers in the Settings
- * screen. Renders:
+ * The "Language servers" card under Editor →
+ * Language Servers in the Settings screen. Phase
+ * 9.2e renders one stacked row per supported
+ * LSP kind (`SUPPORTED_LSP_SERVER_KINDS`):
+ * `typescript`, `rust_analyzer`, `pyright`.
+ * Each row is independent — its own status
+ * badge, install hint, kill switch, restart
+ * button, server output panel.
  *
- *   1. A status badge (Stopped / Starting /
- *      Ready / Error) sourced from
- *      `lspClientStore.statusByWorkspace`. The
- *      first workspace in `workspaceStore` is
- *      the "current" one (the status card is
- *      per-workspace; we show the active one
- *      in v1 — per-workspace settings live in
- *      the editor-pane status badge).
- *   2. The "Restart server" button (visible when
- *      a server is alive or starting). Calls
- *      `lspClientStore.dispose(workspaceRoot)`
- *      then `getOrCreate(workspaceRoot)`.
- *   3. A toggle: "Use built-in Monaco TS
- *      service instead of
- *      `typescript-language-server`" (the
- *      kill switch). Writes the value to
- *      `localStorage` via the
- *      `lspKillSwitch` utility; the bridge
- *      hook reads it on mount.
- *   4. An install hint panel (visible when
- *      `lspCheckAvailable` returns
- *      `available: false`). Shows the copy-
- *      paste-able `npm install -g
- *      typescript-language-server` command
- *      the user can run in their shell.
+ * ## Per-row state
+ *
+ *   - Status badge (Stopped / Starting /
+ *     Ready / Error) — sourced from
+ *     `lspClientStore.statusByWorkspace` keyed
+ *     by `${workspaceRoot}//${kind}` (the
+ *     composite key from Phase 9.2d).
+ *   - Install hint — driven by the
+ *     `lspCheckAvailable({ serverKind })` IPC
+ *     probe.
+ *   - "Restart server" button — calls
+ *     `respawn(workspaceRoot, kind)`.
+ *   - Kill switch — flips the per-kind
+ *     `useRealServerByKind[kind]` localStorage
+ *     value. On OFF, disposes *just that
+ *     kind's* client (Phase 9.2e — Phase 9.2d's
+ *     `disposeAllKindsForWorkspace` is no longer
+ *     used here).
+ *   - "Server output" panel — collapsible,
+ *     per-(root, kind) live log.
+ *
+ * ## Card-level (shared) state
+ *
+ *   - The Phase 9.6 completion sub-toggle.
+ *     Phase 9.2e decided completion is *not*
+ *     per-kind — it's a global sub-toggle. If
+ *     the user enables completion for the
+ *     `typescript` kind, they get it for every
+ *     enabled kind. The per-kind kill switch
+ *     determines which kinds are enabled at
+ *     all; the completion sub-toggle determines
+ *     whether the *enabled* kinds' completion
+ *     is real-server or built-in.
  *
  * ## Why a local `useState` (vs. a Zustand field)
  *   for the available / version probe
@@ -52,11 +66,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { lspCheckAvailable, type CheckAvailableResult } from '@/ipc/lsp';
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
-import { useLspClientStore, type LspStatus } from '@/screens/EditorWorkspace/state/lspClientStore';
+import {
+  useLspClientStore,
+  parseWorkspaceKindKey,
+  workspaceKindKey,
+  SUPPORTED_LSP_SERVER_KINDS,
+  type LspServerKind,
+  type LspStatus,
+} from '@/screens/EditorWorkspace/state/lspClientStore';
 import {
   getUseRealServer,
-  setUseRealServer,
   getUseRealServerForCompletion,
+  setUseRealServer,
   setUseRealServerForCompletion,
 } from '@/screens/EditorWorkspace/state/lspKillSwitch';
 
@@ -71,13 +92,42 @@ const BADGE_LABEL: Record<LspStatus, { label: string; className: string }> = {
 
 const STATUS_BLURB: Record<LspStatus, string> = {
   stopped:
-    'No server is running for this workspace. Open a TypeScript / JavaScript file to start one.',
+    'No server is running for this workspace. Open a matching file to start one.',
   starting:
-    'Spawning the `typescript-language-server` child process and running the `initialize` handshake.',
+    'Spawning the child process and running the `initialize` handshake.',
   ready:
     'The language server is connected and feeding Monaco. Go-to-def, find-references, rename, code actions, signature help, and inlay hints are live.',
   error:
-    'The server failed to start. The most common cause is `typescript-language-server` not being on PATH — see the install hint below.',
+    'The server failed to start. The most common cause is the binary not being on PATH — see the install hint below.',
+};
+
+/**
+ * Human-readable label for each supported
+ * kind. Used in the row header + the kill
+ * switch label. Picked to be terse but
+ * unambiguous (e.g. "TypeScript" is friendlier
+ * than `typescript-language-server`; the
+ * install hint surfaces the binary name).
+ */
+const KIND_LABEL: Record<LspServerKind, string> = {
+  typescript: 'TypeScript',
+  rust_analyzer: 'rust-analyzer',
+  pyright: 'pyright',
+  unknown: 'Unknown',
+};
+
+/**
+ * Default install hint per kind — used in the
+ * `catch` path of the `lspCheckAvailable`
+ * probe (the Rust IPC call failed; we still
+ * want to show *something* so the user can
+ * install the binary).
+ */
+const KIND_INSTALL_HINT_FALLBACK: Record<LspServerKind, string> = {
+  typescript: 'npm install -g typescript-language-server',
+  rust_analyzer: 'rustup component add rust-analyzer',
+  pyright: 'npm install -g pyright',
+  unknown: '',
 };
 
 /**
@@ -128,69 +178,48 @@ function formatAgo(ms: number, nowMs: number): string {
  *      boundaries. `setInterval` drifts; the
  *      `setTimeout` chain doesn't.
  *
- * When the user is on the settings card
- * with a crashed LSP server and *also*
- * editing a file in the editor, this is the
- * difference between "the settings card
- * re-renders 1×/sec" and "the settings
- * card is idle".
- *
  * The ticker is **opt-in** — only started
  * when there's a respawn scheduled
  * (`respawnInMs !== null`). When the respawn
  * fires (or is cancelled), the cleanup
  * function returns and the ticker stops.
  * The sub-component itself stays mounted
- * (it's just rendering "Crashed Xs ago
- * (exit code N)…" with X frozen), so React
- * doesn't re-render the card either way.
+ * (it just renders `<strong>Crashed Xs
+ * ago</strong>` with no countdown suffix
+ * when the respawn is null).
  */
-interface RespawnCountdownProps {
+// Exported for the Phase 9.3 sub-component
+// unit test (RespawnCountdown.test.tsx).
+export function RespawnCountdown(props: {
   crashedAt: number;
   respawnInMs: number | null;
   consecutiveCrashes: number;
   exitStatus: number | null;
-}
-
-/**
- * Phase 9.3 — exported for unit testing. The
- * `LanguageServerCard` consumer is the only
- * in-tree caller; the export is purely so the
- * test file can mount it in isolation without
- * dragging in the whole card.
- */
-export function RespawnCountdown({
-  crashedAt,
-  respawnInMs,
-  consecutiveCrashes,
-  exitStatus,
-}: RespawnCountdownProps): JSX.Element {
-  // The ticker only runs when a respawn is
-  // scheduled. When the respawn fires (the
-  // store transitions `respawnInMs` to
-  // `null`), the effect cleans up and the
-  // label freezes at the last value.
+}) {
+  const { crashedAt, respawnInMs, consecutiveCrashes, exitStatus } = props;
+  // We render with the *current* time on
+  // every tick; the tick is opt-in (only
+  // when `respawnInMs !== null`), so the
+  // component re-renders the header text
+  // 1×/sec while a respawn is pending and
+  // is otherwise idle.
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   useEffect(() => {
     if (respawnInMs === null) return;
-    let cancelled = false;
     let timerId: ReturnType<typeof setTimeout> | null = null;
-    const schedule = (): void => {
-      if (cancelled) return;
-      // Align to the next wall-clock second
-      // boundary. If we're already within
-      // ~1ms of a boundary, schedule for the
-      // following one.
-      const msUntilNextSecond = 1000 - (Date.now() % 1000);
-      timerId = setTimeout(() => {
-        if (cancelled) return;
-        setNowMs(Date.now());
-        schedule();
-      }, msUntilNextSecond);
+    const tick = () => {
+      setNowMs(Date.now());
+      // Re-schedule aligned to the next
+      // wall-clock second boundary.
+      const ms = 1000 - (Date.now() % 1000);
+      timerId = setTimeout(tick, ms);
     };
-    schedule();
+    // Kick the first tick on the next
+    // boundary (so the "Auto-restarting
+    // in Ns…" label stays in sync with
+    // wall-clock seconds).
+    timerId = setTimeout(tick, 1000 - (Date.now() % 1000));
     return () => {
-      cancelled = true;
       if (timerId !== null) clearTimeout(timerId);
     };
   }, [respawnInMs]);
@@ -233,80 +262,60 @@ function lastNLines(s: string, n: number): string {
   return lines.slice(-n).join('\n');
 }
 
-export function LanguageServerCard() {
-  // The active workspace (same source of truth
-  // as the rest of the editor).
-  const activeWorkspaceRoot = useWorkspaceStore((s) =>
-    s.activeId ? s.workspaces.find((w) => w.id === s.activeId)?.path ?? null : null,
-  );
-  // Per-workspace status from the LspClient store.
-  // `useShallow` keeps the selector identity
-  // stable when the Map changes by reference
-  // (Zustand) but the value for our workspace
-  // doesn't change.
+/**
+ * Phase 9.2e — one row per supported kind.
+ *
+ * `LanguageServerCard` renders N of these (one
+ * per `SUPPORTED_LSP_SERVER_KINDS`). Each row
+ * owns its own:
+ *   - Status / crash / output-entry selectors
+ *     (keyed by `${workspaceRoot}//${kind}`).
+ *   - Install-hint probe.
+ *   - Kill switch state (the
+ *     `useRealServerByKind[kind]` localStorage
+ *     value, mirrored into local `useState`).
+ *   - Per-row output-panel UI state
+ *     (collapsed/expanded, auto-scroll).
+ *
+ * The card-level completion sub-toggle and
+ * the active-workspace logic live in the
+ * parent. Killing a row's switch disposes
+ * *only that kind's* client (via
+ * `dispose(root, kind)`).
+ */
+function LanguageServerRow(props: {
+  kind: LspServerKind;
+  workspaceRoot: string | null;
+}) {
+  const { kind, workspaceRoot } = props;
+  // The composite (root, kind) key. Null
+  // when there's no active workspace — the
+  // row renders a "no workspace" placeholder
+  // in that case.
+  const key =
+    workspaceRoot !== null
+      ? workspaceKindKey(workspaceRoot, kind)
+      : null;
+  // Per-(root, kind) status from the
+  // LspClient store.
   const status = useLspClientStore(
-    (s) =>
-      (activeWorkspaceRoot
-        ? s.statusByWorkspace.get(activeWorkspaceRoot) ?? 'stopped'
-        : 'stopped'),
+    (s) => (key ? s.statusByWorkspace.get(key) ?? 'stopped' : 'stopped'),
   );
-  // Phase 9.5 — per-workspace crash info.
-  // `null` when the workspace is healthy
-  // (stopped / starting / ready); populated
-  // when the child process has crashed at
-  // least once since the workspace was last
-  // mounted. The "crashed" badge + the
-  // "Last lines of server output" panel +
-  // the auto-respawn countdown all read
-  // from this.
+  // Per-(root, kind) crash info.
   const crashInfo = useLspClientStore(
-    (s) =>
-      (activeWorkspaceRoot
-        ? s.crashByWorkspace.get(activeWorkspaceRoot) ?? null
-        : null),
+    (s) => (key ? s.crashByWorkspace.get(key) ?? null : null),
   );
-  // Phase 9.7 — per-workspace live "Server
-  // output" panel. Sourced from
-  // `lspClientStore.lspOutputByWorkspace`,
-  // populated by the `lsp://log` subscription
-  // and the one-shot replay drain. `null`
-  // when the store has no entry for this
-  // workspace (i.e. the child has not
-  // produced any output yet AND the user has
-  // not opened the panel). The component
-  // treats both `null` and `{ lines: [],
-  // partialLine: '' }` as "no output yet" so
-  // the panel can render an empty state.
+  // Per-(root, kind) live server output.
   const outputEntry = useLspClientStore(
-    (s) =>
-      (activeWorkspaceRoot
-        ? s.lspOutputByWorkspace.get(activeWorkspaceRoot) ?? null
-        : null),
+    (s) => (key ? s.lspOutputByWorkspace.get(key) ?? null : null),
   );
-  // Phase 9.7 — UI state for the
-  // collapsible "Server output" panel. The
-  // panel defaults to collapsed so the
-  // settings card stays compact by default;
-  // the user can expand it when they're
-  // debugging. `autoScroll` defaults to
-  // `true` so the panel always tracks the
-  // latest line (the common debugging UX).
+  // Per-row UI state for the collapsible
+  // "Server output" panel.
   const [outputExpanded, setOutputExpanded] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  // Phase 9.3 — the 1 Hz "Auto-restarting in
-  // Ns…" countdown was previously driven by a
-  // `setInterval` that re-rendered the *whole*
-  // `LanguageServerCard` 1×/sec. Extracted
-  // to `<RespawnCountdown>` (see below),
-  // which owns its own ticker and re-renders
-  // *only itself*. The card no longer
-  // re-renders on the timer.
-  // Phase 9.7 — auto-scroll the "Server
-  // output" panel to the bottom when new
-  // lines arrive. We use a callback ref
-  // (not `useRef`) so the ref object is
-  // stable across renders and the effect
-  // can read it without re-running.
+  // Per-row auto-scroll effect — the `pre`
+  // ref is per-row, so the effect is
+  // per-row too.
   const outputPreNodeRef = useRef<HTMLPreElement | null>(null);
   const outputPreRef = useCallback((node: HTMLPreElement | null) => {
     outputPreNodeRef.current = node;
@@ -315,11 +324,6 @@ export function LanguageServerCard() {
     if (!autoScroll) return;
     if (!outputExpanded) return;
     if (!outputPreNodeRef.current) return;
-    // Scroll to the bottom on every line
-    // append. The `pre` is a single node;
-    // the assignment to `.scrollTop` is
-    // cheap (no layout if the height is
-    // unchanged).
     outputPreNodeRef.current.scrollTop =
       outputPreNodeRef.current.scrollHeight;
   }, [
@@ -329,35 +333,43 @@ export function LanguageServerCard() {
     outputEntry?.updatedAt,
   ]);
   // The available / install-hint probe.
+  // The effect re-runs when the kind
+  // changes (a different row may have a
+  // different binary to check).
   const [probe, setProbe] = useState<CheckAvailableResult | null>(null);
-  // The kill switch toggle.
-  const [useRealServer, setUseRealServerLocal] = useState<boolean>(getUseRealServer());
-  // Phase 9.6: the completion sub-toggle.
-  // Independent of the master kill switch so the
-  // user can keep the real server for go-to-def /
-  // refs / rename (cross-file-quality matters) but
-  // keep the built-in for completion (latency
-  // matters). Defaults to `false` (built-in is
-  // faster for autocomplete).
-  const [
-    useRealServerForCompletion,
-    setUseRealServerForCompletionLocal,
-  ] = useState<boolean>(getUseRealServerForCompletion());
+  // The per-kind kill switch toggle state.
+  // Mirrored into local `useState` so the
+  // toggle is responsive to the click.
+  const [useRealServer, setUseRealServerLocal] = useState<boolean>(() =>
+    getUseRealServer(kind),
+  );
+  // The fallback install hint for this
+  // kind — used in the `catch` path of the
+  // probe (Rust IPC unreachable).
+  const fallbackInstallHint = KIND_INSTALL_HINT_FALLBACK[kind];
 
   useEffect(() => {
     let cancelled = false;
-    lspCheckAvailable()
+    // Skip the probe for `'unknown'` — the
+    // bridge never spawns a client for an
+    // unknown kind, so there's no binary
+    // to check. The row renders the "Open
+    // a matching file" status blurb.
+    if (kind === 'unknown') {
+      setProbe({ available: false, installHint: '', version: null });
+      return () => {
+        cancelled = true;
+      };
+    }
+    lspCheckAvailable({ serverKind: kind })
       .then((r) => {
         if (!cancelled) setProbe(r);
       })
       .catch((e: unknown) => {
-        // The probe is best-effort — if the
-        // Rust side is unreachable, just
-        // show the install hint.
         if (!cancelled) {
           setProbe({
             available: false,
-            installHint: 'npm install -g typescript-language-server',
+            installHint: fallbackInstallHint,
             version: null,
           });
         }
@@ -368,67 +380,47 @@ export function LanguageServerCard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [kind, fallbackInstallHint]);
 
   const handleKillSwitchChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const next = e.target.checked;
-      setUseRealServer(next);
+      // Persist the per-kind value (Phase
+      // 9.2e). `setUseRealServer(kind, value)`
+      // does a read-merge-write on the v2
+      // record.
+      setUseRealServer(kind, next);
       setUseRealServerLocal(next);
-      // If the user just disabled the real
-      // server, dispose the live client so
-      // the child process is gone. The next
-      // time the user re-enables + opens a
-      // file, a fresh client will spawn.
-      if (!next && activeWorkspaceRoot) {
-        void useLspClientStore.getState().dispose(activeWorkspaceRoot);
+      // If the user just disabled *this
+      // kind's* real server, dispose
+      // *just this kind's* client. Other
+      // kinds (e.g. TS is off, pyright is
+      // on) are unaffected. Phase 9.2d's
+      // `disposeAllKindsForWorkspace` is no
+      // longer used here — the per-kind
+      // kill switch is per-kind.
+      if (!next && workspaceRoot) {
+        void useLspClientStore
+          .getState()
+          .dispose(workspaceRoot, kind);
       }
     },
-    [activeWorkspaceRoot],
-  );
-
-  /**
-   * Phase 9.6 — completion sub-toggle handler.
-   * Toggling completion doesn't need to dispose
-   * the live client (the LSP session itself is
-   * unchanged; only the per-method provider
-   * registration changes). The user will see the
-   * new completion behaviour on the next file
-   * open (the bridge re-reads the toggle and
-   * registers / skips the completion provider
-   * accordingly).
-   */
-  const handleCompletionToggleChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const next = e.target.checked;
-      setUseRealServerForCompletion(next);
-      setUseRealServerForCompletionLocal(next);
-    },
-    [],
+    [kind, workspaceRoot],
   );
 
   const handleRestart = useCallback(() => {
-    if (!activeWorkspaceRoot) return;
-    // Phase 9.5 — use the new `respawn` action
-    // instead of `dispose` + `getOrCreate`. It
-    // cancels any pending auto-respawn timer
-    // (so the scheduled respawn doesn't race
-    // with the manual one) and resets the
-    // `consecutiveCrashes` counter (so a
-    // manual restart doesn't burn through the
-    // 5-attempt auto-respawn ladder if the
-    // user is just testing config changes).
-    void useLspClientStore.getState().respawn(activeWorkspaceRoot);
-  }, [activeWorkspaceRoot]);
+    if (!workspaceRoot) return;
+    // `respawn(root, kind)` cancels any
+    // pending auto-respawn timer for this
+    // kind and resets the
+    // `consecutiveCrashes` counter. The
+    // per-row button targets *this* kind.
+    void useLspClientStore
+      .getState()
+      .respawn(workspaceRoot, kind);
+  }, [workspaceRoot, kind]);
 
   const badge = BADGE_LABEL[status];
-  // Phase 9.5 — when we have crash info AND
-  // the status is `error`, override the badge
-  // to a "Crashed" label so the user
-  // immediately sees the cause. The base
-  // `Error` badge is still used for the
-  // non-crash error path (spawn failed,
-  // `initialize` timeout).
   const crashed = status === 'error' && crashInfo !== null;
   const crashBadge = crashed
     ? {
@@ -438,9 +430,15 @@ export function LanguageServerCard() {
     : null;
 
   return (
-    <div className={styles.card} data-testid="language-server-card">
+    <div
+      className={styles.row}
+      data-testid="lsp-row"
+      data-kind={kind}
+    >
       <div className={styles.cardHeader}>
-        <h3 className={styles.cardTitle}>TypeScript language server</h3>
+        <h4 className={styles.rowTitle}>
+          {KIND_LABEL[kind]} language server
+        </h4>
         <span
           className={`${styles.badge} ${(crashBadge ?? badge).className}`}
           data-testid="lsp-status-badge"
@@ -448,28 +446,7 @@ export function LanguageServerCard() {
           {(crashBadge ?? badge).label}
         </span>
       </div>
-      <p className={styles.cardDescription}>
-        Real cross-file go-to-def, find-references, rename, code actions,
-        signature help, and inlay hints. Backed by{' '}
-        <code>typescript-language-server</code> (the same LSP server
-        nvim / helix / zed use).
-      </p>
       <p className={styles.statusLine}>{STATUS_BLURB[status]}</p>
-      {/* Phase 9.5 — crash diagnostics panel.
-          Rendered when the store has crash info
-          for this workspace (i.e. the child
-          process exited at least once and the
-          event listener captured the
-          `lsp://crashed` payload). Shows:
-            - The "Auto-restarting in Ns..." or
-              "Restart failed" countdown (only
-              when a respawn is scheduled)
-            - The "Last lines of server output"
-              panel with the last 100 lines of
-              stderr (UTF-8 lossy)
-            - A "Copy diagnostics" button so the
-              user can paste the full stderr
-              into a bug report. */}
       {crashInfo && (
         <div className={styles.crashPanel} data-testid="lsp-crash-panel">
           <div className={styles.crashHeader}>
@@ -495,18 +472,14 @@ export function LanguageServerCard() {
               void navigator.clipboard
                 .writeText(
                   `lipi LSP crash\n` +
-                    `Workspace: ${activeWorkspaceRoot}\n` +
+                    `Workspace: ${workspaceRoot}\n` +
+                    `Kind: ${kind}\n` +
                     `Exit: ${crashInfo.exitStatus ?? 'unknown'}\n` +
                     `When: ${new Date(crashInfo.crashedAt).toISOString()}\n` +
                     `\n--- stderr ---\n${crashInfo.stderrTail}`,
                 )
                 .catch(() => {
-                  // Clipboard is best-effort
-                  // (may be blocked in some
-                  // iframes / WebView
-                  // contexts). The user can
-                  // still select the text
-                  // manually.
+                  // Clipboard is best-effort.
                 });
             }}
             data-testid="lsp-crash-copy"
@@ -515,28 +488,20 @@ export function LanguageServerCard() {
           </button>
         </div>
       )}
-      {!probe?.available && (
+      {kind !== 'unknown' && !probe?.available && (
         <div className={styles.installHint} data-testid="lsp-install-hint">
           <strong>Not installed.</strong> Run{' '}
-          <code>{probe?.installHint ?? 'npm install -g typescript-language-server'}</code>{' '}
-          in your shell, then click <em>Restart server</em>. Requires Node.js
-          and a <code>PATH</code> entry.
+          <code>{probe?.installHint ?? fallbackInstallHint}</code>{' '}
+          in your shell, then click <em>Restart server</em>. Requires{' '}
+          {kind === 'rust_analyzer' ? 'the Rust toolchain' : 'Node.js'} and a{' '}
+          <code>PATH</code> entry.
         </div>
       )}
-      {probe?.available && probe.version && (
+      {kind !== 'unknown' && probe?.available && probe.version && (
         <p className={styles.statusLine} data-testid="lsp-version">
           Server version: {probe.version}
         </p>
       )}
-      {/* Phase 9.7 — live "Server output"
-          panel. Hidden when the kill switch
-          is on (built-in Monaco TS service —
-          there's no server to log). The
-          panel is always rendered (even when
-          collapsed) so the user can see "0
-          lines" / "waiting for output" as a
-          sanity check that the server is
-          alive. */}
       {useRealServer && (
         <div
           className={styles.outputPanel}
@@ -585,10 +550,10 @@ export function LanguageServerCard() {
                   type="button"
                   className={styles.outputClearButton}
                   onClick={() => {
-                    if (activeWorkspaceRoot) {
+                    if (workspaceRoot) {
                       useLspClientStore
                         .getState()
-                        .clearLspOutput(activeWorkspaceRoot);
+                        .clearLspOutput(workspaceRoot, kind);
                     }
                   }}
                   data-testid="lsp-output-clear"
@@ -626,43 +591,18 @@ export function LanguageServerCard() {
             checked={useRealServer}
             onChange={handleKillSwitchChange}
             data-testid="lsp-kill-switch"
+            data-kind={kind}
           />
-          Use built-in Monaco TS service instead of{' '}
-          <code>typescript-language-server</code>
+          Use built-in for {KIND_LABEL[kind]} instead
         </label>
         <p className={styles.toggleHint}>
           The built-in service is faster on the hot path (autocomplete) and
-          doesn&apos;t need Node. The real server adds cross-file go-to-def,
-          find-references, rename with preview, and code actions.
+          doesn&apos;t need {kind === 'rust_analyzer' ? 'a separate server process' : 'Node'}.
+          The real server adds cross-file go-to-def, find-references, rename
+          with preview, and code actions.
         </p>
       </div>
-      {/* Phase 9.6: completion sub-toggle. Only
-          meaningful when the master kill switch
-          is OFF (i.e. the real server is in use
-          for go-to-def / refs / etc.). If the
-          master is on (built-in), the
-          completion sub-toggle is hidden. */}
-      {useRealServer && (
-        <div className={styles.toggleRow}>
-          <label className={styles.toggleLabel}>
-            <input
-              type="checkbox"
-              checked={useRealServerForCompletion}
-              onChange={handleCompletionToggleChange}
-              data-testid="lsp-completion-toggle"
-            />
-            Use real server for completion (slower, smarter)
-          </label>
-          <p className={styles.toggleHint}>
-            The real server&apos;s <code>textDocument/completion</code> knows
-            about <code>node_modules</code> types, <code>paths</code>{' '}
-            aliases in <code>tsconfig.json</code>, and cross-file imports —
-            but each completion is a 50-200&nbsp;ms round-trip vs{' '}
-            5-20&nbsp;ms for the built-in. Default is the built-in.
-          </p>
-        </div>
-      )}
-      {activeWorkspaceRoot && status !== 'stopped' && (
+      {workspaceRoot && status !== 'stopped' && (
         <div className={styles.buttonRow}>
           <button
             type="button"
@@ -677,3 +617,99 @@ export function LanguageServerCard() {
     </div>
   );
 }
+
+/**
+ * Top-level card. Renders one `LanguageServerRow`
+ * per supported kind, plus the global Phase 9.6
+ * completion sub-toggle. The card is a thin
+ * wrapper — all per-kind state lives in the row.
+ */
+export function LanguageServerCard() {
+  // The active workspace (same source of truth
+  // as the rest of the editor). Passed down
+  // to each row.
+  const activeWorkspaceRoot = useWorkspaceStore((s) =>
+    s.activeId ? s.workspaces.find((w) => w.id === s.activeId)?.path ?? null : null,
+  );
+  // The Phase 9.6 completion sub-toggle is
+  // a card-level (global) setting. It's
+  // *not* per-kind — see the file header.
+  const [
+    useRealServerForCompletion,
+    setUseRealServerForCompletionLocal,
+  ] = useState<boolean>(getUseRealServerForCompletion());
+  // The completion sub-toggle is hidden when
+  // *every* supported kind is off. If at
+  // least one is on, the user is using the
+  // real server for at least one kind and
+  // the completion sub-toggle is meaningful.
+  const anyKindEnabled = SUPPORTED_LSP_SERVER_KINDS.some(
+    (k) => k !== 'unknown' && getUseRealServer(k),
+  );
+  const handleCompletionToggleChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const next = e.target.checked;
+      setUseRealServerForCompletion(next);
+      setUseRealServerForCompletionLocal(next);
+    },
+    [],
+  );
+
+  return (
+    <div className={styles.card} data-testid="language-server-card">
+      <div className={styles.cardHeader}>
+        <h3 className={styles.cardTitle}>Language servers</h3>
+      </div>
+      <p className={styles.cardDescription}>
+        Real cross-file go-to-def, find-references, rename, code actions,
+        signature help, and inlay hints for the supported languages. Each
+        language has its own row; the kill switch is per-language.
+      </p>
+      {/* Phase 9.2e — one row per supported
+          kind. The order is the
+          `SUPPORTED_LSP_SERVER_KINDS` order
+          (typescript, rust_analyzer,
+          pyright). Unknown is filtered out —
+          the bridge never spawns a client for
+          an unknown kind, so there's nothing
+          to render. */}
+      <div className={styles.rows} data-testid="lsp-rows">
+        {SUPPORTED_LSP_SERVER_KINDS.filter((k) => k !== 'unknown').map(
+          (kind) => (
+            <LanguageServerRow
+              key={kind}
+              kind={kind}
+              workspaceRoot={activeWorkspaceRoot}
+            />
+          ),
+        )}
+      </div>
+      {anyKindEnabled && (
+        <div className={styles.toggleRow}>
+          <label className={styles.toggleLabel}>
+            <input
+              type="checkbox"
+              checked={useRealServerForCompletion}
+              onChange={handleCompletionToggleChange}
+              data-testid="lsp-completion-toggle"
+            />
+            Use real server for completion (slower, smarter)
+          </label>
+          <p className={styles.toggleHint}>
+            Applies to every enabled language server. The real server&apos;s{' '}
+            <code>textDocument/completion</code> knows about{' '}
+            <code>node_modules</code> types, <code>paths</code> aliases in{' '}
+            <code>tsconfig.json</code>, and cross-file imports — but each
+            completion is a 50-200&nbsp;ms round-trip vs 5-20&nbsp;ms for the
+            built-in. Default is the built-in.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Re-export for tests that want to assert the
+// composite key behaviour in the card's
+// `data-kind` / status badge.
+export { parseWorkspaceKindKey };

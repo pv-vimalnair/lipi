@@ -64,6 +64,39 @@ vi.mock('@/ipc/lsp', () => {
       handleId: 'mock_handle_1',
       resolvedCommand: 'typescript-language-server',
     })),
+    // Phase 9.2b — the store calls
+    // `kindToSpawnSpec` (a pure function) to
+    // pick the binary. The bridge test mock
+    // returns the TS spec by default; the
+    // `rust_analyzer` bridge test overrides
+    // this with `mockImplementation`.
+    kindToSpawnSpec: vi.fn((kind: string) => {
+      if (kind === 'rust_analyzer') {
+        return {
+          command: 'rust-analyzer',
+          args: [],
+          installHint: 'rustup component add rust-analyzer',
+        };
+      }
+      // Phase 9.2c — `pyright` arm.
+      // Mirrors the JS
+      // `kindToSpawnSpec('pyright')` in
+      // `ipc/lsp.ts` and the Rust
+      // `server_kind_spec(Pyright).binary`
+      // in `src-tauri/src/stdio.rs`.
+      if (kind === 'pyright') {
+        return {
+          command: 'pyright-langserver',
+          args: ['--stdio'],
+          installHint: 'npm install -g pyright',
+        };
+      }
+      return {
+        command: 'typescript-language-server',
+        args: ['--stdio'],
+        installHint: 'npm install -g typescript-language-server',
+      };
+    }),
     lspStdioRead: vi.fn(async (_h: string, maxBytes: number) => {
       // Pre-staged queue. The mock
       // lspStdioWrite below also enqueues
@@ -232,14 +265,40 @@ vi.mock('./lspProviders', async (importOriginal) => {
   };
 });
 
-import { useLspClientStore } from '../state/lspClientStore';
+import {
+  useLspClientStore,
+  parseWorkspaceKindKey,
+  workspaceKindKey,
+} from '../state/lspClientStore';
+// Phase 9.2d — every test fixture below
+// that previously used a bare
+// `'/workspace/x'` string as a map key now
+// uses `tsKey('/workspace/x')`, which
+// produces the composite key
+// `'/workspace/x//typescript'`. The TS kind
+// is the implicit default for pre-9.2b call
+// sites; all the legacy tests use the
+// default kind. Tests that need a
+// non-default kind import `workspaceKindKey`
+// directly and pass the kind explicitly.
+const tsKey = (workspaceRoot: string): string =>
+  workspaceKindKey(workspaceRoot, 'typescript');
 import {
   setUseRealServer,
+  setUseRealServerByKind,
   setUseRealServerForCompletion,
 } from '../state/lspKillSwitch';
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 import { useMonacoLspBridge } from './useMonacoLspBridge';
 import { registerLspProviders } from './lspProviders';
+// Phase 9.2b — we need direct access to
+// the `lspRunStdio` and `kindToSpawnSpec`
+// mocks to assert the rust-analyzer bridge
+// test. The module is fully mocked above,
+// so these imports resolve to the mock
+// functions (which carry a `.mock.calls`
+// property we can introspect).
+import { kindToSpawnSpec, lspRunStdio } from '@/ipc/lsp';
 
 interface MountedHook {
   unmount: () => void;
@@ -396,15 +455,30 @@ beforeEach(() => {
     workspaces: [],
     activeId: null,
   });
-  // Default to "use real server on" unless a test
-  // flips it.
-  setUseRealServer(true);
+  // Default to "use real server on for every kind"
+  // unless a test flips it. The per-kind record
+  // needs every supported kind so the gate
+  // doesn't fall through to the v1 default (the
+  // kill switch defaults to `true` for missing
+  // kinds, but resetting it explicitly here
+  // keeps the test fixture deterministic).
+  setUseRealServerByKind({
+    typescript: true,
+    rust_analyzer: true,
+    pyright: true,
+    unknown: true,
+  });
   vi.clearAllMocks();
 });
 
 afterEach(async () => {
-  // Restore default kill switch.
-  setUseRealServer(true);
+  // Restore default kill switch for every kind.
+  setUseRealServerByKind({
+    typescript: true,
+    rust_analyzer: true,
+    pyright: true,
+    unknown: true,
+  });
   // Restore default completion sub-toggle
   // (Phase 9.6: independent of the master
   // kill switch, defaults to `false`).
@@ -420,11 +494,20 @@ afterEach(async () => {
   // before the old client is gone, and
   // both readers race for the shared
   // `__lspQ`.
-  const liveWorkspaces = Array.from(
-    useLspClientStore.getState().clients.keys(),
-  );
-  for (const workspaceRoot of liveWorkspaces) {
-    await useLspClientStore.getState().dispose(workspaceRoot);
+  // Phase 9.2d — keys are now
+  // `${workspaceRoot}//${kind}`, not bare
+  // roots. We need to extract the root
+  // for `disposeAllKindsForWorkspace`.
+  // Parse the keys and dedupe by root.
+  const seenRoots = new Set<string>();
+  for (const key of useLspClientStore.getState().clients.keys()) {
+    const parsed = parseWorkspaceKindKey(key);
+    if (parsed) seenRoots.add(parsed.workspaceRoot);
+  }
+  for (const workspaceRoot of seenRoots) {
+    await useLspClientStore
+      .getState()
+      .disposeAllKindsForWorkspace(workspaceRoot);
   }
   // Reset the closure-scoped state too
   // (handle map, crash listener, respawn
@@ -433,8 +516,14 @@ afterEach(async () => {
 });
 
 describe('useMonacoLspBridge', () => {
-  it('is a no-op when the kill switch is disabled', async () => {
-    setUseRealServer(false);
+  it('is a no-op when the kill switch is disabled for the file kind', async () => {
+    // Phase 9.2e — the kill switch is per-kind.
+    // Disable the TS kind; a `.ts` file's
+    // bridge should bail out. Other kinds
+    // (rust-analyzer, pyright) remain enabled
+    // — a `.rs` or `.py` file's bridge would
+    // still spawn a client.
+    setUseRealServer('typescript', false);
     addWorkspace('/workspace/a');
     const mounted = mountBridge();
     // Wait a few ticks for the effect to run.
@@ -444,7 +533,7 @@ describe('useMonacoLspBridge', () => {
     // The store has no client — the bridge should
     // have bailed out at the kill switch.
     expect(
-      useLspClientStore.getState().clients.has('/workspace/a'),
+      useLspClientStore.getState().clients.has(tsKey('/workspace/a')),
     ).toBe(false);
     // `registerLspProviders` was never called.
     expect(registerLspProviders).not.toHaveBeenCalled();
@@ -460,7 +549,7 @@ describe('useMonacoLspBridge', () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        !useLspClientStore.getState().clients.has('/workspace/a')
+        !useLspClientStore.getState().clients.has(tsKey('/workspace/a'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -479,7 +568,7 @@ describe('useMonacoLspBridge', () => {
       }
     });
     expect(
-      useLspClientStore.getState().clients.has('/workspace/a'),
+      useLspClientStore.getState().clients.has(tsKey('/workspace/a')),
     ).toBe(true);
     expect(registerLspProviders).toHaveBeenCalledTimes(1);
     mounted.unmount();
@@ -517,7 +606,7 @@ describe('useMonacoLspBridge', () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        !useLspClientStore.getState().clients.has('/workspace/incr')
+        !useLspClientStore.getState().clients.has(tsKey('/workspace/incr'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -610,7 +699,7 @@ describe('useMonacoLspBridge', () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        !useLspClientStore.getState().clients.has('/workspace/big')
+        !useLspClientStore.getState().clients.has(tsKey('/workspace/big'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -672,7 +761,7 @@ describe('useMonacoLspBridge', () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        !useLspClientStore.getState().clients.has('/workspace/multi')
+        !useLspClientStore.getState().clients.has(tsKey('/workspace/multi'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -743,7 +832,7 @@ describe('useMonacoLspBridge', () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        !useLspClientStore.getState().clients.has('/workspace/empty')
+        !useLspClientStore.getState().clients.has(tsKey('/workspace/empty'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -788,7 +877,7 @@ describe('useMonacoLspBridge', () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        !useLspClientStore.getState().clients.has('/workspace/a')
+        !useLspClientStore.getState().clients.has(tsKey('/workspace/a'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -870,7 +959,7 @@ describe('useMonacoLspBridge', () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        !useLspClientStore.getState().clients.has('/workspace/comp-default')
+        !useLspClientStore.getState().clients.has(tsKey('/workspace/comp-default'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -911,7 +1000,7 @@ describe('useMonacoLspBridge', () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        !useLspClientStore.getState().clients.has('/workspace/comp-on')
+        !useLspClientStore.getState().clients.has(tsKey('/workspace/comp-on'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -948,16 +1037,22 @@ describe('useMonacoLspBridge', () => {
    *
    * The inferrer is
    * extension-based: a `.py` file
-   * infers `pyright` (a not-yet-supported
-   * kind), so the bridge gates the
-   * `getOrCreate` call and returns
-   * early. This test pins that
-   * behaviour: a future slice that adds
-   * `pyright-langserver` support will
-   * need to update this test (it'll
-   * start expecting a client).
+   * infers `pyright`. Phase 9.2c added
+   * `pyright` to
+   * `SUPPORTED_LSP_SERVER_KINDS`, so
+   * the bridge now actually spawns a
+   * `pyright-langserver` client (mirrors
+   * the `.rs` / `.ts` behaviour).
+   * This test pins the positive
+   * case: a `.py` file produces a
+   * `pyright`-kind `LspClient` and
+   * `registerLspProviders` is called.
+   * A future change that accidentally
+   * removes `pyright` from the
+   * supported list will fail this
+   * test.
    */
-  it('is a no-op for a .py file (pyright not yet supported)', async () => {
+  it('spawns a pyright client for a .py file (pyright is supported as of Phase 9.2c)', async () => {
     // Custom fake editor for a .py file.
     // We mirror the existing `fakeModel`
     // shape but with a Python URI.
@@ -978,24 +1073,35 @@ describe('useMonacoLspBridge', () => {
     };
     addWorkspace('/workspace/py');
     const mounted = mountBridge(pyEditor);
-    // Wait a few ticks — the bridge
-    // should NOT spawn a client.
+    // Wait for the bridge to spawn the
+    // client. The `.py` workspace should
+    // now have a client (the gate
+    // includes `'pyright'` as of
+    // Phase 9.2c). The key for a pyright
+    // client is `(root, 'pyright')` —
+    // NOT the legacy TS key.
+    const pyrightKey = workspaceKindKey('/workspace/py', 'pyright');
     await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore.getState().clients.has(pyrightKey)
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
     });
-    // No client created in the store.
-    expect(
-      useLspClientStore.getState().clients.has('/workspace/py'),
-    ).toBe(false);
-    // No status flip (still the default
-    // 'stopped').
-    expect(
-      useLspClientStore.getState().statusByWorkspace.get('/workspace/py') ??
-        'stopped',
-    ).toBe('stopped');
-    // `registerLspProviders` was never
-    // called.
-    expect(registerLspProviders).not.toHaveBeenCalled();
+    const client = useLspClientStore
+      .getState()
+      .clients.get(pyrightKey);
+    expect(client).toBeDefined();
+    // The client must carry the kind
+    // the bridge inferred. A `.py`
+    // workspace's client is a
+    // `pyright` client, not a TS
+    // client, and a `respawn()` after
+    // a crash will spawn the same
+    // binary.
+    expect(client?.kind).toBe('pyright');
     mounted.unmount();
   });
 
@@ -1023,7 +1129,7 @@ describe('useMonacoLspBridge', () => {
         Date.now() < deadline &&
         !useLspClientStore
           .getState()
-          .clients.has('/workspace/ts-supported')
+          .clients.has(tsKey('/workspace/ts-supported'))
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -1031,8 +1137,310 @@ describe('useMonacoLspBridge', () => {
     expect(
       useLspClientStore
         .getState()
-        .clients.has('/workspace/ts-supported'),
+        .clients.has(tsKey('/workspace/ts-supported')),
     ).toBe(true);
     mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2b — the same end-to-end path
+   * for a `.rs` file. The bridge
+   * infers `'rust_analyzer'` from the
+   * file extension, the gate (now wired)
+   * lets the spawn through, the store
+   * creates an `LspClient` with
+   * `kind: 'rust_analyzer'`, and the
+   * `kindToSpawnSpec` helper picks
+   * `rust-analyzer` (no `--stdio` flag)
+   * as the binary to spawn.
+   */
+  it('spawns a rust-analyzer client for a .rs file with the rust-analyzer binary', async () => {
+    // Custom fake editor for a `.rs`
+    // file. The bridge infers the kind
+    // from the URI's extension; the gate
+    // (now including `'rust_analyzer'`)
+    // lets the spawn through.
+    const rsModel: FakeModel = {
+      uri: { toString: () => 'file:///workspace/rs/src/main.rs' },
+      getLanguageId: () => 'rust',
+      getValue: () => 'fn main() {}\n',
+      getVersionId: () => 1,
+    };
+    const rsEditor = {
+      getModel: () => rsModel,
+      onDidChangeModelContent: (
+        _cb: (e: FakeContentChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+      onDidChangeModel: (
+        _cb: (e: FakeModelChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+    };
+    addWorkspace('/workspace/rs');
+    // Snapshot mock call counts *before*
+    // mounting — the mocks are shared
+    // across tests in this file, so we
+    // can only assert "called *during*
+    // this test" via a delta.
+    const lspRunStdioCallsBefore = (
+      lspRunStdio as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.length;
+    const kindToSpawnSpecCallsBefore = (
+      kindToSpawnSpec as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.length;
+    const mounted = mountBridge(rsEditor);
+    // Wait for the bridge to spawn the
+    // client. The `.rs` workspace
+    // should now have a client (the gate
+    // includes `'rust_analyzer'` as of
+    // Phase 9.2b). The key for a
+    // rust-analyzer client is
+    // `(root, 'rust_analyzer')` — NOT the
+    // legacy TS key.
+    const rustKey = workspaceKindKey(
+      '/workspace/rs',
+      'rust_analyzer',
+    );
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore.getState().clients.has(rustKey)
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    const client = useLspClientStore
+      .getState()
+      .clients.get(rustKey);
+    expect(client).toBeDefined();
+    // The client must carry the kind
+    // the bridge inferred. This is the
+    // contract the `LspClient.kind`
+    // field exists to enforce — a
+    // `.rs` workspace's client is a
+    // `rust-analyzer` client, not a TS
+    // client, and a `respawn()` after
+    // a crash will spawn the same
+    // binary.
+    expect(client?.kind).toBe('rust_analyzer');
+    // The spawn helper was called with
+    // the rust_analyzer kind at some
+    // point during this test.
+    const lspRunStdioCallsAfter = (
+      lspRunStdio as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.length;
+    const lspRunStdioDelta = (
+      lspRunStdio as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.slice(lspRunStdioCallsBefore, lspRunStdioCallsAfter);
+    const calledWithRustBinary = lspRunStdioDelta.some(
+      (call) =>
+        (call[0] as { command: string }).command === 'rust-analyzer',
+    );
+    expect(calledWithRustBinary).toBe(true);
+    // And `kindToSpawnSpec` was called
+    // with `'rust_analyzer'` at some
+    // point during this test.
+    const kindToSpawnSpecCallsAfter = (
+      kindToSpawnSpec as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.length;
+    const kindToSpawnSpecDelta = (
+      kindToSpawnSpec as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls.slice(
+      kindToSpawnSpecCallsBefore,
+      kindToSpawnSpecCallsAfter,
+    );
+    const calledWithRust = kindToSpawnSpecDelta.some(
+      (call) => call[0] === 'rust_analyzer',
+    );
+    expect(calledWithRust).toBe(true);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2d — multi-server e2e. A
+   * single workspace can have more than
+   * one live client (one per kind) once
+   * the user has opened files of
+   * different kinds. The bridge drives
+   * `getOrCreate(root, kind)` for each
+   * file the user opens, and the store
+   * keys clients by `(root, kind)`. This
+   * test mounts the bridge twice on the
+   * *same* workspace (once with a `.ts`
+   * model, once with a `.py` model) and
+   * asserts that the store has two
+   * distinct clients for the workspace.
+   */
+  it('spawns one client per (workspace, kind) — TS + pyright side-by-side', async () => {
+    addWorkspace('/workspace/multi');
+    // 1. Mount a TS bridge.
+    const tsMounted = mountBridge();
+    // The default fake model is
+    // `file:///workspace/a/index.ts` —
+    // good for the TS path. The test
+    // helper `mountBridge()` builds an
+    // editor with that URI, so the
+    // inferred kind is `'typescript'`.
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore
+          .getState()
+          .clients.has(tsKey('/workspace/multi'))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    expect(
+      useLspClientStore.getState().clients.get(tsKey('/workspace/multi')),
+    ).toBeDefined();
+    // 2. Mount a pyright bridge on the
+    // *same* workspace. We use a custom
+    // fake editor for this.
+    const pyModel: FakeModel = {
+      uri: { toString: () => 'file:///workspace/multi/script.py' },
+      getLanguageId: () => 'python',
+      getValue: () => 'print("hi")\n',
+      getVersionId: () => 1,
+    };
+    const pyEditor = {
+      getModel: () => pyModel,
+      onDidChangeModelContent: (
+        _cb: (e: FakeContentChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+      onDidChangeModel: (
+        _cb: (e: FakeModelChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+    };
+    const pyMounted = mountBridge(pyEditor);
+    const pyrightKey = workspaceKindKey(
+      '/workspace/multi',
+      'pyright',
+    );
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore.getState().clients.has(pyrightKey)
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    // 3. The store now has BOTH clients
+    // for the same workspace. Two
+    // distinct (root, kind) keys, two
+    // distinct LspClient instances.
+    const state = useLspClientStore.getState();
+    expect(state.clients.has(tsKey('/workspace/multi'))).toBe(true);
+    expect(state.clients.has(pyrightKey)).toBe(true);
+    // The two clients are distinct
+    // objects (not the same one
+    // re-keyed).
+    const tsClient = state.clients.get(tsKey('/workspace/multi'));
+    const pyClient = state.clients.get(pyrightKey);
+    expect(tsClient).not.toBe(pyClient);
+    // And each carries the right kind.
+    expect(tsClient?.kind).toBe('typescript');
+    expect(pyClient?.kind).toBe('pyright');
+    tsMounted.unmount();
+    pyMounted.unmount();
+  });
+
+  /**
+   * Phase 9.2e — the kill switch is
+   * per-kind. Disabling the TS kind does
+   * NOT prevent a `.py` bridge from
+   * spawning a pyright client (and vice
+   * versa). Two bridges for the same
+   * workspace, different file kinds, and
+   * only the TS kind is disabled — the
+   * pyright bridge must still spawn its
+   * client.
+   */
+  it('per-kind kill switch: TS off, pyright on — pyright still spawns (Phase 9.2e)', async () => {
+    setUseRealServer('typescript', false);
+    // rust_analyzer and pyright stay on
+    // (the default).
+    addWorkspace('/workspace/indep');
+    // Open a .py file. The bridge should
+    // NOT bail out at the kill switch
+    // (the gate is on `pyright`, which
+    // is still on).
+    const pyModel: FakeModel = {
+      uri: { toString: () => 'file:///workspace/indep/main.py' },
+      getLanguageId: () => 'python',
+      getValue: () => 'print("hi")\n',
+      getVersionId: () => 1,
+    };
+    const pyEditor = {
+      getModel: () => pyModel,
+      onDidChangeModelContent: (
+        _cb: (e: FakeContentChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+      onDidChangeModel: (
+        _cb: (e: FakeModelChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+    };
+    const pyMounted = mountBridge(pyEditor);
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore
+          .getState()
+          .clients.has(
+            workspaceKindKey('/workspace/indep', 'pyright'),
+          )
+      ) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+    });
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/indep', 'pyright')),
+    ).toBe(true);
+    pyMounted.unmount();
+  });
+
+  /**
+   * Phase 9.2e — flip the kill switch
+   * the *other* way: disable pyright,
+   * keep TS on. A `.ts` bridge must
+   * still spawn its TS client, and a
+   * `.py` bridge must bail out at the
+   * kill switch.
+   */
+  it('per-kind kill switch: pyright off, TS on — .py bridge is a no-op (Phase 9.2e)', async () => {
+    setUseRealServer('pyright', false);
+    addWorkspace('/workspace/indep2');
+    const pyModel: FakeModel = {
+      uri: { toString: () => 'file:///workspace/indep2/main.py' },
+      getLanguageId: () => 'python',
+      getValue: () => 'print("hi")\n',
+      getVersionId: () => 1,
+    };
+    const pyEditor = {
+      getModel: () => pyModel,
+      onDidChangeModelContent: (
+        _cb: (e: FakeContentChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+      onDidChangeModel: (
+        _cb: (e: FakeModelChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+    };
+    const pyMounted = mountBridge(pyEditor);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    // The pyright client was NOT spawned
+    // (kill switch off for `pyright`).
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/indep2', 'pyright')),
+    ).toBe(false);
+    pyMounted.unmount();
   });
 });

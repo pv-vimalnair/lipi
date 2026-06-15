@@ -81,24 +81,142 @@ const STATUS_BLURB: Record<LspStatus, string> = {
 };
 
 /**
- * Format a crash time as "Xs ago". Used in the
- * "Last lines of server output" panel to give
- * the user a quick sense of when the crash
- * happened.
- *
- * The `nowSec` argument is passed in (rather
- * than calling `Date.now()` inside) so the
- * caller can re-render at a fixed cadence via
- * a `useEffect` interval — keeps the label in
- * lockstep with the auto-respawn countdown.
+ * Format a crash time as "Xs ago". Pure
+ * helper — the caller passes in `nowMs`
+ * (instead of calling `Date.now()` inside)
+ * so a single timer tick can drive both
+ * this and the "Auto-restarting in Ns…"
+ * label without each one calling
+ * `Date.now()` separately.
  */
-function formatAgo(ms: number, nowSec: number): string {
-  const seconds = Math.max(0, nowSec - Math.floor(ms / 1000));
+function formatAgo(ms: number, nowMs: number): string {
+  const seconds = Math.max(0, Math.floor((nowMs - ms) / 1000));
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   return `${hours}h ago`;
+}
+
+/**
+ * Phase 9.3 — the crash-header
+ * ("Crashed Xs ago (exit code N) —
+ * M in a row. Auto-restarting in Ns…" or
+ * "Auto-restart disabled after M crashes —")
+ * was previously inlined in
+ * `LanguageServerCard` and driven by a
+ * `setInterval(…, 1000)` in the card root
+ * that re-rendered the *whole* card 1×/sec.
+ *
+ * Extracted to a sub-component that owns
+ * its own 1 Hz ticker. The card no longer
+ * re-renders on the timer; only the
+ * countdown does. Two wins:
+ *
+ *   1. **Re-render scope.** The card has
+ *      `useEffect`s, derived state, and
+ *      several Zustand selectors — a 1 Hz
+ *      re-render is cheap but not free. The
+ *      sub-component is a few `<span>`s and
+ *      re-renders in <1ms.
+ *   2. **Clock alignment.** The sub-component
+ *      uses a self-rescheduling
+ *      `setTimeout(1000 - (Date.now() %
+ *      1000))` — the first tick lands on the
+ *      next wall-clock second boundary, and
+ *      subsequent ticks align to second
+ *      boundaries. `setInterval` drifts; the
+ *      `setTimeout` chain doesn't.
+ *
+ * When the user is on the settings card
+ * with a crashed LSP server and *also*
+ * editing a file in the editor, this is the
+ * difference between "the settings card
+ * re-renders 1×/sec" and "the settings
+ * card is idle".
+ *
+ * The ticker is **opt-in** — only started
+ * when there's a respawn scheduled
+ * (`respawnInMs !== null`). When the respawn
+ * fires (or is cancelled), the cleanup
+ * function returns and the ticker stops.
+ * The sub-component itself stays mounted
+ * (it's just rendering "Crashed Xs ago
+ * (exit code N)…" with X frozen), so React
+ * doesn't re-render the card either way.
+ */
+interface RespawnCountdownProps {
+  crashedAt: number;
+  respawnInMs: number | null;
+  consecutiveCrashes: number;
+  exitStatus: number | null;
+}
+
+/**
+ * Phase 9.3 — exported for unit testing. The
+ * `LanguageServerCard` consumer is the only
+ * in-tree caller; the export is purely so the
+ * test file can mount it in isolation without
+ * dragging in the whole card.
+ */
+export function RespawnCountdown({
+  crashedAt,
+  respawnInMs,
+  consecutiveCrashes,
+  exitStatus,
+}: RespawnCountdownProps): JSX.Element {
+  // The ticker only runs when a respawn is
+  // scheduled. When the respawn fires (the
+  // store transitions `respawnInMs` to
+  // `null`), the effect cleans up and the
+  // label freezes at the last value.
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (respawnInMs === null) return;
+    let cancelled = false;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+    const schedule = (): void => {
+      if (cancelled) return;
+      // Align to the next wall-clock second
+      // boundary. If we're already within
+      // ~1ms of a boundary, schedule for the
+      // following one.
+      const msUntilNextSecond = 1000 - (Date.now() % 1000);
+      timerId = setTimeout(() => {
+        if (cancelled) return;
+        setNowMs(Date.now());
+        schedule();
+      }, msUntilNextSecond);
+    };
+    schedule();
+    return () => {
+      cancelled = true;
+      if (timerId !== null) clearTimeout(timerId);
+    };
+  }, [respawnInMs]);
+  return (
+    <strong>
+      Crashed {formatAgo(crashedAt, nowMs)}
+      {exitStatus !== null && ` (exit code ${exitStatus})`}
+      {consecutiveCrashes > 1 &&
+        ` — ${consecutiveCrashes} in a row`}
+      .
+      {respawnInMs !== null && (
+        <span data-testid="lsp-respawn-countdown">
+          {' '}
+          Auto-restarting in{' '}
+          {Math.max(0, Math.ceil(respawnInMs / 1000))}s…
+        </span>
+      )}
+      {respawnInMs === null && consecutiveCrashes >= 5 && (
+        <span data-testid="lsp-respawn-giveup">
+          {' '}
+          Auto-restart disabled after {consecutiveCrashes} consecutive crashes
+          — click <em>Restart server</em> to try again.
+        </span>
+      )}
+    </strong>
+  );
 }
 
 /**
@@ -175,24 +293,14 @@ export function LanguageServerCard() {
   // latest line (the common debugging UX).
   const [outputExpanded, setOutputExpanded] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  // Phase 9.5 — re-render every second while
-  // a respawn is scheduled, so the
-  // "Auto-restarting in Ns..." countdown
-  // ticks down. We use a single state field
-  // (the current second-since-epoch) so all
-  // countdown labels in the card update in
-  // lockstep without each one running its
-  // own interval.
-  const [nowSec, setNowSec] = useState<number>(
-    () => Math.floor(Date.now() / 1000),
-  );
-  useEffect(() => {
-    if (!crashInfo?.respawnInMs) return;
-    const id = setInterval(() => {
-      setNowSec(Math.floor(Date.now() / 1000));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [crashInfo?.respawnInMs]);
+  // Phase 9.3 — the 1 Hz "Auto-restarting in
+  // Ns…" countdown was previously driven by a
+  // `setInterval` that re-rendered the *whole*
+  // `LanguageServerCard` 1×/sec. Extracted
+  // to `<RespawnCountdown>` (see below),
+  // which owns its own ticker and re-renders
+  // *only itself*. The card no longer
+  // re-renders on the timer.
   // Phase 9.7 — auto-scroll the "Server
   // output" panel to the bottom when new
   // lines arrive. We use a callback ref
@@ -365,30 +473,12 @@ export function LanguageServerCard() {
       {crashInfo && (
         <div className={styles.crashPanel} data-testid="lsp-crash-panel">
           <div className={styles.crashHeader}>
-            <strong>
-              Crashed {formatAgo(crashInfo.crashedAt, nowSec)}
-              {crashInfo.exitStatus !== null &&
-                ` (exit code ${crashInfo.exitStatus})`}
-              {crashInfo.consecutiveCrashes > 1 &&
-                ` — ${crashInfo.consecutiveCrashes} in a row`}
-              .
-            </strong>
-            {crashInfo.respawnInMs !== null && (
-              <span data-testid="lsp-respawn-countdown">
-                {' '}
-                Auto-restarting in{' '}
-                {Math.max(0, Math.ceil(crashInfo.respawnInMs / 1000))}s…
-              </span>
-            )}
-            {crashInfo.respawnInMs === null &&
-              crashInfo.consecutiveCrashes >= 5 && (
-                <span data-testid="lsp-respawn-giveup">
-                  {' '}
-                  Auto-restart disabled after {crashInfo.consecutiveCrashes}{' '}
-                  consecutive crashes — click <em>Restart server</em> to try
-                  again.
-                </span>
-              )}
+            <RespawnCountdown
+              crashedAt={crashInfo.crashedAt}
+              respawnInMs={crashInfo.respawnInMs}
+              consecutiveCrashes={crashInfo.consecutiveCrashes}
+              exitStatus={crashInfo.exitStatus}
+            />
           </div>
           {crashInfo.stderrTail && (
             <pre

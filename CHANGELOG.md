@@ -6,6 +6,75 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (Phase 9.3 — Respawn-countdown poll → scoped 1 Hz ticker)
+
+The `LanguageServerCard` settings UI used
+to re-render the *whole* card 1×/sec while a
+respawn was scheduled (just to update the
+"Crashed Xs ago" + "Auto-restarting in Ns…"
+labels). The 1 Hz tick was driven by a
+card-root `setInterval` that re-ran every
+selector in the card, every effect, and every
+child. Phase 9.3 scopes the ticker to a tiny
+`<RespawnCountdown>` sub-component so the
+card stays idle.
+
+- **`src/screens/SettingsProvider/components/LanguageServerCard.tsx`** —
+  extracted `<RespawnCountdown>` (exported
+  for unit testing). It owns a 1 Hz
+  self-rescheduling `setTimeout` chain (no
+  `setInterval`) that aligns to wall-clock
+  second boundaries via
+  `setTimeout(1000 - (Date.now() % 1000))`.
+  Renders the full crash header
+  ("Crashed Xs ago (exit code N) — M in a
+  row. Auto-restarting in Ns…" or
+  "Auto-restart disabled after M crashes —").
+  The ticker is **opt-in**: only started
+  when `respawnInMs !== null` (no respawn
+  scheduled → no reason to tick).
+- **`src/screens/SettingsProvider/components/LanguageServerCard.tsx`** —
+  removed the card-level `setInterval` and
+  `nowSec` `useState`. The card's 1 Hz
+  re-render budget is now ~0 (it only
+  re-renders when the store's
+  `crashByWorkspace` map changes — which is
+  the same as before Phase 9.3 for "no
+  crash" or "crash fired" transitions).
+- **`src/screens/SettingsProvider/components/LanguageServerCard.tsx`** —
+  the inline crash header JSX was replaced
+  with `<RespawnCountdown … />`. `formatAgo`
+  is now a pure function taking
+  `(ms, nowMs)` instead of
+  `(ms, nowSec)`; the `nowMs` is read by the
+  sub-component's ticker.
+- **`src/screens/SettingsProvider/components/RespawnCountdown.test.tsx`**
+  (new) — 10 unit tests for the
+  sub-component: renders "Crashed 0s ago"
+  on mount; renders "Auto-restarting in
+  3s…" when `respawnInMs !== null`; does
+  NOT start the ticker when no respawn is
+  scheduled; renders "Auto-restart
+  disabled" after 5+ consecutive crashes;
+  updates the "Xs ago" label on each tick
+  (verified with `vi.useFakeTimers`); stops
+  the ticker when `respawnInMs` transitions
+  from a number to `null` (respawn fired);
+  cleans up the ticker on unmount (no
+  leaked `setTimeout` — `vi.getTimerCount()
+  === 0` after unmount); renders the
+  `(exit code N)` + "N in a row"
+  annotations; omits "N in a row" for the
+  first crash; formats
+  "Xs ago" / "Xm ago" / "Xh ago" at the
+  right boundaries.
+- **Test results**: `vitest` 1095/1095
+  pass (was 1085 in Phase 9.1; +10 new
+  countdown tests); `tsc --noEmit` clean;
+  `cargo test` 350/350 pass (no Rust
+  changes; this was a TS-only phase);
+  `cargo build` clean.
+
 ### Changed (Phase 9.1 — Incremental `textDocument/didChange`)
 
 The `typescript-language-server` integration

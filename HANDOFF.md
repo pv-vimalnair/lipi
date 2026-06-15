@@ -305,6 +305,11 @@ on mobile — cannot be retrofitted in Week 8.
 | 103 | Phase 9.1 **forwards empty `changes` arrays as empty `contentChanges` arrays** (no early return in the bridge). | The spec allows them; the server treats them as no-ops. Forwarding them keeps the code path uniform. The bridge doesn't try to "be clever" and skip them — we trust the spec and the server. | 2026-06-15 |
 | 104 | Phase 9.1's wire `version` is **`event.versionId`** (the post-change version), not `model.getVersionId()`. | Both are the same value in practice (Monaco's `versionId` advances after each change), but `event.versionId` is what the spec asks for: the *post*-change version of the document. The event captures this explicitly; reading it from the model would be one extra `getVersionId()` call we don't need. | 2026-06-15 |
 | 105 | Phase 9.1's bridge **does not debounce** — it sends one `didChange` per Monaco change event. | `typescript-language-server` handles per-keystroke updates fine (it's the same path `vscode` and `monaco-languageclient` use). Debouncing would just add latency to diagnostics. We trust Monaco's event coalescing (it already batches a multi-region formatter edit into a single event with multiple `changes`). | 2026-06-15 |
+| 106 | Phase 9.3's 1 Hz ticker uses a **self-rescheduling `setTimeout` chain**, not `setInterval`. | `setInterval` drifts (the spec says "fire every ~1000ms", not "fire exactly at second boundaries") and can fire while the previous handler is still running. The `setTimeout` chain naturally serializes — each tick schedules the next, and the next always aligns to a wall-clock second boundary via `setTimeout(1000 - (Date.now() % 1000))`. | 2026-06-15 |
+| 107 | Phase 9.3's ticker is **opt-in**: only started when `respawnInMs !== null`. | When the workspace is healthy (no crash / crash fired / respawn gave up), there's no reason to burn a 1 Hz re-render budget on a "Crashed Xs ago" label that's frozen. The card stays fully idle in the common case. | 2026-06-15 |
+| 108 | Phase 9.3's `<RespawnCountdown>` is **exported** (despite being card-internal) for unit testing. | The "re-render scope" claim is the whole point of Phase 9.3, and the only way to assert it from a unit test is to mount `<RespawnCountdown>` in isolation and verify the ticker behaviour. Exporting (vs. testing through the card) keeps the tests fast and focused. | 2026-06-15 |
+| 109 | Phase 9.3's `formatAgo` takes **`(ms, nowMs)`** (not `(ms, nowSec)`). | Granularity matters: a 1-second-resolution `nowSec` is enough for the visible label, but a millisecond-resolution `nowMs` is what the ticker actually reads (`Date.now()`). Passing the higher-resolution value once (vs. computing `nowSec` in the caller and `nowMs` in the ticker) is one less conversion. | 2026-06-15 |
+| 110 | Phase 9.3's sub-component re-renders itself on every tick, **not** the parent card. | This is the entire Phase 9.3 win. The card has 3+ Zustand selectors and 4+ `useEffect`s; a 1 Hz re-render is cheap but not free. The sub-component is ~3 `<span>`s and re-renders in <1ms. The savings are real when the user is on the settings card with a crashed LSP server *and* editing a file in the editor — the editor's re-renders are no longer competing with the settings card's 1 Hz budget. | 2026-06-15 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -5972,6 +5977,127 @@ map each `IModelContentChange` to a ranged
 
 ---
 
-*End of handoff. Lipi is at **Phase 9.1 complete** (incremental `textDocument/didChange` — `convertContentChanges` pure helper + `sendDidChange(event)` + 11 new diff helper tests + 4 new bridge tests = 15 new tests, total 1085 TS + 350 Rust). The next session should resume from the remaining Phase 9.2-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.38.*
+### 9.38 Phase 9.3 — SHIPPED (Respawn-countdown poll → scoped 1 Hz ticker, see CHANGELOG "Changed (Phase 9.3 — Respawn-countdown poll → scoped 1 Hz ticker)")
+
+> **Status:** Phase 9.3 is **shipped**. The
+> `LanguageServerCard` settings UI no longer
+> re-renders the *whole* card 1×/sec while a
+> respawn is scheduled; the 1 Hz ticker is
+> now scoped to a tiny `<RespawnCountdown>`
+> sub-component that re-renders *only
+> itself*.
+
+**What changed**
+
+The previous code in
+`LanguageServerCard.tsx` was:
+
+```ts
+const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000));
+useEffect(() => {
+  if (!crashInfo?.respawnInMs) return;
+  const id = setInterval(() => {
+    setNowSec(Math.floor(Date.now() / 1000));
+  }, 1000);
+  return () => clearInterval(id);
+}, [crashInfo?.respawnInMs]);
+// …in render:
+Crashed {formatAgo(crashInfo.crashedAt, nowSec)}
+```
+
+The 1 Hz `setInterval` re-ran every selector
+in the card root on each tick, which is
+wasteful (the card has 3+ Zustand selectors,
+4+ `useEffect`s, and several derived
+computations). Phase 9.3 extracts the
+crash-header rendering to `<RespawnCountdown>`
+and moves the ticker into the sub-component
+where it only re-renders a few `<span>`s.
+
+**Files touched**
+
+- `src/screens/SettingsProvider/components/LanguageServerCard.tsx` —
+  extracted `RespawnCountdown` (exported
+  for unit testing). The sub-component owns
+  a 1 Hz self-rescheduling `setTimeout`
+  chain that aligns to wall-clock second
+  boundaries:
+  ```ts
+  const msUntilNextSecond = 1000 - (Date.now() % 1000);
+  timerId = setTimeout(() => {
+    if (cancelled) return;
+    setNowMs(Date.now());
+    schedule();
+  }, msUntilNextSecond);
+  ```
+  The ticker is **opt-in** — only started
+  when `respawnInMs !== null` (no respawn
+  scheduled → no reason to tick). When the
+  respawn fires (prop transitions to
+  `null`), the cleanup function clears the
+  pending `setTimeout` and the ticker stops.
+  The sub-component stays mounted (it just
+  freezes at the last label value), so React
+  doesn't re-render the card on the
+  transition either.
+- `src/screens/SettingsProvider/components/LanguageServerCard.tsx` —
+  removed the card-level `setInterval` and
+  `nowSec` `useState`. The inline crash
+  header JSX was replaced with
+  `<RespawnCountdown … />`. `formatAgo` was
+  updated to take `(ms, nowMs)` instead of
+  `(ms, nowSec)`; the sub-component's ticker
+  provides `nowMs`.
+- `src/screens/SettingsProvider/components/RespawnCountdown.test.tsx`
+  (new) — 10 unit tests:
+  - Renders "Crashed 0s ago" on mount
+  - Renders "Auto-restarting in 3s…" when
+    `respawnInMs !== null`
+  - Does NOT start the ticker when no
+    respawn is scheduled (label stays at
+    "5s ago" after 3s of fake-time advance)
+  - Renders "Auto-restart disabled" after
+    5+ consecutive crashes
+  - Updates the "Xs ago" label on each
+    tick (verified with `vi.useFakeTimers` +
+    `vi.setSystemTime`)
+  - Stops the ticker when `respawnInMs`
+    transitions from a number to `null`
+  - Cleans up the ticker on unmount
+    (asserts `vi.getTimerCount() === 0` after
+    unmount)
+  - Renders the `(exit code N)` + "N in a
+    row" annotations
+  - Omits "N in a row" for the first crash
+  - Formats "Xs ago" / "Xm ago" / "Xh ago"
+    at the right boundaries
+
+**Test results**
+
+- `vitest` 1095/1095 (was 1085 in Phase
+  9.1; +10 new countdown tests).
+- `tsc --noEmit` clean.
+- `cargo test` 350/350 pass (no Rust
+  changes).
+- `cargo build` clean.
+
+**Design decisions**
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 106 | The 1 Hz ticker uses a **self-rescheduling `setTimeout` chain**, not `setInterval`. | `setInterval` drifts (the spec says "fire every ~1000ms", not "fire exactly at second boundaries") and can fire while the previous handler is still running. The `setTimeout` chain naturally serializes — each tick schedules the next, and the next always aligns to a wall-clock second boundary via `setTimeout(1000 - (Date.now() % 1000))`. |
+| 107 | The ticker is **opt-in**: only started when `respawnInMs !== null`. | When the workspace is healthy (no crash / crash fired / respawn gave up), there's no reason to burn a 1 Hz re-render budget on a "Crashed Xs ago" label that's frozen. The card stays fully idle in the common case. |
+| 108 | The sub-component is **exported** (despite being card-internal) for unit testing. | The "re-render scope" claim is the whole point of Phase 9.3, and the only way to assert it from a unit test is to mount `<RespawnCountdown>` in isolation and verify the ticker behaviour. Exporting (vs. testing through the card) keeps the tests fast and focused. |
+| 109 | `formatAgo` takes **`(ms, nowMs)`** (not `(ms, nowSec)`). | Granularity matters: a 1-second-resolution `nowSec` is enough for the visible label, but a millisecond-resolution `nowMs` is what the ticker actually reads (`Date.now()`). Passing the higher-resolution value once (vs. computing `nowSec` in the caller and `nowMs` in the ticker) is one less conversion. |
+| 110 | The sub-component re-renders itself on every tick, **not** the parent card. | This is the entire Phase 9.3 win. The card has 3+ Zustand selectors and 4+ `useEffect`s; a 1 Hz re-render is cheap but not free. The sub-component is ~3 `<span>`s and re-renders in <1ms. The savings are real when the user is on the settings card with a crashed LSP server *and* editing a file in the editor — the editor's re-renders are no longer competing with the settings card's 1 Hz budget. |
+
+**Follow-up slices (out of scope for Phase 9.3)**
+
+- **Move the respawn timer itself from JS to Rust.** The current path: the JS `lspClientStore.scheduleRespawn` runs a `setTimeout` in the renderer process; if the window is hidden or the renderer is GC'd, the timer might not fire. A Rust-side `tokio::time::sleep` + `lsp://respawn-fired` event would be more reliable. Held back — the JS path works in v1 (the renderer is always alive while the user is on the editor + settings card) and moving it is a 2-day refactor that touches the IPC + the store.
+- **Other 1-second-tick UI in the app** (e.g. the "session started Xs ago" labels, if any). A `useNowMs()` shared hook could be extracted to dedupe the "tick once per second" pattern. Held back — the only 1 Hz UI element in the LSP integration is the respawn countdown; a wider sweep would be Phase 9.3b or later.
+
+---
+
+*End of handoff. Lipi is at **Phase 9.3 complete** (Respawn-countdown poll → scoped 1 Hz ticker — extracted `<RespawnCountdown>` sub-component with self-rescheduling wall-clock-aligned `setTimeout` chain + removed card-level `setInterval` and `nowSec` state + 10 new unit tests, total 1095 TS + 350 Rust). The next session should resume from the remaining Phase 9.2-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.39.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

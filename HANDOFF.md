@@ -310,6 +310,13 @@ on mobile — cannot be retrofitted in Week 8.
 | 108 | Phase 9.3's `<RespawnCountdown>` is **exported** (despite being card-internal) for unit testing. | The "re-render scope" claim is the whole point of Phase 9.3, and the only way to assert it from a unit test is to mount `<RespawnCountdown>` in isolation and verify the ticker behaviour. Exporting (vs. testing through the card) keeps the tests fast and focused. | 2026-06-15 |
 | 109 | Phase 9.3's `formatAgo` takes **`(ms, nowMs)`** (not `(ms, nowSec)`). | Granularity matters: a 1-second-resolution `nowSec` is enough for the visible label, but a millisecond-resolution `nowMs` is what the ticker actually reads (`Date.now()`). Passing the higher-resolution value once (vs. computing `nowSec` in the caller and `nowMs` in the ticker) is one less conversion. | 2026-06-15 |
 | 110 | Phase 9.3's sub-component re-renders itself on every tick, **not** the parent card. | This is the entire Phase 9.3 win. The card has 3+ Zustand selectors and 4+ `useEffect`s; a 1 Hz re-render is cheap but not free. The sub-component is ~3 `<span>`s and re-renders in <1ms. The savings are real when the user is on the settings card with a crashed LSP server *and* editing a file in the editor — the editor's re-renders are no longer competing with the settings card's 1 Hz budget. | 2026-06-15 |
+| 111 | `LspServerKind` is a 4-value **string union** (`'typescript' \| 'rust_analyzer' \| 'pyright' \| 'unknown'`), not a TS `enum`. | String unions serialise as themselves (no `LspServerKind.TypeScript → "typescript"` mapping), the `inferServerKind` return type is the same as the constant strings, and the test file can write `expect(...).toBe('typescript')` without a cast. | 2026-06-15 |
+| 112 | The inferrer is **extension-based**, not Monaco's `getLanguageId()`. | A third-party language pack can override Monaco's language id for a file (e.g. a `vim` extension might map `.vim` → `language/vim`). The file extension is the ground truth. | 2026-06-15 |
+| 113 | `inferServerKind` strips **query / fragment** before looking for the extension. | Monaco sometimes appends `?v=1` to a URI (cache-busting). Without stripping, the function would see `.ts?v=1` and not recognise it. | 2026-06-15 |
+| 114 | `'unknown'` is a **load-bearing** return value, not an error. | A `.md` file in a TypeScript workspace should not spawn a TypeScript server (the server has no model to attach, the user gets no useful features, and we'd be wasting a child process). `'unknown'` is the bridge's signal to be a no-op; Monaco's built-in language services handle the file. | 2026-06-15 |
+| 115 | `SUPPORTED_LSP_SERVER_KINDS` is a **runtime constant** the bridge reads, not a hard-coded check. | A future slice that wires up `rust-analyzer` just extends the list. The bridge code doesn't change. The `isSupportedKind` test `reflects the SUPPORTED_LSP_SERVER_KINDS constant` (Decision 116) pins the invariant. | 2026-06-15 |
+| 116 | The inferrer is **wider** than the supported list (returns `'rust_analyzer'` for `.rs` even though rust-analyzer isn't wired). | This decouples "what file extension maps to what server" (the inferrer's job) from "what we'll actually start" (the supported list's job). A future slice that adds `rust-analyzer` doesn't need to touch the inferrer — it just extends the supported list and adds the Rust-side spawn arm. | 2026-06-15 |
+| 117 | The store's `clients` map is **still keyed by `workspaceRoot`** (not `${root}//${kind}`) in this slice. | The slice only wires up the gate; the second kind is not yet spawned. Re-keying the maps now (with only one kind in use) would be premature. A future slice (when `'rust_analyzer'` is added to `SUPPORTED_LSP_SERVER_KINDS`) re-keys the maps as part of that slice — keeps each slice small and reviewable. | 2026-06-15 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -6098,6 +6105,114 @@ where it only re-renders a few `<span>`s.
 
 ---
 
-*End of handoff. Lipi is at **Phase 9.3 complete** (Respawn-countdown poll → scoped 1 Hz ticker — extracted `<RespawnCountdown>` sub-component with self-rescheduling wall-clock-aligned `setTimeout` chain + removed card-level `setInterval` and `nowSec` state + 10 new unit tests, total 1095 TS + 350 Rust). The next session should resume from the remaining Phase 9.2-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.39.*
+### 9.39 Phase 9.2 (thin slice) — SHIPPED (Multi-server kind taxonomy + inferrer, see CHANGELOG "Added (Phase 9.2 — Multi-server kind taxonomy + inferrer)")
+
+> **Status:** Phase 9.2 (thin slice) is
+> **shipped**. The LSP integration's TS
+> side now distinguishes `LspServerKind`
+> values; the bridge gates `getOrCreate`
+> on the inferred kind. The Rust side
+> still only spawns
+> `typescript-language-server` — the
+> second kind (rust-analyzer) and third
+> (pyright) values exist so future slices
+> can wire them up without a TS refactor.
+
+**What changed**
+
+The previous `lspClientStore` was
+hard-wired to a single server per
+workspace — the `LspClient`'s
+`lspRunStdio` call always spawned
+`typescript-language-server`, and the
+bridge's `onDidChangeModel` /
+`onDidChangeModelContent` subscriptions
+sent didOpen / didChange for any file
+regardless of its language. A `.md` file
+in a TypeScript workspace would still
+open a model on the TS server, and the
+user got no useful features (the TS
+server has no model for Markdown).
+
+Phase 9.2 adds the **kind taxonomy**:
+`LspServerKind` is a 4-value string
+union (`'typescript'`, `'rust_analyzer'`,
+`'pyright'`, `'unknown'`); the bridge
+infers a kind from the file's URI; the
+gate checks the inferred kind against
+`SUPPORTED_LSP_SERVER_KINDS`
+(`['typescript']` in this slice) and
+bails out if it's not supported. The
+existing TS path is unchanged (every
+`.ts`/`.tsx`/`.js`/`.jsx` file still
+passes through to a real client); a
+`.py` / `.rs` / `.md` file is now a
+no-op.
+
+**Files touched**
+
+- `src/screens/EditorWorkspace/state/lspClientStore.ts` —
+  new `LspServerKind` type, `inferServerKind`
+  pure helper, `SUPPORTED_LSP_SERVER_KINDS`
+  constant, `isSupportedKind` /
+  `isKnownKind` helpers.
+- `src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`
+  — the effect now calls
+  `inferServerKind(typedEditor.getModel().uri.toString())`
+  and bails out when the kind is not
+  supported. Imports the new helpers
+  from the store.
+- `src/screens/EditorWorkspace/state/lspClientStore.inferServerKind.test.ts`
+  (new) — 31 unit tests for the
+  inferrer + helpers. Covers happy
+  paths (TS / Rust / Python),
+  unknown paths (Markdown / JSON /
+  CSS / HTML / Go / `.gitignore` /
+  `Makefile`), edge cases
+  (backslashes / query strings /
+  percent-encoding / nested paths /
+  dotfile prefix), and the
+  `isSupportedKind` / `isKnownKind`
+  semantics.
+- `src/screens/EditorWorkspace/hooks/useMonacoLspBridge.test.tsx`
+  — 2 new tests: opening a `.ts` file
+  spawns a client (the contract the
+  rest of the bridge depends on);
+  opening a `.py` file is a no-op
+  (the inferrer returns `'pyright'`,
+  which is not in
+  `SUPPORTED_LSP_SERVER_KINDS`).
+
+**Test results**
+
+- `vitest` 1128/1128 (was 1095 in
+  Phase 9.3; +31 infer + 2 bridge).
+- `tsc --noEmit` clean.
+- `cargo test` 350/350 pass (no
+  Rust changes).
+- `cargo build` clean.
+
+**Design decisions**
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 111 | `LspServerKind` is a 4-value **string union** (`'typescript' \| 'rust_analyzer' \| 'pyright' \| 'unknown'`), not a TS `enum`. | String unions serialise as themselves (no `LspServerKind.TypeScript → "typescript"` mapping), the `inferServerKind` return type is the same as the constant strings, and the test file can write `expect(...).toBe('typescript')` without a cast. |
+| 112 | The inferrer is **extension-based**, not Monaco's `getLanguageId()`. | A third-party language pack can override Monaco's language id for a file (e.g. a `vim` extension might map `.vim` → `language/vim`). The file extension is the ground truth. |
+| 113 | `inferServerKind` strips **query / fragment** before looking for the extension. | Monaco sometimes appends `?v=1` to a URI (cache-busting). Without stripping, the function would see `.ts?v=1` and not recognise it. |
+| 114 | `'unknown'` is a **load-bearing** return value, not an error. | A `.md` file in a TypeScript workspace should not spawn a TypeScript server (the server has no model to attach, the user gets no useful features, and we'd be wasting a child process). `'unknown'` is the bridge's signal to be a no-op; Monaco's built-in language services handle the file. |
+| 115 | `SUPPORTED_LSP_SERVER_KINDS` is a **runtime constant** the bridge reads, not a hard-coded check. | A future slice that wires up `rust-analyzer` just extends the list. The bridge code doesn't change. The `isSupportedKind` test `reflects the SUPPORTED_LSP_SERVER_KINDS constant` (Decision 116) pins the invariant. |
+| 116 | The inferrer is **wider** than the supported list (returns `'rust_analyzer'` for `.rs` even though rust-analyzer isn't wired). | This decouples "what file extension maps to what server" (the inferrer's job) from "what we'll actually start" (the supported list's job). A future slice that adds `rust-analyzer` doesn't need to touch the inferrer — it just extends the supported list and adds the Rust-side spawn arm. |
+| 117 | The store's `clients` map is **still keyed by `workspaceRoot`** (not `${root}//${kind}`) in this slice. | The slice only wires up the gate; the second kind is not yet spawned. Re-keying the maps now (with only one kind in use) would be premature. A future slice (when `'rust_analyzer'` is added to `SUPPORTED_LSP_SERVER_KINDS`) re-keys the maps as part of that slice — keeps each slice small and reviewable. |
+
+**Follow-up slices (out of scope for Phase 9.2 thin slice)**
+
+- **Rust-side `lsp_run_stdio` arm for `rust-analyzer`.** Add a `LspServerKind` parameter to the `lsp_run_stdio` Tauri command; route to a Rust function that spawns `rust-analyzer` (PATH lookup → `Command::new("rust-analyzer")` → stdio pipe). Add `'rust_analyzer'` to `SUPPORTED_LSP_SERVER_KINDS`. Add `languageId` mapping to `'rust'`. Re-key the store maps to `${root}//${kind}` so a `.ts` and a `.rs` in the same workspace get distinct clients. Estimated 1 day.
+- **Rust-side arm for `pyright`**, mirroring the rust-analyzer slice. Adds `'pyright'` to `SUPPORTED_LSP_SERVER_KINDS`, sets up the spawn. Estimated 0.5 days.
+- **Per-kind settings UI.** The `LanguageServerCard` currently shows one row (TypeScript). Extend to 3 rows (TypeScript, Rust, Python) with per-kind status badges, kill switches, and install hints. The per-kind kill switch becomes a `Record<LspServerKind, boolean>` in `localStorage`. Estimated 1 day.
+- **Per-workspace status row of language servers** (the parked Phase 9.4). A pill in the editor's status bar showing "TS: ready / Rust: stopped / Python: error" — the store's `clients` map is the source of truth. Estimated 0.5 days.
+
+---
+
+*End of handoff. Lipi is at **Phase 9.2 (thin slice) complete** (Multi-server kind taxonomy + inferrer — `LspServerKind` enum + `inferServerKind` extension-based helper + `isSupportedKind` / `isKnownKind` + `SUPPORTED_LSP_SERVER_KINDS` list + bridge gate + 33 new tests, total 1128 TS + 350 Rust). The next session should resume from the remaining Phase 9.2 follow-up slices (Rust-side `lsp_run_stdio` arm for `rust-analyzer`, then `pyright`, then per-kind re-keying of the store maps, then the per-kind settings UI), plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.40.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

@@ -74,6 +74,165 @@ import { getUseRealServer } from '@/screens/EditorWorkspace/state/lspKillSwitch'
 export type LspStatus = 'stopped' | 'starting' | 'ready' | 'error';
 
 /**
+ * Phase 9.2 — the *kind* of language server
+ * that should serve a given file. The current
+ * build only wires up `'typescript'` (the
+ * bridge gates every other kind to a no-op);
+ * the other values exist so the store /
+ * bridge architecture is multi-server from
+ * day one, and adding `rust-analyzer` or
+ * `pyright` in a future slice is a Rust-side
+ * addition, not a refactor of the TS code.
+ *
+ *   - `'typescript'` — `typescript-language-server`
+ *     (the vscode-langservers-extracted Node
+ *     CLI). Currently the only kind the
+ *     bridge actually spawns.
+ *   - `'rust_analyzer'` — `rust-analyzer` (a
+ *     Rust binary that speaks LSP over stdio).
+ *     **Not yet wired in this slice**; the
+ *     inferrer returns this for `.rs` files
+ *     so a future Rust slice can pick it up
+ *     without a TS refactor.
+ *   - `'pyright'` — `pyright-langserver` (a
+ *     Node CLI). **Not yet wired**; the
+ *     inferrer returns this for `.py` /
+ *     `.pyi` files.
+ *   - `'unknown'` — anything else (Markdown,
+ *     JSON, CSS, HTML, plain text, …). The
+ *     bridge treats this as "no real server
+ *     for this file"; Monaco's built-in
+ *     language services handle the file.
+ *
+ * The `'unknown'` value is **load-bearing**:
+ * it's not an error case. A `.md` file in a
+ * TypeScript workspace should NOT spawn a
+ * TypeScript server (the server has no model
+ * to attach, the user gets no useful
+ * features, and we'd be wasting a child
+ * process). `unknown` is the bridge's
+ * signal to be a no-op.
+ */
+export type LspServerKind =
+  | 'typescript'
+  | 'rust_analyzer'
+  | 'pyright'
+  | 'unknown';
+
+/**
+ * The set of server kinds the *current*
+ * build wires up. Future slices will add
+ * `'rust_analyzer'` and `'pyright'` here
+ * when their Rust-side `lsp_run_stdio` arms
+ * land. The bridge reads this constant to
+ * gate `getOrCreate` calls.
+ */
+export const SUPPORTED_LSP_SERVER_KINDS: readonly LspServerKind[] = [
+  'typescript',
+] as const;
+
+/**
+ * The kinds the *inferrer* recognises.
+ * Wider than `SUPPORTED_LSP_SERVER_KINDS` —
+ * a `.py` file returns `'pyright'` even
+ * though the bridge doesn't yet spawn
+ * `pyright-langserver`. The inferrer is the
+ * source of truth for "what file extension
+ * maps to what server"; the support flag is
+ * the source of truth for "what we'll
+ * actually start".
+ */
+const KNOWN_LSP_SERVER_KINDS: readonly LspServerKind[] = [
+  'typescript',
+  'rust_analyzer',
+  'pyright',
+] as const;
+
+/**
+ * Map a file URI to a language-server kind.
+ *
+ *   - `file:///path/to/index.ts` →
+ *     `'typescript'`
+ *   - `file:///path/to/lib.rs` →
+ *     `'rust_analyzer'`
+ *   - `file:///path/to/script.py` →
+ *     `'pyright'`
+ *   - `file:///path/to/README.md` →
+ *     `'unknown'`
+ *
+ * Extension-based, not language-id-based,
+ * because the language id can drift
+ * (Monaco's built-in `markdown` and
+ * `typescript` are stable, but third-party
+ * language packs override the language id
+ * for a file). The extension is the
+ * ground truth.
+ */
+export function inferServerKind(uri: string): LspServerKind {
+  // Strip query / fragment; we only care
+  // about the path. Monaco sometimes
+  // appends `?somequery` to a URI, and
+  // we don't want `?v=1` to be part of
+  // the "extension" calculation.
+  const queryStart = uri.search(/[?#]/);
+  const pathOnly = queryStart === -1 ? uri : uri.slice(0, queryStart);
+  const lastDot = pathOnly.lastIndexOf('.');
+  const lastSlash = Math.max(
+    pathOnly.lastIndexOf('/'),
+    pathOnly.lastIndexOf('\\'),
+  );
+  // No extension, or the "extension" is
+  // before the last separator (e.g.
+  // `.gitignore` → ext = "gitignore", but
+  // there's no `.` after the slash).
+  if (lastDot <= lastSlash) {
+    return 'unknown';
+  }
+  const ext = pathOnly.slice(lastDot).toLowerCase();
+  switch (ext) {
+    case '.ts':
+    case '.tsx':
+    case '.js':
+    case '.jsx':
+    case '.mjs':
+    case '.cjs':
+      return 'typescript';
+    case '.rs':
+      return 'rust_analyzer';
+    case '.py':
+    case '.pyi':
+      return 'pyright';
+    default:
+      return 'unknown';
+  }
+}
+
+/**
+ * `true` when the bridge should actually
+ * spawn a child for `kind`. Convenience
+ * wrapper around `SUPPORTED_LSP_SERVER_KINDS`
+ * so call sites read like
+ * `if (!isSupportedKind(kind)) return;`.
+ */
+export function isSupportedKind(kind: LspServerKind): boolean {
+  return (SUPPORTED_LSP_SERVER_KINDS as readonly LspServerKind[]).includes(
+    kind,
+  );
+}
+
+/**
+ * `true` when `kind` is a known real server
+ * (i.e. *not* `'unknown'`). The bridge uses
+ * this to decide whether to even *try* to
+ * spawn a child (a `.ts` file with a
+ * misconfigured workspace might still want
+ * to skip; a `.md` file never does).
+ */
+export function isKnownKind(kind: LspServerKind): boolean {
+  return (KNOWN_LSP_SERVER_KINDS as readonly LspServerKind[]).includes(kind);
+}
+
+/**
  * Phase 9.5 — auto-respawn backoff schedule. When a
  * child crashes the store schedules a respawn on
  * this exponential ladder, capped at

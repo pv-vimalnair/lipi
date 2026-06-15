@@ -936,4 +936,103 @@ describe('useMonacoLspBridge', () => {
     expect(lastCall[3]).toEqual({ includeCompletion: true });
     mounted.unmount();
   });
+
+  /**
+   * Phase 9.2 — the bridge is multi-server
+   * from day one. The "thin slice" only
+   * wires up the TypeScript arm; a `.py`
+   * file in a TS workspace should be a
+   * no-op (no client spawned, no
+   * providers registered, no
+   * per-workspace status flip).
+   *
+   * The inferrer is
+   * extension-based: a `.py` file
+   * infers `pyright` (a not-yet-supported
+   * kind), so the bridge gates the
+   * `getOrCreate` call and returns
+   * early. This test pins that
+   * behaviour: a future slice that adds
+   * `pyright-langserver` support will
+   * need to update this test (it'll
+   * start expecting a client).
+   */
+  it('is a no-op for a .py file (pyright not yet supported)', async () => {
+    // Custom fake editor for a .py file.
+    // We mirror the existing `fakeModel`
+    // shape but with a Python URI.
+    const pyModel: FakeModel = {
+      uri: { toString: () => 'file:///workspace/a/script.py' },
+      getLanguageId: () => 'python',
+      getValue: () => 'print("hi")\n',
+      getVersionId: () => 1,
+    };
+    const pyEditor = {
+      getModel: () => pyModel,
+      onDidChangeModelContent: (
+        _cb: (e: FakeContentChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+      onDidChangeModel: (
+        _cb: (e: FakeModelChangedEvent) => void,
+      ) => ({ dispose: () => {} }),
+    };
+    addWorkspace('/workspace/py');
+    const mounted = mountBridge(pyEditor);
+    // Wait a few ticks — the bridge
+    // should NOT spawn a client.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // No client created in the store.
+    expect(
+      useLspClientStore.getState().clients.has('/workspace/py'),
+    ).toBe(false);
+    // No status flip (still the default
+    // 'stopped').
+    expect(
+      useLspClientStore.getState().statusByWorkspace.get('/workspace/py') ??
+        'stopped',
+    ).toBe('stopped');
+    // `registerLspProviders` was never
+    // called.
+    expect(registerLspProviders).not.toHaveBeenCalled();
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2 — a `.ts` file in the
+   * existing test setup DOES spawn a
+   * client (the inferrer returns
+   * `'typescript'`, which is in
+   * `SUPPORTED_LSP_SERVER_KINDS`).
+   * Pin that behaviour: it's the
+   * contract the rest of the bridge
+   * depends on. If a future change
+   * accidentally narrows
+   * `SUPPORTED_LSP_SERVER_KINDS` to an
+   * empty list, this test fails.
+   */
+  it('spawns a client for a .ts file (typescript is supported)', async () => {
+    addWorkspace('/workspace/ts-supported');
+    const mounted = mountBridge();
+    // Wait for the bridge to spawn the
+    // client.
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore
+          .getState()
+          .clients.has('/workspace/ts-supported')
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has('/workspace/ts-supported'),
+    ).toBe(true);
+    mounted.unmount();
+  });
 });

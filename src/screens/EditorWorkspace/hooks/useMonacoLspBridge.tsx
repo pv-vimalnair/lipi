@@ -52,6 +52,11 @@ import * as monaco from 'monaco-editor';
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 import { useLspClientStore } from '../state/lspClientStore';
 import {
+  inferServerKind,
+  isSupportedKind,
+  type LspServerKind,
+} from '../state/lspClientStore';
+import {
   getUseRealServer,
   getUseRealServerForCompletion,
 } from '../state/lspKillSwitch';
@@ -131,6 +136,46 @@ export function useMonacoLspBridge({
     // disabled the real server. The Phase 7
     // built-in TS service stays in place.
     if (!getUseRealServer()) return;
+
+    // Phase 9.2 — gate on the inferred
+    // server kind. The bridge is multi-server
+    // from day one: a `.ts` file spawns
+    // `typescript-language-server`; a `.rs`
+    // file would spawn `rust-analyzer` (not
+    // yet wired in this slice — the
+    // inferrer returns `'rust_analyzer'`
+    // but `isSupportedKind` says no, so the
+    // bridge stays a no-op until the
+    // Rust-side arm lands); a `.md` /
+    // `.json` / etc. file has
+    // `serverKind === 'unknown'` and we
+    // never spawn a child.
+    //
+    // The current build's `SUPPORTED_LSP_SERVER_KINDS`
+    // is `['typescript']`, so this gate is
+    // a no-op for the existing TS path
+    // (every `.ts`/`.tsx`/`.js`/`.jsx` file
+    // passes through). It's a future-proof
+    // hook: a future slice that adds
+    // `rust-analyzer` support just extends
+    // the supported list, no bridge change
+    // needed.
+    const initialModel = typedEditor.getModel();
+    const initialKind: LspServerKind = initialModel
+      ? inferServerKind(initialModel.uri.toString())
+      : 'unknown';
+    if (!isSupportedKind(initialKind)) {
+      // Either 'unknown' (e.g. .md, .json)
+      // or a not-yet-supported kind (e.g.
+      // 'rust_analyzer' before the Rust
+      // slice lands). Either way, the
+      // bridge is a no-op: no client
+      // spawned, no providers registered,
+      // no per-workspace status to render.
+      // Monaco's built-in language services
+      // handle the file.
+      return;
+    }
 
     // Get-or-create the LspClient for this
     // workspace. The first call spawns the

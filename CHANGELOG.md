@@ -6,6 +6,117 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 9.2 — Multi-server kind taxonomy + inferrer)
+
+The LSP integration was hard-wired to
+`typescript-language-server` — a single
+server kind per workspace. Phase 9.2 is the
+**thin first slice** of multi-server support:
+the store / bridge architecture now
+distinguishes `LspServerKind` values, and
+the bridge gates `getOrCreate` on the
+inferred kind. The Rust side still only
+spawns `typescript-language-server`; the
+`rust-analyzer` and `pyright` values exist
+so future slices can wire them up without a
+TS refactor.
+
+- **`src/screens/EditorWorkspace/state/lspClientStore.ts`** —
+  new `LspServerKind` type with 4
+  values:
+  - `'typescript'` — `typescript-language-server`
+    (the only currently wired kind)
+  - `'rust_analyzer'` — `rust-analyzer`
+    (extension detected, but not yet
+    spawned)
+  - `'pyright'` — `pyright-langserver`
+    (extension detected, but not yet
+    spawned)
+  - `'unknown'` — anything else (Markdown,
+    JSON, plain text, etc.) — the
+    bridge treats this as "no real
+    server for this file; use Monaco's
+    built-in"
+- **`src/screens/EditorWorkspace/state/lspClientStore.ts`** —
+  new `inferServerKind(uri)` pure helper
+  that maps file URIs to kinds by
+  extension (`.ts`/`.tsx`/`.js`/`.jsx`/
+  `.mjs`/`.cjs` → `typescript`, `.rs` →
+  `rust_analyzer`, `.py`/`.pyi` →
+  `pyright`, else `unknown`). Handles
+  case-insensitivity, query/fragment
+  stripping, Windows backslashes, and
+  dotfiles (`.gitignore` → `unknown`).
+- **`src/screens/EditorWorkspace/state/lspClientStore.ts`** —
+  new `SUPPORTED_LSP_SERVER_KINDS`
+  constant (`['typescript']` in this
+  slice) and `isSupportedKind` /
+  `isKnownKind` helpers. The bridge
+  reads `SUPPORTED_LSP_SERVER_KINDS` to
+  gate `getOrCreate` calls; a future
+  slice that adds `rust-analyzer`
+  support just extends the list.
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`** —
+  the bridge's effect now calls
+  `inferServerKind(typedEditor.getModel().uri.toString())`
+  on the initial model and bails out
+  (no client spawned, no providers
+  registered, no per-workspace status
+  flip) when the inferred kind is not
+  in `SUPPORTED_LSP_SERVER_KINDS`. For
+  the current build this is a no-op
+  (every `.ts`/`.tsx`/`.js`/`.jsx` file
+  still passes through); it's a
+  future-proof hook.
+- **`src/screens/EditorWorkspace/state/lspClientStore.inferServerKind.test.ts`**
+  (new) — 31 unit tests for the
+  inferrer + helpers: TypeScript
+  extensions (6 cases + case
+  insensitivity), Rust (1), Python
+  (2 — `.py` and `.pyi`), unknown
+  (6 — `.md`, `.json`, `.css`, `.html`,
+  `.go`, `.gitignore`, `Makefile`),
+  edge cases (5 — backslashes,
+  query/fragment, percent-encoding,
+  nested paths, dotfile prefix like
+  `.eslintrc.ts`), `isSupportedKind` /
+  `isKnownKind` semantics (5), and the
+  `SUPPORTED_LSP_SERVER_KINDS` ↔
+  `isSupportedKind` invariant (1).
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.test.tsx`**
+  — 2 new tests: opening a `.ts`
+  file spawns a client (the
+  inferrer returns `'typescript'`,
+  which is in
+  `SUPPORTED_LSP_SERVER_KINDS`); opening
+  a `.py` file is a no-op (the
+  inferrer returns `'pyright'`, which
+  is *not* in the supported list, so
+  the bridge returns early — no
+  client, no providers, no status
+  flip).
+- **Test results**: `vitest` 1128/1128
+  pass (was 1095 in Phase 9.3; +31
+  infer + 2 bridge = 1128); `tsc --noEmit`
+  clean; `cargo test` 350/350 pass
+  (no Rust changes; this was a
+  TS-only phase); `cargo build` clean.
+- **What is NOT in this slice (deferred)**:
+  - The Rust side still spawns only
+    `typescript-language-server`. The
+    `LspServerKind` enum is on the TS
+    side only; no IPC change yet.
+  - The store's `clients` map is
+    still keyed by `workspaceRoot`
+    (not by `${root}//${kind}`). A
+    future slice will re-key the maps
+    when the second kind is wired up.
+  - The `LanguageServerCard` UI still
+    shows only the TypeScript row.
+  - The kill switch (`lspKillSwitch`)
+    is still a single boolean, not
+    per-kind.
+
 ### Changed (Phase 9.3 — Respawn-countdown poll → scoped 1 Hz ticker)
 
 The `LanguageServerCard` settings UI used

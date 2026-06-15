@@ -1375,6 +1375,176 @@ model swap in place via
   --noEmit` clean; `cargo
   check` clean.
 
+### Added (Phase 9.47 — D-146: LSP provider re-registration on respawn)
+
+The 9.2f bridge's per-model
+`didChange` / `didClose` dispatch
+was already respawn-aware (it
+looks up the client lazily on
+every event), but the *providers*
+— the closures that capture
+`client` for
+`client.request('textDocument/definition', ...)`
+— still pointed at the dead
+client from bridge mount. After
+a respawn, the new `LspClient`
+was in the store with a new
+`handleId`; the dispatch path
+used it correctly, but
+go-to-def / hover /
+find-references / rename / code
+actions (which go through the
+providers, not the dispatch)
+silently failed until the bridge
+re-mounted (e.g. the user toggled
+the kill switch or reloaded the
+workspace).
+
+D-146 subscribes the bridge to
+`lspClientStore`'s `clients` map;
+on any `handleId` change for a
+supported kind, it disposes that
+kind's old provider set and
+re-registers a fresh one against
+the new client. The respawn
+itself is owned by the store's
+Phase 9.5 backoff ladder; the
+bridge only reacts to the
+observable `handleId` change.
+
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`**
+  — extracted the provider
+  registration logic into a
+  named async function
+  `registerProvidersForKind`.
+  The function disposes any
+  pre-existing provider
+  disposables for the kind
+  (from `providerDisposables`)
+  before registering a fresh
+  set, then stores the new
+  disposables. This makes
+  re-registration safe to call
+  multiple times for the same
+  kind.
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`**
+  — added a per-kind
+  `lastHandleIdsByKind: Map<LspServerKind, string>`
+  to track the last-seen
+  `handleId` for each kind. The
+  store subscription compares
+  the current `handleId` to
+  this map; a mismatch signals a
+  respawn.
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`**
+  — added a
+  `useLspClientStore.subscribe(onStoreChange)`
+  call inside the main
+  `useEffect`. The subscriber
+  iterates supported kinds, and
+  for any kind whose `handleId`
+  has changed since the last
+  observation:
+  1. **Optimistically** updates
+     `lastHandleIdsByKind` with
+     the new `handleId` (so
+     subsequent `setState` calls
+     from the respawn's status
+     transitions don't re-trigger
+     re-registration), then
+  2. Calls
+     `void registerProvidersForKind(kind)`.
+  The async re-registration
+  eventually re-sets
+  `lastHandleIdsByKind` (with
+  the same value), so it's
+  idempotent. The subscription
+  is torn down in the
+  `useEffect` cleanup to
+  prevent leaks.
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.test.tsx`**
+  — added 3 new tests:
+  - `D-146: re-registers
+    providers after a respawn
+    (new handleId)` — verifies
+    `registerLspProviders` is
+    called once for the respawned
+    kind after the `handleId`
+    changes.
+  - `D-146: disposes the old
+    provider set on respawn
+    (not the new one)` —
+    verifies the `dispose()`
+    methods of the *old*
+    provider set are called,
+    while the new set's
+    disposables remain live.
+  - `D-146: unsubscribes the
+    respawn watcher on bridge
+    unmount` — verifies the
+    `lspClientStore` subscription
+    is torn down on bridge
+    unmount, preventing leaks
+    and spurious re-registrations
+    after navigation.
+- **Test infrastructure fix**:
+  the test mock's `lspStdioRead`
+  was a single global FIFO
+  (`__lspQ`). After a respawn,
+  the new client's
+  `initialize` response could be
+  consumed by a still-alive
+  sibling client's reader loop,
+  which dispatched the message
+  to a `_pending` map with a
+  different id and left the new
+  client hanging. D-146's test
+  exposed this. The mock now
+  uses a per-handleId queue
+  (`__lspQByHandle: Map<handleId, Uint8Array[]>`),
+  mirroring how the Rust side
+  delivers each handle's stdout
+  independently. This is a
+  test-only change with no
+  production impact.
+- **Design decisions**:
+  - **D-146.1**: Optimistic
+    `lastHandleIdsByKind` update
+    *before* the async
+    re-registration. Without
+    it, the multiple
+    `setState`s fired by
+    `getOrCreate` (client
+    creation + status
+    transitions) would each
+    retrigger the subscription,
+    and the redundant async
+    re-registrations would race
+    and leave the provider
+    disposables in a torn
+    state. Optimistic update
+    breaks the loop without
+    losing the eventual
+    re-registration.
+  - **D-146.2**: First-observation
+    guard (`if (lastHandleId
+    === undefined) continue`).
+    The subscription fires
+    during the initial mount's
+    `setState` chain; without
+    this guard, the bridge
+    would call
+    `registerProvidersForKind`
+    twice per kind (once via
+    the synchronous call inside
+    the effect, once via the
+    subscription).
+- **Test results**: `vitest`
+  1170/1170 pass (was 1167;
+  +3 from this slice); `tsc
+  --noEmit` clean; `cargo
+  check` clean.
+
 ### Added (Phase 9.7 — LSP live server output panel)
 
 The `LanguageServerCard` settings UI now has a

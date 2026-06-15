@@ -84,6 +84,33 @@
  * "5 tabs / 4 different kinds live at
  * once" case the aggregator is built
  * for — no bridge change needed.
+ *
+ * ## D-146 — provider respawn re-registration
+ *
+ * The 9.2f bridge's per-model `didChange` /
+ * `didClose` dispatch is already respawn-aware
+ * (it looks up the client lazily on every
+ * event), but the *providers* — the closures
+ * that capture `client` for
+ * `client.request('textDocument/definition', ...)` —
+ * still point at the dead client from bridge
+ * mount. After a respawn, the new `LspClient`
+ * is in the store with a new `handleId`; the
+ * dispatch path uses it correctly, but
+ * go-to-def / hover / find-references / rename
+ * / code actions (which go through the
+ * providers, not the dispatch) silently fail
+ * until the bridge re-mounts (e.g. the user
+ * toggles the kill switch or reloads the
+ * workspace).
+ *
+ * D-146 subscribes to the `lspClientStore` for
+ * changes in any supported kind's `handleId`
+ * and re-registers the kind's provider set
+ * against the fresh client. The respawn itself
+ * is owned by the store's Phase 9.5 backoff
+ * ladder; the bridge only reacts to the
+ * observable `handleId` change.
  */
 import { useEffect } from 'react';
 import * as monaco from 'monaco-editor';
@@ -370,77 +397,187 @@ export function useMonacoLspBridge({
     // The provider registration is fire-and-
     // forget; the bridge continues to set up
     // the other kinds in parallel.
+    //
+    // D-146 — `registerProvidersForKind` is
+    // also called from the respawn subscription
+    // (below) when a kind's `handleId` changes.
+    // The function disposes any pre-existing
+    // provider set for the kind first, then
+    // registers against the fresh client.
+    // Extracted from the loop body so the
+    // respawn path can call it without
+    // duplicating the kill-switch / spawn /
+    // selector plumbing.
+    const registerProvidersForKind = async (
+      kind: LspServerKind,
+    ): Promise<void> => {
+      if (cancelled) return;
+      if (!getUseRealServer(kind)) return;
+      const selector = KIND_TO_LANGUAGE_IDS[kind];
+      if (selector.length === 0) return;
+      // D-146 — dispose the prior provider set
+      // for this kind (if any) before
+      // registering the new one. The
+      // pre-D-146 path never re-registered,
+      // so this branch only fires on the
+      // respawn path; the initial mount path
+      // has no pre-existing entry in
+      // `providerDisposables` for this kind.
+      const prev = providerDisposables.get(kind);
+      if (prev) {
+        for (const d of prev) {
+          try {
+            d.dispose();
+          } catch {
+            // ignore
+          }
+        }
+        providerDisposables.delete(kind);
+      }
+      let client: LspClient | undefined;
+      try {
+        client = await useLspClientStore
+          .getState()
+          .getOrCreate(workspaceRoot, kind);
+      } catch (e) {
+        // Spawn or `initialize` failed.
+        // The store has flipped the
+        // status to `error` and removed
+        // the client; the settings card
+        // will show the install hint.
+        // The Phase 7 built-in service
+        // stays in place for this kind.
+        if (import.meta.env.DEV) {
+          console.warn(
+            '[lspBridge] failed to start LSP client for kind',
+            kind,
+            ':',
+            e,
+          );
+        }
+        return;
+      }
+      if (cancelled) return;
+      // Phase 9.6: the completion
+      // sub-toggle is global
+      // (card-level), but each
+      // per-kind provider set reads
+      // it independently. If the user
+      // enables completion, every
+      // registered kind's providers
+      // include the completion
+      // provider.
+      const disposables = registerLspProviders(
+        client,
+        monaco,
+        selector as string[],
+        { includeCompletion: getUseRealServerForCompletion() },
+      );
+      // D-146 — record the new client's
+      // `handleId` so the respawn subscription
+      // can detect the *next* respawn. The
+      // initial mount path seeds this map; the
+      // respawn path updates it on every
+      // re-registration.
+      const newHandleId = client.handleId;
+      if (newHandleId !== null) {
+        lastHandleIdsByKind.set(kind, newHandleId);
+      }
+      providerDisposables.set(kind, disposables);
+    };
+    // D-146 — track each kind's last-seen
+    // `handleId`. The respawn subscription
+    // (below) diffs the current `clients`
+    // map against this snapshot to detect a
+    // respawn. The map is per-bridge-mount
+    // (a fresh map per `useEffect` run); on
+    // unmount, the closure goes away and the
+    // subscription's unlisten fires.
+    const lastHandleIdsByKind = new Map<LspServerKind, string>();
+
     for (const kind of SUPPORTED_LSP_SERVER_KINDS) {
       if (kind === 'unknown') continue;
       if (!getUseRealServer(kind)) continue;
-      const selector = KIND_TO_LANGUAGE_IDS[kind];
-      if (selector.length === 0) continue;
-      const registerForKind = async (): Promise<void> => {
-        if (cancelled) return;
-        let client: LspClient | undefined;
-        try {
-          client = await useLspClientStore
-            .getState()
-            .getOrCreate(workspaceRoot, kind);
-        } catch (e) {
-          // Spawn or `initialize` failed.
-          // The store has flipped the
-          // status to `error` and removed
-          // the client; the settings card
-          // will show the install hint.
-          // The Phase 7 built-in service
-          // stays in place for this kind.
-          if (import.meta.env.DEV) {
-            console.warn(
-              '[lspBridge] failed to start LSP client for kind',
-              kind,
-              ':',
-              e,
-            );
-          }
-          return;
-        }
-        if (cancelled) return;
-        // Phase 9.6: the completion
-        // sub-toggle is global
-        // (card-level), but each
-        // per-kind provider set reads
-        // it independently. If the user
-        // enables completion, every
-        // registered kind's providers
-        // include the completion
-        // provider.
-        const disposables = registerLspProviders(
-          client,
-          monaco,
-          selector as string[],
-          { includeCompletion: getUseRealServerForCompletion() },
-        );
-        // The pre-9.2f
-        // `registerLspProviders`
-        // closure captures the
-        // `client` reference. If the
-        // client respawns (the store
-        // creates a new `LspClient`
-        // with a new `handleId`),
-        // the provider closures
-        // still point at the old
-        // client. The `didChange` /
-        // `didClose` dispatch
-        // (which looks up the client
-        // lazily on every event)
-        // does the right thing on
-        // respawn — the user gets
-        // `didChange` on the new
-        // client. The provider itself
-        // still points at the old
-        // client; provider respawn
-        // handling is deferred to a
-        // follow-up slice.
-        providerDisposables.set(kind, disposables);
-      };
-      void registerForKind();
+      void registerProvidersForKind(kind);
     }
+
+    // D-146 — subscribe to `lspClientStore`
+    // for `handleId` changes in any supported
+    // kind. The store's respawn path
+    // (`scheduleRespawn` → `respawn` →
+    // `getOrCreate`) creates a new `LspClient`
+    // with a new `handleId`; the subscription
+    // diffs the current `clients` map against
+    // `lastHandleIdsByKind` and re-registers
+    // the affected kind's provider set.
+    //
+    // We use `useLspClientStore.subscribe` (not
+    // a React effect dep) because the bridge's
+    // per-model subscriptions (the `onDidChangeContent`
+    // + `onWillDispose` hooks for every open
+    // model) don't need to re-run on a respawn
+    // — the dispatch path is already
+    // respawn-aware. Only the per-kind provider
+    // registration needs to re-run.
+    //
+    // First-observation guard: if
+    // `lastHandleIdsByKind.get(kind)` is
+    // `undefined`, this is the first time the
+    // subscription has seen this kind's client
+    // — the *initial* `for`-loop registration
+    // owns that. Re-registering on the first
+    // observation would double-register
+    // providers on bridge mount (the store
+    // mutates `state.clients` *before* the
+    // initial `registerProvidersForKind` has
+    // finished awaiting `getOrCreate`, so the
+    // subscription fires for the brand-new
+    // client before the initial registration
+    // has set `lastHandleIdsByKind`).
+    //
+    // Optimistic `lastHandleIdsByKind` update:
+    // the subscription *immediately* records
+    // the new `handleId` before kicking off
+    // the async re-registration. The async
+    // re-registration causes more `setState`
+    // calls in the store (status transitions
+    // for the new client), each of which fires
+    // this subscription. If we waited for the
+    // re-registration to complete before
+    // updating `lastHandleIdsByKind`, each
+    // `setState` would see the old
+    // `lastHandleId` and re-trigger
+    // re-registration — an infinite loop.
+    // The optimistic update breaks the cycle.
+    const onStoreChange = (state: {
+      clients: Map<string, LspClient>;
+    }): void => {
+      if (cancelled) return;
+      for (const kind of SUPPORTED_LSP_SERVER_KINDS) {
+        if (kind === 'unknown') continue;
+        if (!getUseRealServer(kind)) continue;
+        const key = workspaceKindKey(workspaceRoot, kind);
+        const client = state.clients.get(key);
+        if (!client || client.handleId === null) continue;
+        const lastHandleId = lastHandleIdsByKind.get(kind);
+        if (lastHandleId === undefined) continue; // first observation
+        if (lastHandleId === client.handleId) continue;
+        // The `handleId` changed for this kind.
+        // Optimistically record the new
+        // `handleId` so subsequent `setState`
+        // calls (from the respawn's status
+        // transitions) don't re-trigger
+        // re-registration. The async
+        // re-registration will eventually
+        // re-set `lastHandleIdsByKind` (it's
+        // idempotent — same value), but
+        // racing past it via the optimistic
+        // update breaks the loop.
+        lastHandleIdsByKind.set(kind, client.handleId);
+        void registerProvidersForKind(kind);
+      }
+    };
+    const unsubStore = useLspClientStore.subscribe(onStoreChange);
 
     // Discover the currently-open models +
     // hook them. We do this synchronously
@@ -467,6 +604,13 @@ export function useMonacoLspBridge({
 
     return () => {
       cancelled = true;
+      // D-146 — unsubscribe from the
+      // `lspClientStore` respawn watcher.
+      try {
+        unsubStore();
+      } catch {
+        // ignore
+      }
       // Tear down the create-model
       // subscription.
       try {
@@ -526,9 +670,21 @@ export function useMonacoLspBridge({
     // creates a new one; the bridge's
     // per-model dispatch (which looks up
     // the client lazily on every event)
-    // picks up the new client. Provider
-    // respawn is deferred to a follow-up
-    // slice (see the `registerLspProviders`
-    // comment above).
+    // picks up the new client.
+    //
+    // D-146 — the per-kind provider
+    // registration is now respawn-aware.
+    // The `useLspClientStore.subscribe`
+    // callback (above) diffs the current
+    // `clients` map against the
+    // `lastHandleIdsByKind` snapshot and
+    // re-registers any kind whose
+    // `handleId` changed. The effect deps
+    // are still just `[editor, workspaceRoot]`
+    // — the respawn watcher is a direct
+    // store subscription, not a React
+    // effect dep, so the per-model
+    // subscriptions (which don't need to
+    // re-run on respawn) stay stable.
   }, [editor, workspaceRoot]);
 }

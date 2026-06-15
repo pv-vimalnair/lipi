@@ -122,20 +122,37 @@ vi.mock('@/ipc/lsp', () => {
         installHint: 'npm install -g typescript-language-server',
       };
     }),
-    lspStdioRead: vi.fn(async (_h: string, maxBytes: number) => {
-      // Pre-staged queue. The mock
-      // lspStdioWrite below also enqueues
-      // canned responses.
-      const q = (globalThis as { __lspQ?: Uint8Array[] }).__lspQ ?? [];
+    lspStdioRead: vi.fn(async (h: string, maxBytes: number) => {
+      // Per-handleId queue. The Rust
+      // side delivers each handle's
+      // stdout independently; the mock
+      // mirrors that by giving each
+      // handleId its own queue. This
+      // prevents the new client (after
+      // a respawn) from accidentally
+      // consuming a response intended
+      // for a still-alive sibling
+      // client (the previous
+      // single-`__lspQ` design had
+      // this race — D-146's respawn
+      // test exposed it).
+      const qm =
+        (globalThis as { __lspQByHandle?: Map<string, Uint8Array[]> })
+          .__lspQByHandle ?? new Map();
+      const q = qm.get(h) ?? [];
       if (q.length === 0) return new Uint8Array(0);
       const next = q.shift()!;
+      qm.set(h, q);
+      (globalThis as { __lspQByHandle?: Map<string, Uint8Array[]> })
+        .__lspQByHandle = qm;
       return next.byteLength > maxBytes ? next.slice(0, maxBytes) : next;
     }),
     lspStdioWrite: vi.fn(
-      async (_h: string, bytes: Uint8Array) => {
+      async (h: string, bytes: Uint8Array) => {
         writes.push(bytes);
         // On `initialize` request, enqueue a
-        // canned response with the right id.
+        // canned response with the right id
+        // into THIS handleId's queue.
         const text = new TextDecoder().decode(bytes);
         const headerEnd = text.indexOf('\r\n\r\n');
         if (headerEnd !== -1) {
@@ -164,10 +181,15 @@ vi.mock('@/ipc/lsp', () => {
               );
               out.set(new TextEncoder().encode(header), 0);
               out.set(bodyBytes, new TextEncoder().encode(header).byteLength);
-              const q =
-                (globalThis as { __lspQ?: Uint8Array[] }).__lspQ ?? [];
+              const qm =
+                (globalThis as { __lspQByHandle?: Map<string, Uint8Array[]> })
+                  .__lspQByHandle ?? new Map();
+              const q = qm.get(h) ?? [];
               q.push(out);
-              (globalThis as { __lspQ?: Uint8Array[] }).__lspQ = q;
+              qm.set(h, q);
+              (globalThis as {
+                __lspQByHandle?: Map<string, Uint8Array[]>;
+              }).__lspQByHandle = qm;
             }
           } catch {
             /* ignore */
@@ -514,6 +536,7 @@ function addWorkspace(path: string): void {
 
 beforeEach(() => {
   // Reset module state.
+  (globalThis as { __lspQByHandle?: Map<string, Uint8Array[]> }).__lspQByHandle = new Map();
   (globalThis as { __lspQ?: Uint8Array[] }).__lspQ = [];
   fakeModel = makeFakeModel(
     'file:///workspace/a/index.ts',
@@ -2163,5 +2186,398 @@ describe('useMonacoLspBridge', () => {
         .clients.has(workspaceKindKey('/workspace/off-py', 'rust_analyzer')),
     ).toBe(true);
     mounted.unmount();
+  });
+
+  // ------------------------------------------------------------------
+  // D-146 — provider respawn re-registration
+  // ------------------------------------------------------------------
+
+  /**
+   * D-146 — sanity check: the
+   * `lspClientStore` respawn path
+   * creates a new `LspClient` with a
+   * *different* `handleId`. The bridge
+   * must observe this `handleId` change
+   * and re-register the kind's provider
+   * set against the fresh client. The
+   * `registerLspProviders` mock returns
+   * a fresh array of `dispose()` noops
+   * on every call, so the test can count
+   * the call count to detect re-registration.
+   *
+   * The mock factory uses a counter so
+   * the first call returns `mock_handle_1`
+   * (the default) and subsequent calls
+   * return `mock_handle_respawn_N` —
+   * this matches real-world behaviour
+   * (the Rust side generates a fresh
+   * handleId for every `lsp_run_stdio`
+   * call) and triggers the bridge's
+   * respawn detector.
+   */
+  it('D-146: re-registers providers after a respawn (new handleId)', async () => {
+    addWorkspace('/workspace/respawn');
+    // Wrap the `lspRunStdio` mock with a
+    // counter so each spawn returns a
+    // unique handleId. The default mock
+    // returns `mock_handle_1` on every
+    // call; with the counter, the first
+    // call returns `mock_handle_1`, the
+    // second returns `mock_handle_2`, etc.
+    let spawnCount = 0;
+    const lspRunStdioMod = (await import('@/ipc/lsp'))
+      .lspRunStdio as unknown as {
+      mockImplementation: (fn: () => Promise<unknown>) => unknown;
+      mockReset: () => void;
+    };
+    lspRunStdioMod.mockImplementation(async () => {
+      spawnCount += 1;
+      return {
+        handleId: `mock_handle_respawn_${spawnCount}`,
+        resolvedCommand: 'typescript-language-server',
+      };
+    });
+    // Snapshot the `registerLspProviders`
+    // call count *before* mounting so we
+    // can assert the exact delta (3 from
+    // initial mount + 1 from the respawn).
+    const callsBefore = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][] };
+    }).mock.calls.length;
+    const mounted = mountBridge();
+    // Wait for the initial 3 providers to
+    // be registered (one per kind).
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length <
+          callsBefore + 3
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    const initialDelta =
+      (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length - callsBefore;
+    expect(initialDelta).toBe(3);
+    // Capture the TS provider's selector
+    // from the initial mount (so we can
+    // confirm the respawn uses the same
+    // one).
+    const initialTsSelector = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][] };
+    }).mock.calls[callsBefore]![2] as string[];
+    // Force a respawn of the TS kind. The
+    // store's `respawn` is the manual
+    // path (vs. the auto-respawn ladder
+    // triggered by `lsp://crashed`); it
+    // disposes the current client and
+    // `getOrCreate`s a fresh one. The
+    // second `lspRunStdio` call returns
+    // `mock_handle_respawn_2` (from our
+    // counter).
+    await act(async () => {
+      await useLspClientStore
+        .getState()
+        .respawn('/workspace/respawn', 'typescript');
+    });
+    // Wait for the re-registration to
+    // happen. The store subscription
+    // fires synchronously on the new
+    // client's `setState`, but the
+    // re-registration is an async
+    // `getOrCreate` + `registerLspProviders`
+    // round-trip. Poll until the call
+    // count grows by 1 (only the TS kind
+    // was respawned; the rust_analyzer +
+    // pyright providers should NOT be
+    // re-registered).
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length <
+          callsBefore + 4
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    const afterRespawnDelta =
+      (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length - callsBefore;
+    expect(afterRespawnDelta).toBe(4);
+    // The 4th call (the respawn) was for
+    // the TS kind. The other two kinds
+    // (rust_analyzer, pyright) did NOT
+    // re-register. The selector MUST
+    // match the TS initial-mount
+    // selector (typescript,
+    // typescriptreact, javascript,
+    // javascriptreact).
+    const respawnCall = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][] };
+    }).mock.calls[callsBefore + 3]!;
+    const respawnSelector = respawnCall[2] as string[];
+    expect(respawnSelector).toEqual(initialTsSelector);
+    expect(respawnSelector).toContain('typescript');
+    expect(respawnSelector).toContain('typescriptreact');
+    mounted.unmount();
+    // Restore the default mock for
+    // subsequent tests in this file.
+    lspRunStdioMod.mockReset();
+  });
+
+  /**
+   * D-146 — the respawn path disposes
+   * the *old* provider set before
+   * registering the new one. The mock
+   * returns fresh `{ dispose: vi.fn() }`
+   * arrays on every call, so we can
+   * pin the dispose calls to the *first*
+   * registration's array (which must
+   * be disposed) and confirm the
+   * *second* registration's array is
+   * *not* disposed yet.
+   *
+   * We read the disposable array from
+   * `mock.results[i].value` (the return
+   * value of the call), not from
+   * `mock.calls[i][0]` (the first
+   * argument, which is the `client`).
+   */
+  it('D-146: disposes the old provider set on respawn (not the new one)', async () => {
+    addWorkspace('/workspace/dispose-old');
+    // Wrap the `registerLspProviders`
+    // mock factory so it returns a
+    // fresh array of `{ dispose: vi.fn() }`
+    // on every call. We also wrap
+    // `lspRunStdio` with a counter so
+    // each spawn returns a unique
+    // handleId (respawn detector).
+    const originalRegister = registerLspProviders as unknown as {
+      mockImplementation: (fn: () => unknown[]) => unknown;
+      mockReset: () => void;
+    };
+    originalRegister.mockImplementation(() => {
+      return [
+        { dispose: vi.fn() },
+        { dispose: vi.fn() },
+      ];
+    });
+    let spawnCount = 0;
+    const lspRunStdioMod = (await import('@/ipc/lsp'))
+      .lspRunStdio as unknown as {
+      mockImplementation: (fn: () => Promise<unknown>) => unknown;
+      mockReset: () => void;
+    };
+    lspRunStdioMod.mockImplementation(async () => {
+      spawnCount += 1;
+      return {
+        handleId: `mock_handle_dispose_${spawnCount}`,
+        resolvedCommand: 'typescript-language-server',
+      };
+    });
+    const callsBefore = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][]; results: Array<{ value: unknown }> };
+    }).mock.calls.length;
+    const mounted = mountBridge();
+    // Wait for initial mount (3 provider
+    // sets registered, 3 arrays of
+    // disposables captured by our
+    // wrapper).
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length <
+          callsBefore + 3
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    // Pre-respawn: 3 arrays of 2 disposables
+    // each = 6 `dispose` functions
+    // captured. None have been called yet
+    // (the bridge doesn't dispose the
+    // initial provider set on mount).
+    const initialDisposables = (registerLspProviders as unknown as {
+      mock: { results: Array<{ value: unknown }> };
+    }).mock.results
+      .slice(callsBefore)
+      .map((r) => r.value as Array<{ dispose: ReturnType<typeof vi.fn> }>);
+    const initialDisposeCount = initialDisposables.reduce(
+      (acc, arr) => acc + arr.length,
+      0,
+    );
+    expect(initialDisposeCount).toBe(6);
+    for (const arr of initialDisposables) {
+      for (const d of arr) {
+        expect(d.dispose).toHaveBeenCalledTimes(0);
+      }
+    }
+    // Force the respawn.
+    await act(async () => {
+      await useLspClientStore
+        .getState()
+        .respawn('/workspace/dispose-old', 'typescript');
+    });
+    // Wait for the respawn re-registration
+    // (4 total calls).
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length <
+          callsBefore + 4
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    // The 4th call (the respawn) returned
+    // a fresh array of 2 disposables.
+    // Index in `mock.results` is
+    // `callsBefore + 3`.
+    const respawnDisposables = ((registerLspProviders as unknown as {
+      mock: { results: Array<{ value: unknown }> };
+    }).mock.results[callsBefore + 3]!.value as Array<{
+      dispose: ReturnType<typeof vi.fn>;
+    }>);
+    // The TS initial-mount array is at
+    // index `callsBefore` in `mock.results`.
+    const tsInitialDisposables = ((registerLspProviders as unknown as {
+      mock: { results: Array<{ value: unknown }> };
+    }).mock.results[callsBefore]!.value as Array<{
+      dispose: ReturnType<typeof vi.fn>;
+    }>);
+    // The TS initial array's disposes
+    // MUST have been called (the bridge
+    // disposed the old set before
+    // registering the new one).
+    expect(tsInitialDisposables[0]!.dispose).toHaveBeenCalledTimes(1);
+    expect(tsInitialDisposables[1]!.dispose).toHaveBeenCalledTimes(1);
+    // The respawn array's disposes
+    // MUST NOT have been called yet
+    // (the bridge just registered them).
+    expect(respawnDisposables[0]!.dispose).toHaveBeenCalledTimes(0);
+    expect(respawnDisposables[1]!.dispose).toHaveBeenCalledTimes(0);
+    // The rust_analyzer and pyright
+    // initial disposables (indices
+    // `callsBefore + 1` and
+    // `callsBefore + 2`) MUST NOT have
+    // been called (only the TS kind was
+    // respawned).
+    const rustInitialDisposables = ((registerLspProviders as unknown as {
+      mock: { results: Array<{ value: unknown }> };
+    }).mock.results[callsBefore + 1]!.value as Array<{
+      dispose: ReturnType<typeof vi.fn>;
+    }>);
+    const pyInitialDisposables = ((registerLspProviders as unknown as {
+      mock: { results: Array<{ value: unknown }> };
+    }).mock.results[callsBefore + 2]!.value as Array<{
+      dispose: ReturnType<typeof vi.fn>;
+    }>);
+    expect(rustInitialDisposables[0]!.dispose).toHaveBeenCalledTimes(0);
+    expect(pyInitialDisposables[0]!.dispose).toHaveBeenCalledTimes(0);
+    mounted.unmount();
+    // Restore the default mocks for
+    // subsequent tests in this file.
+    originalRegister.mockReset();
+    lspRunStdioMod.mockReset();
+  });
+
+  /**
+   * D-146 — the bridge's store
+   * subscription is a Zustand
+   * `subscribe` (not a React effect
+   * dep). On bridge unmount, the
+   * subscription must be torn down,
+   * so a *subsequent* respawn (after
+   * unmount) does not trigger any
+   * re-registration. This is the leak
+   * guard: without the unsubscribe
+   * in the cleanup function, a
+   * respawn after unmount would
+   * call `registerProvidersForKind`
+   * with `cancelled === true`, which
+   * is a no-op, but the subscription
+   * closure would still be alive,
+   * holding a reference to the
+   * dead `providerDisposables` map.
+   */
+  it('D-146: unsubscribes the respawn watcher on bridge unmount', async () => {
+    addWorkspace('/workspace/unsub');
+    // Counter on `lspRunStdio` so the
+    // respawn's handleId differs from
+    // the initial spawn's.
+    let spawnCount = 0;
+    const lspRunStdioMod = (await import('@/ipc/lsp'))
+      .lspRunStdio as unknown as {
+      mockImplementation: (fn: () => Promise<unknown>) => unknown;
+      mockReset: () => void;
+    };
+    lspRunStdioMod.mockImplementation(async () => {
+      spawnCount += 1;
+      return {
+        handleId: `mock_handle_unsub_${spawnCount}`,
+        resolvedCommand: 'typescript-language-server',
+      };
+    });
+    const callsBefore = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][] };
+    }).mock.calls.length;
+    const mounted = mountBridge();
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length <
+          callsBefore + 3
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    // Unmount. The cleanup function
+    // runs synchronously inside
+    // `act()`. After unmount, no
+    // subscription should be alive.
+    mounted.unmount();
+    // Now force a respawn. The store
+    // respawns the TS kind — the
+    // bridge is unmounted, so the
+    // respawn should not trigger any
+    // re-registration.
+    await act(async () => {
+      await useLspClientStore
+        .getState()
+        .respawn('/workspace/unsub', 'typescript');
+    });
+    // Wait long enough for the
+    // respawn's re-registration to
+    // have fired IF the subscription
+    // was still alive. The store
+    // subscription is synchronous
+    // (it fires inside `setState`),
+    // and `registerProvidersForKind`
+    // is async, so 200ms is plenty.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    // The `registerLspProviders` call
+    // count should NOT have grown
+    // (no subscription → no
+    // re-registration).
+    const finalDelta =
+      (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length - callsBefore;
+    expect(finalDelta).toBe(3);
+    // Restore the default mock for
+    // subsequent tests in this file.
+    lspRunStdioMod.mockReset();
   });
 });

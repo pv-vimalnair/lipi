@@ -173,8 +173,10 @@ mod stdio;
 pub use stdio::{
     check_available as stdio_check_available_rs, run_stdio as stdio_run_stdio_rs,
     stdio_close as stdio_close_rs, stdio_read as stdio_read_rs,
-    stdio_read_stderr as stdio_read_stderr_rs, stdio_write as stdio_write_rs,
-    CheckAvailableResult, LspCrashedPayload, LSP_CRASHED_EVENT, RunStdioArgs,
+    stdio_read_stderr as stdio_read_stderr_rs,
+    stdio_read_stderr_log as stdio_read_stderr_log_rs,
+    stdio_write as stdio_write_rs, CheckAvailableResult, LspCrashedPayload,
+    LspLogPayload, LSP_CRASHED_EVENT, LSP_LOG_EVENT, RunStdioArgs,
     RunStdioResult, StdioError, StdioState,
 };
 
@@ -532,6 +534,15 @@ async fn lsp_stdio_read_stderr(
     max_bytes: usize,
 ) -> Result<Vec<u8>, StdioError> {
     stdio_read_stderr_rs(state, handle_id, max_bytes).await
+}
+
+#[tauri::command]
+async fn lsp_stdio_read_stderr_log(
+    state: tauri::State<'_, Arc<StdioState>>,
+    handle_id: String,
+    max_bytes: usize,
+) -> Result<Vec<u8>, StdioError> {
+    stdio_read_stderr_log_rs(state, handle_id, max_bytes).await
 }
 
 #[tauri::command]
@@ -1671,6 +1682,7 @@ pub fn run() {
             lsp_run_stdio,
             lsp_stdio_read,
             lsp_stdio_read_stderr,
+            lsp_stdio_read_stderr_log,
             lsp_stdio_write,
             lsp_stdio_close,
             lsp_check_available,

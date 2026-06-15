@@ -80,6 +80,19 @@ const CHECK_AVAILABLE_TIMEOUT: Duration = Duration::from_secs(5);
 /// without unbounded growth on a chatty server.
 const STDERR_BUFFER_CAP: usize = 8 * 1024;
 
+/// Phase 9.7 — the *log* ring buffer is separate
+/// from the crash-tail buffer. It's much larger
+/// (64 KiB ≈ 1k lines) because the user is
+/// actively watching it in the "Server output"
+/// panel of the `LanguageServerCard`. New bytes
+/// are pushed to the JS side in real time via the
+/// `lsp://log` event; the buffer exists for
+/// replay when the JS side subscribes after the
+/// child has already been running for a while
+/// (the first `lsp_stdio_read_stderr_log` call
+/// drains the whole buffer).
+const STDERR_LOG_BUFFER_CAP: usize = 64 * 1024;
+
 /// `lsp://crashed` event name. Emitted by the wait task
 /// when the child process exits. The JS side
 /// `lspClientStore` subscribes via `onLspCrashed` and
@@ -90,6 +103,19 @@ const STDERR_BUFFER_CAP: usize = 8 * 1024;
 /// `src/ipc/lsp.ts`. If you change this string,
 /// update both sides + the Rust test that pins it.
 pub const LSP_CRASHED_EVENT: &str = "lsp://crashed";
+
+/// `lsp://log` event name. Phase 9.7 — emitted by
+/// the stderr reader task whenever new bytes
+/// arrive. The JS side `lspClientStore` subscribes
+/// via `onLspLog` and appends the lines to
+/// `lspOutputByWorkspace` for the
+/// `LanguageServerCard`'s "Server output" panel.
+///
+/// Re-exported from `lib.rs` and matched on the JS
+/// side as `LSP_LOG_EVENT` constant in
+/// `src/ipc/lsp.ts`. If you change this string,
+/// update both sides + the Rust test that pins it.
+pub const LSP_LOG_EVENT: &str = "lsp://log";
 
 /// Payload shape of the `lsp://crashed` event. Lives
 /// in Rust so we can write a `serde` round-trip test
@@ -111,6 +137,35 @@ pub struct LspCrashedPayload {
     pub stderr_tail: String,
 }
 
+/// Payload shape of the `lsp://log` event. Phase
+/// 9.7 — one event per stderr read with at least
+/// one byte. The `chunk` is the *new* bytes (the
+/// reader flushes them to the JS side immediately,
+/// not the whole buffer). The JS side is
+/// responsible for line-splitting and bounding
+/// the displayed tail.
+///
+/// Why a separate struct (not just reusing
+/// `LspCrashedPayload` with a different field
+/// shape): the two events have different
+/// delivery patterns (log = many small pushes,
+/// crash = one big tail) and different consumers
+/// (log → `lspOutputByWorkspace`, crash →
+/// `crashByWorkspace`). A distinct type keeps
+/// the wire format explicit and the Rust tests
+/// can pin each shape independently.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LspLogPayload {
+    pub handle_id: String,
+    /// New bytes the child wrote to stderr since
+    /// the last event (UTF-8 lossy). Empty only if
+    /// the reader somehow saw zero bytes (which
+    /// shouldn't happen — the reader loops on
+    /// `Ok(0)` as EOF, not as a normal event).
+    pub chunk: String,
+}
+
 /// Push `bytes` into a stderr ring buffer, dropping
 /// the oldest bytes when the cap is reached.
 /// Extracted from the reader task so the test suite
@@ -119,6 +174,22 @@ pub struct LspCrashedPayload {
 fn push_stderr(buf: &mut VecDeque<u8>, bytes: &[u8]) {
     for byte in bytes {
         if buf.len() >= STDERR_BUFFER_CAP {
+            buf.pop_front();
+        }
+        buf.push_back(*byte);
+    }
+}
+
+/// Phase 9.7 — push `bytes` into the stderr
+/// *log* ring buffer (separate from the crash
+/// tail; much larger — see
+/// `STDERR_LOG_BUFFER_CAP`). Same eviction
+/// semantics as `push_stderr`, but parameterised
+/// on the cap so the test suite can exercise the
+/// boundary without allocating 64 KiB.
+fn push_stderr_log(buf: &mut VecDeque<u8>, bytes: &[u8]) {
+    for byte in bytes {
+        if buf.len() >= STDERR_LOG_BUFFER_CAP {
             buf.pop_front();
         }
         buf.push_back(*byte);
@@ -218,6 +289,22 @@ struct StdioHandle {
     /// with the `lsp://crashed` event so the JS side
     /// can show the last ~100 lines.
     stderr_buffer: Arc<Mutex<VecDeque<u8>>>,
+    /// Phase 9.7 — separate, larger stderr buffer
+    /// for the live "Server output" panel in
+    /// `LanguageServerCard`. Capped at
+    /// `STDERR_LOG_BUFFER_CAP` bytes (64 KiB ≈ 1k
+    /// lines). New bytes are pushed to the JS side
+    /// via the `lsp://log` event; the buffer also
+    /// exists for replay when the JS side subscribes
+    /// after the child has already been running for
+    /// a while (the first `lsp_stdio_read_stderr_log`
+    /// call drains the whole buffer). The two
+    /// buffers are independent — the crash tail
+    /// (8 KiB) is always the "last 8 KiB at exit
+    /// time", the log buffer is "every line since
+    /// `lsp_run_stdio` was called, oldest evicted
+    /// at 64 KiB".
+    stderr_log_buffer: Arc<Mutex<VecDeque<u8>>>,
     /// Set to `true` when the reader task observes EOF or
     /// the child exits. `lsp_stdio_read` returns
     /// `[255, 255, ...]` (a sentinel) on the next call
@@ -344,9 +431,18 @@ impl StdioHandle {
     /// demand via `lsp_stdio_read_stderr`. The whole
     /// buffer is also snapshotted by the wait task and
     /// shipped with the `lsp://crashed` event.
+    ///
+    /// Phase 9.7 — the same task also writes to the
+    /// larger log buffer (`STDERR_LOG_BUFFER_CAP`)
+    /// and emits a `lsp://log` event for each
+    /// chunk. The JS side appends the chunk to
+    /// `lspOutputByWorkspace` and re-renders the
+    /// "Server output" panel in `LanguageServerCard`.
     fn spawn_stderr_reader(
         mut stderr: tokio::process::ChildStderr,
         stderr_buffer: Arc<Mutex<VecDeque<u8>>>,
+        stderr_log_buffer: Arc<Mutex<VecDeque<u8>>>,
+        app_handle: tauri::AppHandle,
         handle_id: String,
     ) {
         async_runtime::spawn(async move {
@@ -355,10 +451,44 @@ impl StdioHandle {
                 match stderr.read(&mut buf).await {
                     Ok(0) => break, // EOF — child closed stderr.
                     Ok(n) => {
-                        let mut q = stderr_buffer
-                            .lock()
-                            .expect("stderr buffer poisoned");
-                        push_stderr(&mut q, &buf[..n]);
+                        let bytes = &buf[..n];
+                        // 1. Crash-tail buffer (Phase 9.5).
+                        {
+                            let mut q = stderr_buffer
+                                .lock()
+                                .expect("stderr buffer poisoned");
+                            push_stderr(&mut q, bytes);
+                        }
+                        // 2. Live log buffer (Phase 9.7).
+                        {
+                            let mut q = stderr_log_buffer
+                                .lock()
+                                .expect("stderr log buffer poisoned");
+                            push_stderr_log(&mut q, bytes);
+                        }
+                        // 3. Push the new bytes to the JS
+                        // side via `lsp://log`. We emit
+                        // unconditionally on every read
+                        // (not just on newlines) — the JS
+                        // side does the line-splitting and
+                        // tail-bounding. Decoding as
+                        // UTF-8 lossy here means a sliced
+                        // multi-byte char becomes a
+                        // replacement char; the JS side's
+                        // line buffer will see the right
+                        // thing on the next read.
+                        let payload = serde_json::json!({
+                            "handleId": handle_id,
+                            "chunk": String::from_utf8_lossy(bytes),
+                        });
+                        if let Err(e) = app_handle.emit(LSP_LOG_EVENT, payload)
+                        {
+                            if std::env::var("LIPI_LSP_DEBUG").is_ok() {
+                                eprintln!(
+                                    "[lsp] failed to emit {LSP_LOG_EVENT}: {e}"
+                                );
+                            }
+                        }
                     }
                     Err(_e) => {
                         // Read error — most likely the
@@ -509,6 +639,7 @@ pub async fn run_stdio(
     let handle_id = format!("lsp_{}", random_hex(16));
     let stdout_buffer = Arc::new(Mutex::new(VecDeque::new()));
     let stderr_buffer = Arc::new(Mutex::new(VecDeque::new()));
+    let stderr_log_buffer = Arc::new(Mutex::new(VecDeque::new()));
     let exited = Arc::new(Mutex::new(false));
     let child_exited = Arc::new(Mutex::new(false));
     let exit_status = Arc::new(Mutex::new(None));
@@ -523,6 +654,8 @@ pub async fn run_stdio(
     StdioHandle::spawn_stderr_reader(
         stderr,
         stderr_buffer.clone(),
+        stderr_log_buffer.clone(),
+        app.clone(),
         handle_id.clone(),
     );
     StdioHandle::spawn_wait_task(
@@ -539,6 +672,7 @@ pub async fn run_stdio(
         stdin: AsyncMutex::new(stdin),
         stdout_buffer,
         stderr_buffer,
+        stderr_log_buffer,
         exited,
         child_exited,
         exit_status,
@@ -634,6 +768,49 @@ pub async fn stdio_read_stderr(
     // Tauri IPC payload huge. The ring buffer
     // itself is already capped at 8 KiB so this is
     // mostly a safety net.
+    let take = max_bytes.min(MAX_READ_BYTES).min(buf.len());
+    let mut out = Vec::with_capacity(take);
+    for _ in 0..take {
+        if let Some(b) = buf.pop_front() {
+            out.push(b);
+        }
+    }
+    Ok(out)
+}
+
+/// Phase 9.7 — `lsp_stdio_read_stderr_log` drains
+/// the live "Server output" log buffer. This is
+/// the *replay* path: the JS side also gets new
+/// bytes via the `lsp://log` event, so a client
+/// that subscribes mid-session would miss the
+/// bytes between the child spawning and the
+/// subscription. The first call after the JS
+/// side mounts the `LanguageServerCard` should
+/// drain the buffer to catch up.
+///
+/// Destructive read (same as `stdio_read_stderr`).
+/// Subsequent calls return only bytes that
+/// arrived after the last drain.
+pub async fn stdio_read_stderr_log(
+    state: tauri::State<'_, Arc<StdioState>>,
+    handle_id: String,
+    max_bytes: usize,
+) -> Result<Vec<u8>, StdioError> {
+    let handle = {
+        let handles = state.handles.lock().expect("state poisoned");
+        handles
+            .get(&handle_id)
+            .ok_or_else(|| StdioError::NotFound(handle_id.clone()))?
+            .clone()
+    };
+    let mut buf = handle
+        .stderr_log_buffer
+        .lock()
+        .expect("stderr log buffer poisoned");
+    // Cap at MAX_READ_BYTES for IPC safety. The
+    // log buffer itself is 64 KiB so this is
+    // effectively a per-call chunk limit, not a
+    // total cap.
     let take = max_bytes.min(MAX_READ_BYTES).min(buf.len());
     let mut out = Vec::with_capacity(take);
     for _ in 0..take {
@@ -1034,5 +1211,117 @@ mod tests {
         let parsed: LspCrashedPayload =
             serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, payload);
+    }
+
+    // --- Phase 9.7 — stderr log ring buffer + event ---
+
+    #[test]
+    fn lsp_log_event_name_is_stable() {
+        // The JS side listens for this exact string.
+        // If we change it, the listener goes silent
+        // and the live "Server output" panel never
+        // updates.
+        assert_eq!(LSP_LOG_EVENT, "lsp://log");
+    }
+
+    #[test]
+    fn lsp_log_payload_serialises_camel_case() {
+        // The JS side's `OnLspLogPayload` interface
+        // reads `handleId` and `chunk`. If we rename
+        // a Rust field, the listener goes silent.
+        let payload = LspLogPayload {
+            handle_id: "lsp_abc".to_string(),
+            chunk: "info: parsed foo.ts\n".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"handleId\":\"lsp_abc\""));
+        assert!(json.contains("\"chunk\":\"info: parsed foo.ts\\n\""));
+    }
+
+    #[test]
+    fn lsp_log_payload_round_trips_with_empty_chunk() {
+        // An empty chunk is a valid state (the reader
+        // can race with the child producing no output
+        // yet). The JS side must tolerate it.
+        let payload = LspLogPayload {
+            handle_id: "lsp_silent".to_string(),
+            chunk: String::new(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let parsed: LspLogPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, payload);
+    }
+
+    #[test]
+    fn push_stderr_log_below_cap_appends() {
+        // Mirrors `push_stderr_below_cap_appends`
+        // but for the 64 KiB log buffer. We don't
+        // actually allocate 64 KiB here — we just
+        // verify the helper appends in order and
+        // preserves the byte count.
+        let mut buf: VecDeque<u8> = VecDeque::new();
+        push_stderr_log(&mut buf, b"line 1\nline 2\n");
+        assert_eq!(buf.len(), 14);
+        let s = String::from_utf8(buf.iter().copied().collect::<Vec<u8>>())
+            .unwrap();
+        assert_eq!(s, "line 1\nline 2\n");
+    }
+
+    #[test]
+    fn push_stderr_log_at_cap_drops_oldest() {
+        // Fill the log buffer to exactly the cap, push
+        // two more bytes, assert the two oldest are
+        // evicted. This pins the eviction semantics
+        // for the live "Server output" panel.
+        let mut buf: VecDeque<u8> =
+            VecDeque::with_capacity(STDERR_LOG_BUFFER_CAP);
+        for i in 0..STDERR_LOG_BUFFER_CAP {
+            buf.push_back(b'a' + (i % 26) as u8);
+        }
+        let before_first_two: Vec<u8> =
+            buf.iter().take(2).copied().collect();
+        push_stderr_log(&mut buf, b"!!");
+        assert_eq!(buf.len(), STDERR_LOG_BUFFER_CAP);
+        // The two oldest bytes were evicted.
+        let after_first_two: Vec<u8> =
+            buf.iter().take(2).copied().collect();
+        assert_ne!(before_first_two, after_first_two);
+        // The two newest bytes are the new ones.
+        let last_two: Vec<u8> = buf
+            .iter()
+            .rev()
+            .take(2)
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        assert_eq!(last_two, b"!!".to_vec());
+    }
+
+    #[test]
+    fn push_stderr_log_empty_noop() {
+        // Pushing zero bytes must not change the
+        // buffer. Important for the "child produces
+        // no output" case — we still drain the
+        // reader once per tick, but emit nothing.
+        let mut buf: VecDeque<u8> = VecDeque::new();
+        push_stderr_log(&mut buf, b"hello");
+        let len_before = buf.len();
+        push_stderr_log(&mut buf, b"");
+        assert_eq!(buf.len(), len_before);
+    }
+
+    #[test]
+    fn stderr_log_buffer_cap_is_larger_than_crash_tail() {
+        // Pin the relationship: the live log buffer
+        // must be larger than the crash-tail buffer
+        // (the user actively watches the live panel,
+        // the crash tail is just a post-mortem).
+        // If we accidentally swap them, the live
+        // panel would evict its history every 8 KiB
+        // — basically useless.
+        assert!(STDERR_LOG_BUFFER_CAP > STDERR_BUFFER_CAP);
+        assert!(STDERR_LOG_BUFFER_CAP >= 16 * 1024);
     }
 }

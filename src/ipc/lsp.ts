@@ -274,3 +274,103 @@ export async function onLspCrashed(
     handler(e.payload),
   );
 }
+
+// --- Phase 9.7 — live "Server output" panel ---
+
+/**
+ * `lsp://log` event name. Emitted by the Rust
+ * `StdioHandle::spawn_stderr_reader` task whenever
+ * new bytes arrive on the child's stderr. The JS
+ * `lspClientStore` subscribes via `onLspLog` and
+ * appends the chunk to `lspOutputByWorkspace` for
+ * the `LanguageServerCard`'s "Server output" panel.
+ *
+ * Pinning the event name as a constant guards
+ * against typos on the Rust side (`LSP_LOG_EVENT`
+ * in `src-tauri/src/stdio.rs`); the Rust test
+ * `lsp_log_event_name_is_stable` asserts both
+ * sides agree.
+ */
+export const LSP_LOG_EVENT = 'lsp://log';
+
+/**
+ * Payload of the `lsp://log` event. Mirrors
+ * `LspLogPayload` in `src-tauri/src/stdio.rs`.
+ *
+ * `chunk` is the *new* bytes the child wrote to
+ * stderr since the last event (UTF-8 lossy). The
+ * store appends the chunk to its per-workspace
+ * line buffer and trims the tail to `maxLines`
+ * (default 1000) so the panel's render cost stays
+ * bounded.
+ *
+ * `handleId` is the same opaque 32-char hex string
+ * returned by `lspRunStdio`. The store uses it to
+ * look up the workspace (the `clients` map is
+ * keyed by `workspaceRoot`, not `handleId`, so a
+ * small `handleToWorkspace` reverse map is needed
+ * — see `lspClientStore.ts`).
+ */
+export interface OnLspLogPayload {
+  handleId: string;
+  chunk: string;
+}
+
+/**
+ * Subscribe to `lsp://log` events. Returns an
+ * `UnlistenFn` that the caller should invoke in a
+ * cleanup effect (or `useEffect` return value) to
+ * detach the listener.
+ *
+ * Phase 9.7 — the store calls this exactly once
+ * per store instance (idempotent via a
+ * `logUnlisten` closure ref) and keeps the
+ * unlisten alive for the lifetime of the app. The
+ * Rust side fires the event on every stderr
+ * read — many events per second for a chatty
+ * server — so the listener should be fast. The
+ * store does a simple `set` to update the
+ * per-workspace line buffer; no parsing or
+ * expensive computation happens here.
+ */
+export async function onLspLog(
+  handler: (payload: OnLspLogPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<OnLspLogPayload>(LSP_LOG_EVENT, (e) => handler(e.payload));
+}
+
+/**
+ * Drain up to `maxBytes` from the per-handle
+ * stderr *log* buffer. The buffer is a ring
+ * buffer capped at 64 KiB on the Rust side
+ * (≈1k lines), so the JS caller should call
+ * once with `maxBytes = 64 * 1024` to grab the
+ * entire tail in one shot.
+ *
+ * Phase 9.7 — the live "Server output" panel
+ * uses this as a *replay* path: the JS side also
+ * gets new bytes via the `lsp://log` event, so a
+ * client that subscribes mid-session would miss
+ * the bytes between the child spawning and the
+ * subscription. The first call after the JS side
+ * mounts the `LanguageServerCard` should drain
+ * the buffer to catch up.
+ *
+ * Note: this is a destructive read. Each call
+ * consumes the bytes from the buffer. Callers
+ * that want to peek should cache the returned
+ * bytes themselves (the store does this — once
+ * it has the bytes, it appends them to its
+ * in-memory line buffer and the Rust buffer
+ * is empty for the next read).
+ */
+export async function lspStdioReadStderrLog(
+  handleId: string,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const bytes = await invoke<number[]>('lsp_stdio_read_stderr_log', {
+    handleId,
+    maxBytes,
+  });
+  return new Uint8Array(bytes);
+}

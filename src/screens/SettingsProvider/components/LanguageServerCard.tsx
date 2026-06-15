@@ -48,7 +48,7 @@
  * `src/shared/styles/tokens.css` (via the CSS
  * module). No hardcoded hex / px.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { lspCheckAvailable, type CheckAvailableResult } from '@/ipc/lsp';
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
@@ -147,6 +147,34 @@ export function LanguageServerCard() {
         ? s.crashByWorkspace.get(activeWorkspaceRoot) ?? null
         : null),
   );
+  // Phase 9.7 — per-workspace live "Server
+  // output" panel. Sourced from
+  // `lspClientStore.lspOutputByWorkspace`,
+  // populated by the `lsp://log` subscription
+  // and the one-shot replay drain. `null`
+  // when the store has no entry for this
+  // workspace (i.e. the child has not
+  // produced any output yet AND the user has
+  // not opened the panel). The component
+  // treats both `null` and `{ lines: [],
+  // partialLine: '' }` as "no output yet" so
+  // the panel can render an empty state.
+  const outputEntry = useLspClientStore(
+    (s) =>
+      (activeWorkspaceRoot
+        ? s.lspOutputByWorkspace.get(activeWorkspaceRoot) ?? null
+        : null),
+  );
+  // Phase 9.7 — UI state for the
+  // collapsible "Server output" panel. The
+  // panel defaults to collapsed so the
+  // settings card stays compact by default;
+  // the user can expand it when they're
+  // debugging. `autoScroll` defaults to
+  // `true` so the panel always tracks the
+  // latest line (the common debugging UX).
+  const [outputExpanded, setOutputExpanded] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true);
   // Phase 9.5 — re-render every second while
   // a respawn is scheduled, so the
   // "Auto-restarting in Ns..." countdown
@@ -165,6 +193,33 @@ export function LanguageServerCard() {
     }, 1000);
     return () => clearInterval(id);
   }, [crashInfo?.respawnInMs]);
+  // Phase 9.7 — auto-scroll the "Server
+  // output" panel to the bottom when new
+  // lines arrive. We use a callback ref
+  // (not `useRef`) so the ref object is
+  // stable across renders and the effect
+  // can read it without re-running.
+  const outputPreNodeRef = useRef<HTMLPreElement | null>(null);
+  const outputPreRef = useCallback((node: HTMLPreElement | null) => {
+    outputPreNodeRef.current = node;
+  }, []);
+  useEffect(() => {
+    if (!autoScroll) return;
+    if (!outputExpanded) return;
+    if (!outputPreNodeRef.current) return;
+    // Scroll to the bottom on every line
+    // append. The `pre` is a single node;
+    // the assignment to `.scrollTop` is
+    // cheap (no layout if the height is
+    // unchanged).
+    outputPreNodeRef.current.scrollTop =
+      outputPreNodeRef.current.scrollHeight;
+  }, [
+    autoScroll,
+    outputExpanded,
+    outputEntry?.lines.length,
+    outputEntry?.updatedAt,
+  ]);
   // The available / install-hint probe.
   const [probe, setProbe] = useState<CheckAvailableResult | null>(null);
   // The kill switch toggle.
@@ -382,6 +437,97 @@ export function LanguageServerCard() {
         <p className={styles.statusLine} data-testid="lsp-version">
           Server version: {probe.version}
         </p>
+      )}
+      {/* Phase 9.7 — live "Server output"
+          panel. Hidden when the kill switch
+          is on (built-in Monaco TS service —
+          there's no server to log). The
+          panel is always rendered (even when
+          collapsed) so the user can see "0
+          lines" / "waiting for output" as a
+          sanity check that the server is
+          alive. */}
+      {useRealServer && (
+        <div
+          className={styles.outputPanel}
+          data-testid="lsp-output-panel"
+        >
+          <button
+            type="button"
+            className={styles.outputHeader}
+            onClick={() => setOutputExpanded((v) => !v)}
+            data-testid="lsp-output-toggle"
+          >
+            <span className={styles.outputChevron}>
+              {outputExpanded ? '▾' : '▸'}
+            </span>
+            <span>
+              <strong>Server output</strong>
+              {outputEntry && outputEntry.lines.length > 0 && (
+                <span className={styles.outputCount}>
+                  {' '}
+                  ({outputEntry.lines.length}
+                  {outputEntry.maxLines &&
+                  outputEntry.lines.length >= outputEntry.maxLines
+                    ? '+'
+                    : ''}{' '}
+                  line
+                  {outputEntry.lines.length === 1 ? '' : 's'})
+                </span>
+              )}
+            </span>
+          </button>
+          {outputExpanded && (
+            <>
+              <div className={styles.outputToolbar}>
+                <label className={styles.outputToolbarLabel}>
+                  <input
+                    type="checkbox"
+                    checked={autoScroll}
+                    onChange={(e) =>
+                      setAutoScroll(e.target.checked)
+                    }
+                    data-testid="lsp-output-autoscroll"
+                  />
+                  Auto-scroll
+                </label>
+                <button
+                  type="button"
+                  className={styles.outputClearButton}
+                  onClick={() => {
+                    if (activeWorkspaceRoot) {
+                      useLspClientStore
+                        .getState()
+                        .clearLspOutput(activeWorkspaceRoot);
+                    }
+                  }}
+                  data-testid="lsp-output-clear"
+                >
+                  Clear
+                </button>
+              </div>
+              {outputEntry && outputEntry.lines.length > 0 ? (
+                <pre
+                  className={styles.outputPre}
+                  ref={outputPreRef}
+                  data-testid="lsp-output-pre"
+                >
+                  {outputEntry.lines.join('\n')}
+                  {outputEntry.partialLine}
+                </pre>
+              ) : (
+                <p
+                  className={styles.outputEmpty}
+                  data-testid="lsp-output-empty"
+                >
+                  No output yet. The server logs to stderr on startup
+                  and on every parsed file. The panel updates in
+                  real-time.
+                </p>
+              )}
+            </>
+          )}
+        </div>
       )}
       <div className={styles.toggleRow}>
         <label className={styles.toggleLabel}>

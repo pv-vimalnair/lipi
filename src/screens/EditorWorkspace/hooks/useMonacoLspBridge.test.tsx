@@ -131,6 +131,16 @@ vi.mock('@/ipc/lsp', () => {
     // don't simulate real crashes, so
     // we return a no-op unlisten.
     onLspCrashed: vi.fn(async () => () => undefined),
+    // Phase 9.7 — same for `onLspLog`. The
+    // store subscribes once on first
+    // `getOrCreate`; bridge tests don't
+    // simulate log events, so a no-op
+    // unlisten is enough.
+    onLspLog: vi.fn(async () => () => undefined),
+    // Phase 9.7 — the replay-drain the
+    // store calls once per handleId.
+    // Empty by default in bridge tests.
+    lspStdioReadStderrLog: vi.fn(async () => new Uint8Array(0)),
   };
 });
 
@@ -284,6 +294,7 @@ beforeEach(() => {
     clients: new Map(),
     statusByWorkspace: new Map(),
     crashByWorkspace: new Map(),
+    lspOutputByWorkspace: new Map(),
   });
   useWorkspaceStore.setState({
     workspaces: [],

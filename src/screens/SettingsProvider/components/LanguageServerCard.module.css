@@ -257,3 +257,118 @@
   border-color: var(--color-border-strong, #888);
   color: var(--color-text-primary);
 }
+
+/* Phase 9.7 — live "Server output" panel.
+   A collapsible section that shows the LSP
+   server's stderr stream in real time. The
+   header is a button (clicking it toggles
+   expand / collapse) so the panel stays
+   accessible without a JS handler on a
+   `<div>`. The styling is calmer than the
+   crash panel (no red left border) — the
+   server is *running*, not crashed, so the
+   visual weight should be lower. */
+.outputPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background-color: var(--color-bg-base, #1a1a1a);
+  border: 1px solid var(--color-border-subtle, #444);
+  border-radius: var(--radius-sm, 4px);
+}
+
+.outputHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+}
+
+.outputHeader:hover {
+  color: var(--color-text-primary);
+}
+
+.outputChevron {
+  display: inline-block;
+  width: 1em;
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+}
+
+.outputCount {
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-regular, 400);
+}
+
+.outputToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--color-border-subtle, #333);
+}
+
+.outputToolbarLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-xs, 12px);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.outputToolbarLabel input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+.outputClearButton {
+  background: none;
+  border: 1px solid var(--color-border-subtle, #444);
+  border-radius: var(--radius-sm, 2px);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs, 12px);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+  transition: border-color 80ms linear, color 80ms linear;
+}
+
+.outputClearButton:hover {
+  border-color: var(--color-border-strong, #888);
+  color: var(--color-text-primary);
+}
+
+.outputPre {
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--space-2);
+  background-color: var(--color-bg-muted, #0d0d0d);
+  border: 1px solid var(--color-border-subtle, #333);
+  border-radius: var(--radius-sm, 2px);
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-xs, 12px);
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.outputEmpty {
+  font-size: var(--font-size-xs, 12px);
+  color: var(--color-text-secondary);
+  margin: 0;
+  padding: var(--space-2) 0;
+  line-height: 1.4;
+}

@@ -47,8 +47,11 @@ import {
   lspStdioRead,
   lspStdioWrite,
   lspStdioClose,
+  lspStdioReadStderrLog,
   onLspCrashed,
+  onLspLog,
   type OnLspCrashedPayload,
+  type OnLspLogPayload,
   type RunStdioResult,
 } from '@/ipc/lsp';
 import { getUseRealServer } from '@/screens/EditorWorkspace/state/lspKillSwitch';
@@ -121,6 +124,61 @@ export interface LspCrashInfo {
    *  "Auto-restarting in Ns..." message. */
   respawnInMs: number | null;
 }
+
+/**
+ * Phase 9.7 — the live "Server output" panel.
+ * Backs the `LanguageServerCard`'s collapsible
+ * section that shows the language server's
+ * stderr stream in real time.
+ *
+ * The store accumulates *lines* (not raw
+ * chunks) because the panel is a `<pre>` of
+ * newline-separated text. The Rust reader
+ * pushes raw chunks via the `lsp://log` event;
+ * the store does the line-splitting (splitting
+ * any chunk that ends mid-line, holding the
+ * partial-line remainder in `partialLine` until
+ * the next chunk arrives).
+ *
+ * The line buffer is bounded by `maxLines`
+ * (default `LSP_OUTPUT_MAX_LINES`, 1000). When
+ * a new line would push the buffer over the
+ * cap, the oldest line is dropped — same
+ * "newest wins" policy as the Rust ring
+ * buffer. This bounds both memory and the
+ * panel's render cost.
+ */
+export interface LspOutputEntry {
+  /** Already-completed lines (newline-terminated
+   *  chunks are split on arrival; partial-line
+   *  tails are held in `partialLine` until the
+   *  next chunk arrives). */
+  lines: string[];
+  /** A trailing fragment of the most recent
+   *  chunk that didn't end in a newline. The
+   *  panel renders this concatenated onto the
+   *  last `lines` entry (or as a single line if
+   *  `lines` is empty) so the user sees output
+   *  as it streams. */
+  partialLine: string;
+  /** Wall-clock time the store last appended
+   *  to this entry. The panel uses this for a
+   *  "Last updated 2s ago" footer. */
+  updatedAt: number;
+  /** Configurable cap on `lines.length`.
+   *  Defaults to `LSP_OUTPUT_MAX_LINES` (1000)
+   *  but the settings card lets the user lower
+   *  it (useful for slow machines where 1000
+   *  rows of `<pre>` re-rendering stutters). */
+  maxLines: number;
+}
+
+/** Default cap on `LspOutputEntry.lines.length`.
+ *  Tuned for "the user is debugging a TS server
+ *  issue" — 1000 lines is enough context for
+ *  most panic messages + backtraces without
+ *  freezing the settings card on each scroll. */
+const LSP_OUTPUT_MAX_LINES = 1000;
 
 /**
  * A JSON-RPC 2.0 message — request, response, or
@@ -799,6 +857,17 @@ interface LspClientStoreState {
   crashByWorkspace: Map<string, LspCrashInfo>;
 
   /**
+   * Phase 9.7 — per-workspace live server
+   * output. Populated by the `lsp://log`
+   * subscription; read by the
+   * `LanguageServerCard`'s "Server output"
+   * panel. Cleared on dispose and on a
+   * successful restart (so a fresh child
+   * starts with an empty panel).
+   */
+  lspOutputByWorkspace: Map<string, LspOutputEntry>;
+
+  /**
    * Get the existing LspClient for a workspace,
    * or create a new one (and start it
    * asynchronously). The first call to
@@ -830,6 +899,14 @@ interface LspClientStoreState {
    * relevant).
    */
   respawn(workspaceRoot: string): Promise<void>;
+
+  /**
+   * Phase 9.7 — clear the per-workspace
+   * "Server output" panel. The settings card's
+   * `Clear` button calls this. Idempotent —
+   * no-op if there's no entry.
+   */
+  clearLspOutput(workspaceRoot: string): void;
 
   /**
    * Test-only helper. Tears down the
@@ -877,6 +954,70 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
   // `__resetLspClientStoreForTests` helper
   // below).
   let crashUnlisten: (() => void) | null = null;
+
+  // Phase 9.7 — same story for the `lsp://log`
+  // event listener. One subscription per store
+  // instance; torn down only by the test
+  // suite's reset helper.
+  let logUnlisten: (() => void) | null = null;
+
+  /** Phase 9.7 — append a chunk of stderr text
+   *  to the workspace's `LspOutputEntry`,
+   *  splitting on `\n` and holding the trailing
+   *  partial line. Trimmed to the entry's
+   *  `maxLines` cap (FIFO eviction of oldest
+   *  lines).
+   *
+   *  Pure: takes the previous entry, returns
+   *  the next. Lets the caller wrap the result
+   *  in a `set((state) => …)` so React/Zustand
+   *  subscribers see a new Map reference and
+   *  re-render.
+   */
+  function appendOutputChunk(
+    prev: LspOutputEntry,
+    chunk: string,
+  ): LspOutputEntry {
+    // Empty chunks (the reader can fire on a
+    // 0-byte read in edge cases) are no-ops.
+    if (chunk.length === 0) {
+      return prev;
+    }
+    // Combine the previous partial line with
+    // the new chunk, then split on `\n`.
+    const combined = prev.partialLine + chunk;
+    const parts = combined.split('\n');
+    // `parts.pop()` is the trailing fragment
+    // (possibly empty if the chunk ended in
+    // `\n`). The rest are complete lines.
+    const trailing = parts.pop() ?? '';
+    const newLines = [...prev.lines, ...parts];
+    // Trim to the cap, dropping the oldest
+    // lines.
+    if (newLines.length > prev.maxLines) {
+      newLines.splice(0, newLines.length - prev.maxLines);
+    }
+    return {
+      lines: newLines,
+      partialLine: trailing,
+      updatedAt: Date.now(),
+      maxLines: prev.maxLines,
+    };
+  }
+
+  /** Phase 9.7 — make an empty entry with the
+   *  default `maxLines`. Used when the store
+   *  first sees a workspace's handleId (e.g.
+   *  on `getOrCreate` or on the first `lsp://log`
+   *  event). */
+  function makeEmptyOutputEntry(): LspOutputEntry {
+    return {
+      lines: [],
+      partialLine: '',
+      updatedAt: Date.now(),
+      maxLines: LSP_OUTPUT_MAX_LINES,
+    };
+  }
 
   function clearRespawnTimer(workspaceRoot: string): void {
     const t = respawnTimers.get(workspaceRoot);
@@ -985,13 +1126,53 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
     });
   }
 
+  // Phase 9.7 — `lsp://log` handler. Looks up
+  // the workspace from the handleId, splits the
+  // chunk into lines, and appends to the
+  // per-workspace entry.
+  function onLspLogReceived(payload: OnLspLogPayload): void {
+    const workspaceRoot = handleToWorkspace.get(payload.handleId);
+    if (!workspaceRoot) {
+      // Stale log event for a handle we've
+      // already disposed. Ignore.
+      return;
+    }
+    set((state) => {
+      const prev = state.lspOutputByWorkspace.get(workspaceRoot);
+      // We always create the entry on first
+      // log so the panel has something to
+      // render (even if the child is producing
+      // no output, the panel is still "live"
+      // — the user sees a "waiting for output"
+      // state).
+      const entry = prev ?? makeEmptyOutputEntry();
+      const next = appendOutputChunk(entry, payload.chunk);
+      const nextMap = new Map(state.lspOutputByWorkspace);
+      nextMap.set(workspaceRoot, next);
+      return { lspOutputByWorkspace: nextMap };
+    });
+  }
+
+  // Phase 9.7 — subscribe to `lsp://log`
+  // exactly once per store instance. Wrapped
+  // in a function so the test suite can swap
+  // the subscriber for a mock.
+  function ensureLogListener(): void {
+    if (logUnlisten) return;
+    void onLspLog(onLspLogReceived).then((un) => {
+      logUnlisten = un;
+    });
+  }
+
   return {
     clients: new Map(),
     statusByWorkspace: new Map(),
     crashByWorkspace: new Map(),
+    lspOutputByWorkspace: new Map(),
 
     async getOrCreate(workspaceRoot) {
       ensureCrashListener();
+      ensureLogListener();
       const existing = get().clients.get(workspaceRoot);
       if (existing) return existing;
       // If a respawn is already scheduled for
@@ -1078,6 +1259,50 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
           // otherwise be lost.
           if (client.handleId) {
             handleToWorkspace.set(client.handleId, workspaceRoot);
+            // Phase 9.7 — drain the Rust log
+            // buffer ONCE on first registration
+            // to catch up on any stderr the
+            // child wrote before the JS side
+            // subscribed to `lsp://log`. The
+            // reader has been firing events
+            // since the child spawned; without
+            // this drain, those events are lost.
+            // Best-effort: a failure here is
+            // silently ignored (the log is
+            // best-effort data, not critical).
+            void lspStdioReadStderrLog(
+              client.handleId,
+              64 * 1024,
+            )
+              .then((bytes) => {
+                if (bytes.length === 0) return;
+                const chunk = new TextDecoder(
+                  'utf-8',
+                  { fatal: false },
+                ).decode(bytes);
+                set((state) => {
+                  const prev =
+                    state.lspOutputByWorkspace.get(workspaceRoot) ??
+                    makeEmptyOutputEntry();
+                  const next = appendOutputChunk(prev, chunk);
+                  const nextMap = new Map(
+                    state.lspOutputByWorkspace,
+                  );
+                  nextMap.set(workspaceRoot, next);
+                  return {
+                    lspOutputByWorkspace: nextMap,
+                  };
+                });
+              })
+              .catch(() => {
+                // Best-effort: the buffer may
+                // be empty (child just spawned,
+                // no stderr yet) or the IPC may
+                // fail (handle disposed in the
+                // interim). Either way, the
+                // subscription is the source of
+                // truth going forward.
+              });
           }
           return client;
         } catch (e) {
@@ -1125,10 +1350,20 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
         nextStatus.set(workspaceRoot, 'stopped');
         const nextCrash = new Map(state.crashByWorkspace);
         nextCrash.delete(workspaceRoot);
+        // Phase 9.7 — drop the per-workspace
+        // "Server output" entry. The child is
+        // being shut down; its logs are no
+        // longer relevant. A subsequent
+        // `getOrCreate` will start a fresh
+        // entry via the replay-drain in the
+        // spawn path.
+        const nextOutput = new Map(state.lspOutputByWorkspace);
+        nextOutput.delete(workspaceRoot);
         return {
           clients: nextClients,
           statusByWorkspace: nextStatus,
           crashByWorkspace: nextCrash,
+          lspOutputByWorkspace: nextOutput,
         };
       });
       // Clear the `startPromises` entry so a
@@ -1154,7 +1389,21 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       set((state) => {
         const nextCrash = new Map(state.crashByWorkspace);
         nextCrash.delete(workspaceRoot);
-        return { crashByWorkspace: nextCrash };
+        // Phase 9.7 — also wipe the "Server
+        // output" panel. The new child starts
+        // with a clean log; showing the
+        // previous child's output would be
+        // confusing (and could be from a
+        // different workspace root if the user
+        // switched). The replay-drain in
+        // `getOrCreate` will repopulate if
+        // needed.
+        const nextOutput = new Map(state.lspOutputByWorkspace);
+        nextOutput.delete(workspaceRoot);
+        return {
+          crashByWorkspace: nextCrash,
+          lspOutputByWorkspace: nextOutput,
+        };
       });
       // Dispose the current client (no-op if
       // it already crashed and the dispose
@@ -1168,6 +1417,33 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       // a single bad restart to burn through
       // all 5 attempts).
       await get().getOrCreate(workspaceRoot);
+    },
+
+    /**
+     * Phase 9.7 — clear the per-workspace
+     * "Server output" panel. The settings
+     * card's `Clear` button calls this. Does
+     * NOT affect the Rust log buffer (the
+     * child process is still running and may
+     * write more); it only clears the
+     * in-memory display state.
+     *
+     * Idempotent: no-op if there's no entry
+     * for the workspace.
+     */
+    clearLspOutput(workspaceRoot) {
+      set((state) => {
+        if (!state.lspOutputByWorkspace.has(workspaceRoot)) {
+          // No entry → nothing to do. Returning
+          // the same state ref keeps the
+          // selector shallow-equal and avoids
+          // a spurious re-render.
+          return state;
+        }
+        const next = new Map(state.lspOutputByWorkspace);
+        next.delete(workspaceRoot);
+        return { lspOutputByWorkspace: next };
+      });
     },
     /**
      * Test-only helper. Tears down the
@@ -1196,6 +1472,19 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       if (crashUnlisten) {
         crashUnlisten();
         crashUnlisten = null;
+      }
+      // Phase 9.7 — same for the `lsp://log`
+      // subscription. Without this, the
+      // listener from the previous test would
+      // still fire on the next test's mocked
+      // events and the workspace lookup would
+      // hit a stale `handleToWorkspace` (now
+      // cleared, so it'd be a silent no-op —
+      // but the test would still see a leaked
+      // listener).
+      if (logUnlisten) {
+        logUnlisten();
+        logUnlisten = null;
       }
     },
   };

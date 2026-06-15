@@ -293,6 +293,13 @@ on mobile — cannot be retrofitted in Week 8.
 | 91 | Phase 9.5's `LspClient.shutdown()` **fire-and-forgets the `shutdown` / `exit` JSON-RPC messages** and calls `lspStdioClose` BEFORE clearing the reader timer. | The old code awaited the `shutdown` response AFTER clearing the reader timer — the response was never read and the promise hung. The fix is to send the messages, call `lspStdioClose`, then clear the timer. The JSON-RPC `shutdown` request becomes a "best effort" signal (the server might not respond if it's already dying); `lspStdioClose` does the actual cleanup (kills the child). | 2026-06-15 |
 | 92 | Phase 9.5's bridge uses a **`useRef` to dedupe** re-runs of the provider-registration effect on the initial mount, in addition to the `clientHandleId` dep. | The `clientHandleId` dep correctly re-runs the effect on a respawn (new handleId), but it ALSO re-runs on the *initial* mount: the first run sees `null` (subscribed value before the store has a client), the second run sees the new handleId (after `getOrCreate` finishes). The ref tracks the last handleId we registered against, so the second run bails. ~5 lines, no API change. | 2026-06-15 |
 | 93 | Phase 9.5 exposes a **test-only `__resetLspClientStoreForTests` action** on the store (not a top-level function) for the test suite to call in `beforeEach`. | The store holds closure-scoped state (respawn timers, `handleToWorkspace` map, `crashUnlisten`) that `setState` can't reach. The cleanest isolation point is a method on the store itself, which has access to the closure. The `__` prefix marks it as not-part-of-the-public-API (TypeScript convention for "internal to the module"); the test file imports the store's `useLspClientStore` and calls `getState().__resetLspClientStoreForTests()`. | 2026-06-15 |
+| 94 | Phase 9.7 captures live stderr via a **push event** (`lsp://log`), not a 1 Hz poll of a new `lspStdioReadStderrLog` command. | A push event fires the moment bytes arrive, with no latency, no redundant re-emits, and no per-tick timer. The polling command is still exposed as the *replay* path for the "JS side subscribes mid-session" case (the store drains the buffer once on first handleId registration to catch up). This mirrors the same push/poll duality as `lsp://crashed` (push) + `lspStdioReadStderr` (poll for post-mortem tail). | 2026-06-15 |
+| 95 | The live log buffer is **64 KiB** (`STDERR_LOG_BUFFER_CAP`), the crash-tail buffer stays at **8 KiB** (`STDERR_BUFFER_CAP`). | The two buffers serve different consumers: the crash tail is a *post-mortem* (last N lines at exit time, used once), the log is a *live stream* (every line since spawn, used continuously). Bumping the crash tail to 64 KiB would waste memory (the post-mortem is read once) and the live panel would still want a separate, larger buffer. Pinning `STDERR_LOG_BUFFER_CAP > STDERR_BUFFER_CAP` in a test makes the invariant explicit. | 2026-06-15 |
+| 96 | The store's `lspOutputByWorkspace` slice holds **lines** (split on `\n`), not raw bytes. The Rust reader pushes raw chunks; the store does the line-splitting. | The UI renders a `<pre>` of newline-separated text. Splitting in the store means the JS side is the single source of truth for "what is a line" — the UI never has to track a partial-line tail of its own. The store holds a `partialLine: string` field for the trailing fragment of the most recent chunk that didn't end in `\n`; the next chunk concatenates onto it. | 2026-06-15 |
+| 97 | The line buffer is bounded by `LSP_OUTPUT_MAX_LINES = 1000` with **FIFO eviction** of the oldest lines. | 1000 lines is enough context for "what did the server log while opening this workspace" without freezing the settings card on each scroll. The eviction policy mirrors the Rust ring buffer's "newest wins" — both layers agree on the invariant that the user sees the most recent context, not the first context. | 2026-06-15 |
+| 98 | `clearLspOutput` is a **store-only** action (no IPC call). The Rust log buffer is *not* touched. | The user might be debugging an active session and want to "start fresh" on the panel without disturbing the child's stderr stream (which is being captured for the next crash). The Rust buffer continues to fill; the in-memory entry is the only thing cleared. A future "Reset server" button could also clear the Rust buffer, but that's not in scope for Phase 9.7. | 2026-06-15 |
+| 99 | The "Server output" panel is **hidden when the kill switch is OFF**. | When the master toggle is on, the user is using Monaco's built-in TS service — there's no `typescript-language-server` child to log. Showing an empty panel ("No output yet") would be confusing; hiding the section entirely matches the "this section is irrelevant" UX. | 2026-06-15 |
+| 100 | The replay drain is a **best-effort** `void lspStdioReadStderrLog(...).then(...).catch(...)` chain inside `getOrCreate`. | The subscription is the source of truth going forward; the replay is purely a "catch up on the bytes between spawn and subscription" nicety. If the IPC fails (e.g. the handle was just disposed in the interim), the live `lsp://log` events are still the right path. The promise chain doesn't need to be awaited — `getOrCreate` returns as soon as the spawn completes, and the panel fills in asynchronously as the events arrive. | 2026-06-15 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -5327,7 +5334,7 @@ The plan's UAT requires the user to `npm i -g typescript-language-server` (a one
 - **Phase 9.4** — Per-workspace settings card (a row of "language servers" in the active workspace's status, not a single card for the active workspace only).
 - **Phase 9.5** — Crash recovery (auto-respawn the child process on `wait()` returning, with exponential backoff capped at 30s).
 - **Phase 9.6** — Real-server completion (add `monaco.languages.registerCompletionItemProvider` to the bridge, gated behind a "use real server for completion" toggle in the settings card). — **SHIPPED (this session)**
-- **Phase 9.7** — LSP crash diagnostics (a "Last 100 lines of server output" panel in the settings card, captured from the child's `stdout` / `stderr`).
+- **Phase 9.7** — LSP crash diagnostics (a "Last 100 lines of server output" panel in the settings card, captured from the child's `stdout` / `stderr`). — **SHIPPED (this session)**
 
 ### 9.34 Phase 9.6 — SHIPPED (Real-server completion adapter, see CHANGELOG "Added (Phase 9.6)")
 
@@ -5665,8 +5672,203 @@ warnings.
   setting (e.g. `lsp_crash_respawn_cap`) in the
   settings card would let power users tune it.
 
+### 9.36 Phase 9.7 — SHIPPED (LSP live server output panel, see CHANGELOG "Added (Phase 9.7 — LSP live server output panel)")
+
+> **Status:** Phase 9.7 is **shipped**. The
+> `typescript-language-server` integration now
+> has a **collapsible "Server output" panel** in
+> the `LanguageServerCard` settings UI that
+> streams the language server's stderr in real
+> time. The user can expand it (it defaults to
+> collapsed) to see what the server is logging —
+> useful for debugging "why is hover broken on
+> this file" or "is the server even seeing my
+> `tsconfig.json`?" without having to dig into
+> the Rust logs.
+
+**Why a *second* stderr buffer (not just bump the crash tail to 64 KiB)**
+
+The Phase 9.5 stderr buffer (8 KiB) is for
+*post-mortem*: the settings card reads it on the
+back of an `lsp://crashed` event and shows the
+last ~100 lines alongside the "Crashed" badge.
+A live "Server output" panel is a different
+consumer: the user is watching it scroll, the
+panel must not lose history just because the
+child logged 1k lines, and the crash tail must
+*not* get clobbered by a chatty happy-path (e.g.
+`typescript-language-server` on first workspace
+open logs every parsed `.d.ts` file). Two
+buffers, two purposes:
+- `stderr_buffer` (8 KiB) — last 8 KiB at
+  *exit* time, snapshotted by `spawn_wait_task`
+  and shipped with `lsp://crashed`.
+- `stderr_log_buffer` (64 KiB) — every line
+  since `lsp_run_stdio` was called, oldest
+  evicted at 64 KiB. The new `lsp://log` event
+  pushes new bytes to the JS side; the buffer
+  also exists for replay when the JS side
+  subscribes after the child has already been
+  running for a while.
+
+**Why a *push* event (not poll `lspStdioRead` on a 1 Hz timer)**
+
+The reader's `Ok(n)` fires whenever *any* bytes
+arrive — usually 1 chunk per file the server
+parses (a few per second on a hot workspace, a
+few per minute on idle). Polling would miss the
+"just landed a chunk" moment and would re-emit
+the same bytes on every tick until something
+new arrived. Pushing is the right shape for a
+streaming consumer; the existing
+`lspStdioReadStderr` polling command is kept for
+the crash case (where there's no consumer
+listening for the post-mortem tail).
+
+**Why the *replay* drain on first handleId registration**
+
+The Rust reader has been firing `lsp://log`
+events since the child spawned. A JS client that
+subscribes mid-session (e.g. user opens Settings
+two minutes after the editor first mounted)
+would miss the bytes between the spawn and the
+subscription. The store calls
+`lspStdioReadStderrLog(handleId, 64 * 1024)`
+*once* on first handleId registration to drain
+whatever the buffer currently holds, then
+appends it to the per-workspace `LspOutputEntry`
+*before* the subscription starts firing live
+events. Best-effort: a failure here is silently
+ignored (the subscription is the source of truth
+going forward).
+
+**Rust side**
+
+- `src-tauri/src/stdio.rs` — added the
+  `stderr_log_buffer` field on `StdioHandle`
+  (Arc<Mutex<VecDeque<u8>>>), the
+  `STDERR_LOG_BUFFER_CAP` constant (64 KiB), the
+  `push_stderr_log` helper (same eviction
+  semantics as `push_stderr` but parameterised
+  on the larger cap), the `LSP_LOG_EVENT`
+  constant (`"lsp://log"`), the `LspLogPayload`
+  struct (`{ handleId, chunk }`, with a serde
+  round-trip test to pin the wire format), and
+  the `stdio_read_stderr_log` Tauri command
+  (drain on demand). The existing
+  `spawn_stderr_reader` task now ALSO writes to
+  the log buffer AND emits `lsp://log` for each
+  chunk — no new tasks, no extra threads.
+- `src-tauri/src/lib.rs` — re-exported
+  `stdio_read_stderr_log_rs` / `LspLogPayload` /
+  `LSP_LOG_EVENT`; added the
+  `lsp_stdio_read_stderr_log` Tauri command and
+  registered it in the `invoke_handler!` list.
+
+**TS side**
+
+- `src/ipc/lsp.ts` — added `LSP_LOG_EVENT`
+  constant, `OnLspLogPayload` interface,
+  `onLspLog` event listener, and
+  `lspStdioReadStderrLog` typed wrapper.
+- `src/screens/EditorWorkspace/state/lspClientStore.ts` —
+  added a new `lspOutputByWorkspace: Map<string,
+  LspOutputEntry>` slice (entries hold `lines:
+  string[]`, `partialLine: string`, `maxLines:
+  1000`, `updatedAt: number`). The
+  `LspOutputEntry` interface + `clearLspOutput`
+  action are exported. The store subscribes to
+  `onLspLog` exactly once per store instance
+  (idempotent via a `logUnlisten` closure ref,
+  torn down only by the test suite's
+  `__resetLspClientStoreForTests` helper). The
+  store does the line-splitting (`\n`
+  boundaries, holding the trailing partial line
+  in `partialLine` until the next chunk arrives)
+  and the FIFO eviction (oldest line dropped
+  when `lines.length > maxLines`). `clearLspOutput`
+  is a no-op for unknown workspaces and
+  deliberately does NOT call
+  `lspStdioReadStderrLog` (the user might want
+  the child to keep producing; the in-memory
+  panel is the only thing cleared).
+- `src/screens/SettingsProvider/components/LanguageServerCard.tsx` —
+  added a new collapsible "Server output" panel
+  between the install hint and the kill-switch
+  toggle row. The panel renders ONLY when the
+  master kill switch is on (built-in Monaco TS
+  has no server to log). The header is a
+  `<button>` (click-to-toggle) showing a line
+  count; the expanded body has an `Auto-scroll`
+  checkbox (default on; the panel tracks the
+  latest line via a `useEffect` that reads a
+  `useRef<HTMLPreElement>`), a `Clear` button
+  (calls `useLspClientStore.getState().clearLspOutput(workspaceRoot)`),
+  and either a `<pre>` of the lines + the
+  trailing partial line, or an empty-state
+  paragraph ("No output yet. The server logs to
+  stderr on startup and on every parsed file.
+  The panel updates in real-time.").
+
+**Tests**
+
+- `src-tauri/src/stdio.rs` — 7 new tests for
+  the log ring buffer + event wire format
+  (mirroring the crash-tail tests but with the
+  64 KiB cap):
+  `lsp_log_event_name_is_stable`,
+  `lsp_log_payload_serialises_camel_case`,
+  `lsp_log_payload_round_trips_with_empty_chunk`,
+  `push_stderr_log_below_cap_appends`,
+  `push_stderr_log_at_cap_drops_oldest`,
+  `push_stderr_log_empty_noop`,
+  `stderr_log_buffer_cap_is_larger_than_crash_tail`.
+- `src/screens/EditorWorkspace/state/lspClientStore.test.ts` —
+  9 new tests for the live "Server output"
+  panel: log event appends lines, log event
+  holds a partial line until the next chunk,
+  log event for unknown handleId is ignored,
+  dispose clears the entry, `clearLspOutput`
+  empties the in-memory panel (no IPC call),
+  `clearLspOutput` is a no-op for unknown
+  workspace, replay drain populates the panel
+  with pre-subscription bytes, the line buffer
+  is bounded by `maxLines` (FIFO eviction of
+  oldest 5 lines when 1005 chunks are pushed).
+
+**Test results:** 1070/1070 vitest pass (+8
+from Phase 9.5's 1062); 350/350 cargo pass
+(+15 from Phase 9.5's 335, including 7 new
+stdio tests for the log ring + 8 new TS tests
+for the `lspOutputByWorkspace` slice +
+`clearLspOutput` action); `tsc --noEmit`
+clean; `cargo build` clean (no warnings — the
+`LspLogPayload` struct / `stderr_log_buffer`
+field / `stdio_read_stderr_log` function are
+all read by the new Tauri command and JS side,
+so the "never read" warnings from Phase 9.5
+are gone).
+
+**Decision log**
+
+| ID | Decision | Rationale | Date |
+|----|----------|-----------|------|
+| 94 | Phase 9.7 captures live stderr via a **push event** (`lsp://log`), not a 1 Hz poll of a new `lspStdioReadStderrLog` command. | A push event fires the moment bytes arrive, with no latency, no redundant re-emits, and no per-tick timer. The polling command is still exposed as the *replay* path for the "JS side subscribes mid-session" case (the store drains the buffer once on first handleId registration to catch up). This mirrors the same push/poll duality as `lsp://crashed` (push) + `lspStdioReadStderr` (poll for post-mortem tail). | 2026-06-15 |
+| 95 | The live log buffer is **64 KiB** (`STDERR_LOG_BUFFER_CAP`), the crash-tail buffer stays at **8 KiB** (`STDERR_BUFFER_CAP`). | The two buffers serve different consumers: the crash tail is a *post-mortem* (last N lines at exit time, used once), the log is a *live stream* (every line since spawn, used continuously). Bumping the crash tail to 64 KiB would waste memory (the post-mortem is read once) and the live panel would still want a separate, larger buffer. Pinning `STDERR_LOG_BUFFER_CAP > STDERR_BUFFER_CAP` in a test makes the invariant explicit. | 2026-06-15 |
+| 96 | The store's `lspOutputByWorkspace` slice holds **lines** (split on `\n`), not raw bytes. The Rust reader pushes raw chunks; the store does the line-splitting. | The UI renders a `<pre>` of newline-separated text. Splitting in the store means the JS side is the single source of truth for "what is a line" — the UI never has to track a partial-line tail of its own. The store holds a `partialLine: string` field for the trailing fragment of the most recent chunk that didn't end in `\n`; the next chunk concatenates onto it. | 2026-06-15 |
+| 97 | The line buffer is bounded by `LSP_OUTPUT_MAX_LINES = 1000` with **FIFO eviction** of the oldest lines. | 1000 lines is enough context for "what did the server log while opening this workspace" without freezing the settings card on each scroll. The eviction policy mirrors the Rust ring buffer's "newest wins" — both layers agree on the invariant that the user sees the most recent context, not the first context. | 2026-06-15 |
+| 98 | `clearLspOutput` is a **store-only** action (no IPC call). The Rust log buffer is *not* touched. | The user might be debugging an active session and want to "start fresh" on the panel without disturbing the child's stderr stream (which is being captured for the next crash). The Rust buffer continues to fill; the in-memory entry is the only thing cleared. A future "Reset server" button could also clear the Rust buffer, but that's not in scope for Phase 9.7. | 2026-06-15 |
+| 99 | The "Server output" panel is **hidden when the kill switch is OFF**. | When the master toggle is on, the user is using Monaco's built-in TS service — there's no `typescript-language-server` child to log. Showing an empty panel ("No output yet") would be confusing; hiding the section entirely matches the "this section is irrelevant" UX. | 2026-06-15 |
+| 100 | The replay drain is a **best-effort** `void lspStdioReadStderrLog(...).then(...).catch(...)` chain inside `getOrCreate`. | The subscription is the source of truth going forward; the replay is purely a "catch up on the bytes between spawn and subscription" nicety. If the IPC fails (e.g. the handle was just disposed in the interim), the live `lsp://log` events are still the right path. The promise chain doesn't need to be awaited — `getOrCreate` returns as soon as the spawn completes, and the panel fills in asynchronously as the events arrive. | 2026-06-15 |
+
+**Follow-up slices (out of scope for Phase 9.7)**
+
+- **`outputByWorkspace` could be backed by a `lipi:lsp:output` IndexedDB row** so the panel survives a workspace close + reopen. The current in-memory slice is intentionally ephemeral (the crash tail is too — see Phase 9.5). Persisting is a 1-day follow-up once the user reports "I closed the panel and lost my server output".
+- **Filter chips** (e.g. "Errors only" / "Warnings only") on the panel header. The store currently keeps the raw lines; a filter would be a UI-only transform over `outputEntry.lines`. Trivial to add; held back to keep the panel's surface area minimal in v1.
+- **A "Copy output" button** (mirroring the crash panel's "Copy diagnostics") so the user can paste the server log into a bug report. Trivial to add; held back to keep the toolbar uncluttered in v1.
+
 ---
 
-*End of handoff. Lipi is at **Phase 9.5 complete** (LSP crash recovery — Rust stderr ring buffer + `lsp://crashed` event + 7 new TS tests for the auto-respawn ladder + `LanguageServerCard` "Crashed" badge with auto-respawn countdown + `__resetLspClientStoreForTests` test helper for store isolation + a latent `LspClient.shutdown()` hang fix that surfaced only when the new tests started awaiting `dispose()`). The next session should resume from Phase 9.7 (LSP crash analytics + telemetry) and the remaining Phase 9.1-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.36.*
+*End of handoff. Lipi is at **Phase 9.7 complete** (LSP live server output panel — 64 KiB log ring buffer + `lsp://log` push event + `lspStdioReadStderrLog` replay-drain command + `lspClientStore.lspOutputByWorkspace` slice with line-splitting + FIFO eviction + 7 new Rust tests + 8 new TS tests + `LanguageServerCard` collapsible panel with `Auto-scroll` / `Clear` / line count). The next session should resume from Phase 9.1 (incremental `didChange` via Myers diff or `DiffEditor`) and the remaining Phase 9.2-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.37.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

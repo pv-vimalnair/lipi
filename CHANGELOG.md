@@ -6,6 +6,117 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 9.7 — LSP live server output panel)
+
+The `LanguageServerCard` settings UI now has a
+**collapsible "Server output" panel** that streams
+the language server's stderr in real time. The
+user can expand it (it defaults to collapsed) to
+see what the server is logging — useful for
+debugging "why is hover broken on this file" or
+"is the server even seeing my `tsconfig.json`?"
+without having to dig into the Rust logs.
+
+- **`src-tauri/src/stdio.rs`** — extended
+  `StdioHandle` with a **second stderr buffer**
+  (`stderr_log_buffer`, 64 KiB ring) separate
+  from the 8 KiB crash-tail one. The same stderr
+  reader task that feeds the crash-tail buffer
+  also feeds the log buffer and **emits a new
+  `lsp://log` Tauri event** for each chunk of new
+  bytes. The reader does the line-splitting? No —
+  it pushes raw bytes; the JS side splits on
+  arrival. UTF-8 lossy decode so a sliced
+  multi-byte char becomes a replacement char (the
+  same contract as the crash-tail decode).
+- **`src-tauri/src/stdio.rs`** — added
+  `LSP_LOG_EVENT` constant (`"lsp://log"`) and
+  `LspLogPayload` struct (`{ handleId, chunk }`),
+  with a round-trip serde test to pin the wire
+  format.
+- **`src-tauri/src/lib.rs`** — added a new
+  `lsp_stdio_read_stderr_log` Tauri command
+  (replay-drain; the JS side calls it once per
+  workspace on first `handleId` registration to
+  catch up on bytes the child wrote before the
+  JS side subscribed to `lsp://log`).
+- **`src/ipc/lsp.ts`** — added `LSP_LOG_EVENT`
+  constant, `OnLspLogPayload` interface,
+  `onLspLog` event listener, and
+  `lspStdioReadStderrLog` typed wrapper.
+- **`src/screens/EditorWorkspace/state/lspClientStore.ts`** —
+  added a new `lspOutputByWorkspace: Map<string,
+  LspOutputEntry>` slice (entries hold `lines:
+  string[]`, `partialLine: string`, `maxLines:
+  1000`, `updatedAt: number`). New `LspOutputEntry`
+  type + `clearLspOutput(workspaceRoot)` action.
+  The store subscribes to `onLspLog` exactly once
+  (idempotent via a `logUnlisten` closure ref,
+  torn down only by the test suite's
+  `__resetLspClientStoreForTests` helper). The
+  store does the line-splitting (`\n` boundaries,
+  holding the trailing partial line in
+  `partialLine` until the next chunk arrives) and
+  the FIFO eviction (oldest line dropped when
+  `lines.length > maxLines`).
+- **`src/screens/SettingsProvider/components/LanguageServerCard.tsx`** —
+  added a new `<details>`-style collapsible
+  "Server output" panel with:
+  - **Click-to-expand header** showing a line
+    count (`"Server output (42 lines)"`).
+  - **`Auto-scroll` checkbox** (default on) so
+    the panel tracks the latest line as it
+    streams. Off = manual scroll; the user can
+    freeze a moment in time to copy it.
+  - **`Clear` button** that calls
+    `useLspClientStore.getState().clearLspOutput(workspaceRoot)`.
+    The Rust log buffer is *not* touched (the
+    child is still running, may write more).
+  - **Empty state**: `"No output yet. The server
+    logs to stderr on startup and on every
+    parsed file. The panel updates in
+    real-time."` so the user has a sanity check
+    that the server is alive.
+  - **Hidden when the kill switch is OFF** (the
+    built-in Monaco TS service has no server to
+    log).
+
+- **`src/screens/EditorWorkspace/state/lspClientStore.test.ts`** —
+  9 new tests for the live "Server output"
+  panel: log event appends lines, log event
+  holds a partial line until the next chunk,
+  log event for unknown handleId is ignored,
+  dispose clears the entry, `clearLspOutput`
+  empties the in-memory panel (no IPC call),
+  `clearLspOutput` is a no-op for unknown
+  workspace, replay drain populates the panel
+  with pre-subscription bytes, the line buffer
+  is bounded by `maxLines` (FIFO eviction of
+  oldest 5 lines when 1005 chunks are pushed).
+- **`src-tauri/src/stdio.rs`** — 7 new tests for
+  the log ring buffer + event wire format
+  (mirroring the crash-tail tests but with the
+  64 KiB cap): `lsp_log_event_name_is_stable`,
+  `lsp_log_payload_serialises_camel_case`,
+  `lsp_log_payload_round_trips_with_empty_chunk`,
+  `push_stderr_log_below_cap_appends`,
+  `push_stderr_log_at_cap_drops_oldest`,
+  `push_stderr_log_empty_noop`,
+  `stderr_log_buffer_cap_is_larger_than_crash_tail`.
+
+**Test results:** 1070/1070 vitest pass
+(+8 from Phase 9.5's 1062); 350/350 cargo pass
+(+15 from Phase 9.5's 335, including 7 new
+stdio tests for the log ring + 8 new TS tests
+for the `lspOutputByWorkspace` slice +
+`clearLspOutput` action); `tsc --noEmit` clean;
+`cargo build` clean (no warnings — the
+`LspLogPayload` struct / `stderr_log_buffer`
+field / `stdio_read_stderr_log` function are
+all read by the new Tauri command and JS
+side, so the "never read" warnings from
+Phase 9.5 are gone).
+
 ### Added (Phase 9.6 — Real-server completion adapter)
 
 The `typescript-language-server` integration now

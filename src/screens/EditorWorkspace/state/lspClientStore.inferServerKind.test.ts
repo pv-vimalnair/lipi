@@ -26,6 +26,7 @@ import {
   inferServerKind,
   isKnownKind,
   isSupportedKind,
+  KIND_TO_LANGUAGE_IDS,
   SUPPORTED_LSP_SERVER_KINDS,
 } from './lspClientStore';
 
@@ -145,14 +146,27 @@ describe('inferServerKind', () => {
 });
 
 describe('isSupportedKind', () => {
-  it('returns true for typescript (the only currently supported kind)', () => {
+  it('returns true for typescript (the canonical kind)', () => {
     expect(isSupportedKind('typescript')).toBe(true);
   });
-  it('returns false for rust_analyzer (not yet wired)', () => {
-    expect(isSupportedKind('rust_analyzer')).toBe(false);
+  it('returns true for rust_analyzer (Phase 9.2b — Rust arm is wired)', () => {
+    // Phase 9.2b added the `rust-analyzer`
+    // binary probe on the Rust side and
+    // the `kindToSpawnSpec` arm on the JS
+    // side. The bridge now actually
+    // spawns it for `.rs` files.
+    expect(isSupportedKind('rust_analyzer')).toBe(true);
   });
-  it('returns false for pyright (not yet wired)', () => {
-    expect(isSupportedKind('pyright')).toBe(false);
+  it('returns true for pyright (Phase 9.2c — Rust arm is wired)', () => {
+    // Phase 9.2c added the
+    // `pyright-langserver` binary probe
+    // on the Rust side and added
+    // `'pyright'` to
+    // `SUPPORTED_LSP_SERVER_KINDS` on
+    // the JS side. The bridge now
+    // actually spawns it for `.py` /
+    // `.pyi` files.
+    expect(isSupportedKind('pyright')).toBe(true);
   });
   it('returns false for unknown', () => {
     expect(isSupportedKind('unknown')).toBe(false);
@@ -181,5 +195,59 @@ describe('isKnownKind', () => {
   });
   it('returns false for unknown', () => {
     expect(isKnownKind('unknown')).toBe(false);
+  });
+});
+
+/**
+ * Phase 9.2f — `KIND_TO_LANGUAGE_IDS` is
+ * the per-kind `DocumentSelector` the
+ * bridge uses to register one provider
+ * set per kind. Monaco's provider
+ * registry routes provider calls to the
+ * right provider per file based on the
+ * selector match. The mapping is a
+ * frozen constant; the test guards
+ * against accidental removal of a
+ * `languageId` that would break the
+ * multi-model aggregator's routing.
+ */
+describe('KIND_TO_LANGUAGE_IDS (Phase 9.2f)', () => {
+  it('typescript maps to the four Monaco language IDs the ts-language-server handles', () => {
+    expect(KIND_TO_LANGUAGE_IDS.typescript).toEqual(
+      expect.arrayContaining([
+        'typescript',
+        'typescriptreact',
+        'javascript',
+        'javascriptreact',
+      ]),
+    );
+  });
+  it('rust_analyzer maps to the `rust` Monaco language ID', () => {
+    expect(KIND_TO_LANGUAGE_IDS.rust_analyzer).toEqual(['rust']);
+  });
+  it('pyright maps to the `python` Monaco language ID', () => {
+    expect(KIND_TO_LANGUAGE_IDS.pyright).toEqual(['python']);
+  });
+  it('unknown has an empty selector (no provider registered)', () => {
+    // The `unknown` kind is the "no
+    // server" kind (e.g. `.md` /
+    // `.json`). The bridge skips it in
+    // the provider-registration loop;
+    // an empty selector reinforces
+    // that intent.
+    expect(KIND_TO_LANGUAGE_IDS.unknown).toEqual([]);
+  });
+  it('every supported kind has a non-empty selector', () => {
+    // The bridge's provider-registration
+    // loop skips kinds with empty
+    // selectors as a defensive measure.
+    // This test guards against a future
+    // `SUPPORTED_LSP_SERVER_KINDS` add
+    // that forgets to fill in the
+    // mapping.
+    for (const kind of SUPPORTED_LSP_SERVER_KINDS) {
+      if (kind === 'unknown') continue;
+      expect(KIND_TO_LANGUAGE_IDS[kind].length).toBeGreaterThan(0);
+    }
   });
 });

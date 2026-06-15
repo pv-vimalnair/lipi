@@ -131,6 +131,51 @@ const KNOWN_LSP_SERVER_KINDS: readonly LspServerKind[] = [
 ] as const;
 
 /**
+ * Phase 9.2f — per-kind `DocumentSelector` for
+ * Monaco provider registration. Each
+ * supported kind is registered with a
+ * `DocumentSelector` keyed by the
+ * `languageId` Monaco returns for files
+ * the kind handles. Monaco's provider
+ * registry routes provider calls to the
+ * right provider per file based on
+ * `DocumentSelector` matching.
+ *
+ * Why an array per kind:
+ *   - `typescript` is registered for
+ *     `typescript`, `typescriptreact`,
+ *     `javascript`, `javascriptreact`
+ *     (the four Monaco language IDs
+ *     `typescript-language-server` is
+ *     useful for — the `tsConfigStore`
+ *     treats JS/JSX as first-class
+ *     `ts-language-server` citizens).
+ *   - `rust_analyzer` is registered for
+ *     `rust` (the Monaco language ID
+ *     for `.rs` files).
+ *   - `pyright` is registered for
+ *     `python` (the Monaco language ID
+ *     for `.py` / `.pyi` files).
+ *
+ * The bridge registers one provider set
+ * per kind using this table; the
+ * registration is independent of how
+ * many models are open (or what kinds
+ * they are). The provider registry
+ * routes to the right provider per
+ * file.
+ */
+export const KIND_TO_LANGUAGE_IDS: Record<
+  LspServerKind,
+  readonly string[]
+> = {
+  typescript: ['typescript', 'typescriptreact', 'javascript', 'javascriptreact'],
+  rust_analyzer: ['rust'],
+  pyright: ['python'],
+  unknown: [],
+};
+
+/**
  * Map a file URI to a language-server kind.
  *
  *   - `file:///path/to/index.ts` →

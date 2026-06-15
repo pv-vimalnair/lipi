@@ -871,6 +871,218 @@ path.
   clean; `cargo test` 350/350 pass;
   `cargo build` clean.
 
+### Added (Phase 9.2f — Bridge multi-client aggregator)
+
+Phase 9.2e (per-kind card + per-kind
+kill switch) shipped the user-facing
+controls for multi-server. Phase 9.2f
+ships the **bridge aggregator**: the
+mechanism that lets a single Monaco
+pane have *multiple* open models
+of *different* kinds live at the same
+time, each served by the right
+`(workspace, kind)` `LspClient`. This
+is forward-infrastructure for a future
+`EditorPane` refactor that keeps a
+single Monaco instance across tab
+switches (today the pane remounts
+Monaco on every tab switch via
+`key={activeTab.id}`, so only one
+model is open at a time).
+
+- **`src/screens/EditorWorkspace/state/lspClientStore.ts`** —
+  new `KIND_TO_LANGUAGE_IDS` constant
+  is the per-kind `DocumentSelector`
+  the bridge uses to register one
+  provider set per kind. The mapping
+  is:
+  - `typescript` → `['typescript',
+    'typescriptreact', 'javascript',
+    'javascriptreact']` (the four
+    Monaco language IDs the
+    `ts-language-server` handles)
+  - `rust_analyzer` → `['rust']`
+  - `pyright` → `['python']`
+  - `unknown` → `[]` (no provider
+    registered; Monaco's built-in
+    handles these files)
+  Monaco's provider registry routes
+  provider calls to the right set
+  per file based on the
+  `DocumentSelector` match — no
+  in-bridge router needed.
+
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`** —
+  major refactor: the hook is now a
+  *multi-model aggregator*:
+  - **Discovery**: on bridge mount,
+    the hook walks
+    `monaco.editor.getModels()` (the
+    *global* Monaco model registry)
+    and hooks every open model.
+  - **Subscribe to future models**:
+    `monaco.editor.onDidCreateModel`
+    adds a new model when a tab is
+    opened. The new model is hooked
+    (per-model `onDidChangeContent` +
+    `onWillDispose` subscriptions) and
+    a `didOpen` is sent to the right
+    kind's client.
+  - **Per-model lifecycle**: each
+    model's `onDidChangeContent`
+    routes `didChange` to the right
+    client (kind inferred from URI);
+    each model's `onWillDispose`
+    routes `didClose` and tears down
+    the per-model subscriptions.
+  - **Per-kind provider sets**: the
+    hook registers one
+    `registerLspProviders` call per
+    *supported* kind (one per kind
+    that passes the per-kind kill
+    switch), each with the kind's
+    `DocumentSelector`. This is 3
+    calls today (typescript,
+    rust_analyzer, pyright) instead of
+    the 9.2e's 1 call. The kill
+    switch is per-kind: a user with
+    pyright off still gets TS and
+    rust-analyzer provider sets
+    registered; the `.py` model is
+    just not "opened" on a server.
+  - **Effect deps**: the effect no
+    longer re-runs on
+    `clientHandleId` change (the
+    pre-9.2f re-key on respawn). The
+    per-model `didChange` / `didClose`
+    dispatch looks up the client
+    lazily on every event, so a
+    respawn is reflected without an
+    effect re-run. Provider respawn
+    (re-registering on a fresh
+    `LspClient`) is deferred to a
+    follow-up slice (the provider
+    captures the client at
+    registration time).
+  - **Cleanup**: on bridge unmount,
+    *every* per-model subscription
+    is disposed and a `didClose` is
+    sent for every open model;
+    *every* per-kind provider set is
+    disposed. The bridge is now
+    forward-compatible with a
+    `EditorPane` refactor that keeps
+    a single Monaco instance across
+    tab switches.
+
+- **Test updates** —
+  `src/screens/EditorWorkspace/hooks/useMonacoLspBridge.test.tsx`:
+  - Test fixture now exposes
+    `fakeGetModelsReturn` and
+    `fakeCreateModelListeners` for
+    the bridge to discover existing
+    models and subscribe to future
+    creations.
+  - `FakeModel` factory
+    (`makeFakeModel`) wires up the
+    per-model `onDidChangeContent`
+    and `onWillDispose` subscriptions
+    the bridge installs.
+  - Pre-existing tests updated to
+    use the new fixture (per-model
+    events instead of editor-level
+    events; 3 registerLspProviders
+    calls instead of 1).
+  - **5 new 9.2f tests**:
+    - `aggregator: 5 open tabs of 4
+      different kinds spawn 4
+      distinct LspClients` — the
+      "polyglot workspace" case
+      (2x TS, 1x py, 1x rs, 1x tsx
+      → 3 distinct LspClients with
+      TS handling 3 models).
+    - `aggregator: content changes
+      on a .py model route to the
+      pyright client, not the TS
+      client` — verifies the
+      per-model dispatch routes to
+      the right client.
+    - `aggregator: opening a new
+      tab (onDidCreateModel) sends
+      didOpen to the right client` —
+      verifies the create-model
+      subscription hooks new models.
+    - `aggregator: closing a tab
+      (onWillDispose) sends didClose
+      to the right client` —
+      verifies the per-model dispose
+      subscription fires didClose.
+    - `aggregator: per-kind kill
+      switch off for pyright — .py
+      model is not opened on a
+      client` — verifies the
+      per-kind kill switch still
+      gates the multi-model
+      aggregator.
+
+- **Test updates** —
+  `src/screens/EditorWorkspace/state/lspClientStore.inferServerKind.test.ts`:
+  5 new `KIND_TO_LANGUAGE_IDS` tests
+  guarding the per-kind
+  `DocumentSelector` mapping.
+
+- **Design decisions** (see HANDOFF
+  §9.44 for the full list):
+  - **D-143**: The bridge tracks
+    *all* open models, not just the
+    focused one. The
+    pre-9.2f design keyed on
+    `(editor, workspaceRoot,
+    clientHandleId)` and re-ran on
+    every kind change; the 9.2f
+    design keys on `(editor,
+    workspaceRoot)` and tracks
+    models internally.
+  - **D-144**: One provider set per
+    kind, registered at bridge
+    mount. Monaco's provider
+    registry routes per file via
+    the `DocumentSelector` — no
+    in-bridge router.
+  - **D-145**: The
+    `EditorPane` refactor
+    (drop `key={activeTab.id}`,
+    persist Monaco across tab
+    switches) is **deferred** to
+    a follow-up slice. The
+    aggregator is correct in both
+    the current (per-tab Monaco)
+    and the future
+    (single-Monaco-across-tabs)
+    designs — no bridge change
+    needed when the pane refactor
+    lands.
+  - **D-146**: Provider respawn
+    (re-registering on a fresh
+    `LspClient` after a crash +
+    respawn) is deferred. The
+    provider captures the client
+    at registration time; the
+    `didChange` / `didClose`
+    dispatch picks up the new
+    client lazily. A future slice
+    can add explicit
+    respawn-aware re-registration
+    by subscribing to the store's
+    `clients` map for the kind's
+    `handleId` change.
+
+- **Test results**: `vitest`
+  1157/1157 pass (was 1152 in
+  Phase 9.2e; +5 bridge aggregator);
+  `tsc --noEmit` clean; `cargo
+  check` clean.
+
 ### Added (Phase 9.7 — LSP live server output panel)
 
 The `LanguageServerCard` settings UI now has a

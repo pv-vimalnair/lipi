@@ -50,7 +50,32 @@ vi.mock('monaco-editor', () => {
       registerSignatureHelpProvider: () => noopDisposable,
       registerInlayHintsProvider: () => noopDisposable,
     },
-    editor: {},
+    // Phase 9.2f — the bridge uses
+    // `monaco.editor.getModels()` to discover
+    // already-open models and
+    // `monaco.editor.onDidCreateModel` to
+    // subscribe to future model creation.
+    // The mock provides a no-op default; the
+    // test fixture's `vi.mock` of
+    // `useMonacoLspBridge` (or the fixture
+    // itself) overrides these on a per-test
+    // basis. We use a *getter* so the test
+    // can swap the implementation by
+    // reassigning the module-level
+    // `fakeGetModels` variable.
+    editor: {
+      get getModels() {
+        return () => fakeGetModelsReturn;
+      },
+      get onDidCreateModel() {
+        return (
+          cb: (m: unknown) => void,
+        ): { dispose: () => void } => {
+          fakeCreateModelListeners.push(cb as (m: FakeModel) => void);
+          return { dispose: () => {} };
+        };
+      },
+    },
   };
 });
 
@@ -182,6 +207,21 @@ interface FakeModel {
   getLanguageId: () => string;
   getValue: () => string;
   getVersionId: () => number;
+  /**
+   * Phase 9.2f — the bridge now subscribes
+   * to per-model events (was per-editor
+   * pre-9.2f). `onDidChangeContent` is the
+   * per-model analog of Monaco's editor
+   * `onDidChangeModelContent`. `onWillDispose`
+   * fires when the model is garbage-collected
+   * (e.g. a tab is closed).
+   */
+  onDidChangeContent: (
+    cb: (e: FakeContentChangedEvent) => void,
+  ) => { dispose: () => void };
+  onWillDispose: (cb: () => void) => { dispose: () => void };
+  fireContentChange: (e: FakeContentChangedEvent) => void;
+  fireWillDispose: () => void;
 }
 
 /**
@@ -206,8 +246,8 @@ interface FakeContentChange {
 /**
  * Shape of a fake `IModelContentChangedEvent` —
  * the wrapper Monaco passes to
- * `onDidChangeModelContent`. The bridge now
- * reads `event.changes` and `event.versionId`
+ * `onDidChangeContent`. The bridge reads
+ * `event.changes` and `event.versionId`
  * (Phase 9.1 — was previously just a void
  * callback).
  */
@@ -221,12 +261,67 @@ interface FakeModelChangedEvent {
   newModelUrl?: { toString: () => string } | null;
 }
 
-let fakeModel: FakeModel = {
-  uri: { toString: () => 'file:///workspace/a/index.ts' },
-  getLanguageId: () => 'typescript',
-  getValue: () => 'const x = 1;\n',
-  getVersionId: () => 1,
-};
+/**
+ * Phase 9.2f — the test fixture exposes a
+ * module-level `getModels()` mock that
+ * the bridge calls to discover
+ * already-open models. The default
+ * implementation returns `[fakeModel]`;
+ * individual tests can override.
+ */
+let fakeGetModelsReturn: FakeModel[] = [];
+
+/**
+ * Phase 9.2f — the test fixture exposes
+ * module-level `onDidCreateModel` and
+ * `onWillDispose` subscriptions. The
+ * bridge registers `onDidCreateModel`
+ * for future model creation. The
+ * fixture's `createFakeModel` helper
+ * fires the `onDidCreateModel`
+ * listeners so the bridge hooks the
+ * new model.
+ */
+let fakeCreateModelListeners: Array<(m: FakeModel) => void> = [];
+
+function makeFakeModel(
+  uri: string,
+  languageId: string,
+  initial: string = '',
+): FakeModel {
+  let contentListeners: Array<(e: FakeContentChangedEvent) => void> = [];
+  let willDisposeListeners: Array<() => void> = [];
+  return {
+    uri: { toString: () => uri },
+    getLanguageId: () => languageId,
+    getValue: () => initial,
+    getVersionId: () => 1,
+    onDidChangeContent: (cb) => {
+      contentListeners.push(cb);
+      return { dispose: () => {} };
+    },
+    onWillDispose: (cb) => {
+      willDisposeListeners.push(cb);
+      return { dispose: () => {} };
+    },
+    fireContentChange: (e) => {
+      for (const cb of contentListeners) cb(e);
+    },
+    fireWillDispose: () => {
+      for (const cb of willDisposeListeners) cb();
+    },
+  };
+}
+
+let fakeModel: FakeModel = makeFakeModel(
+  'file:///workspace/a/index.ts',
+  'typescript',
+  'const x = 1;\n',
+);
+// Default `getModels()` returns the
+// module-level `fakeModel` (the test
+// fixture's "focused" model).
+fakeGetModelsReturn = [fakeModel];
 
 let fakeContentListeners: Array<(e: FakeContentChangedEvent) => void> = [];
 let fakeModelListeners: Array<(e: FakeModelChangedEvent) => void> = [];
@@ -420,12 +515,17 @@ function addWorkspace(path: string): void {
 beforeEach(() => {
   // Reset module state.
   (globalThis as { __lspQ?: Uint8Array[] }).__lspQ = [];
-  fakeModel = {
-    uri: { toString: () => 'file:///workspace/a/index.ts' },
-    getLanguageId: () => 'typescript',
-    getValue: () => 'const x = 1;\n',
-    getVersionId: () => 1,
-  };
+  fakeModel = makeFakeModel(
+    'file:///workspace/a/index.ts',
+    'typescript',
+    'const x = 1;\n',
+  );
+  // Default: the bridge's `getModels()`
+  // returns `[fakeModel]` (the test's
+  // "focused" model). Tests that simulate
+  // multi-tab open override this.
+  fakeGetModelsReturn = [fakeModel];
+  fakeCreateModelListeners = [];
   fakeContentListeners = [];
   fakeModelListeners = [];
   // Phase 9.5 — the store's
@@ -519,10 +619,17 @@ describe('useMonacoLspBridge', () => {
   it('is a no-op when the kill switch is disabled for the file kind', async () => {
     // Phase 9.2e — the kill switch is per-kind.
     // Disable the TS kind; a `.ts` file's
-    // bridge should bail out. Other kinds
+    // bridge should bail out for the TS
+    // provider set. Other kinds
     // (rust-analyzer, pyright) remain enabled
-    // — a `.rs` or `.py` file's bridge would
-    // still spawn a client.
+    // — the bridge registers providers for
+    // those kinds independently.
+    //
+    // Phase 9.2f — the bridge registers one
+    // provider set per *enabled* kind. With
+    // TS off, the bridge registers for
+    // rust_analyzer and pyright (the other
+    // two enabled kinds), but not for TS.
     setUseRealServer('typescript', false);
     addWorkspace('/workspace/a');
     const mounted = mountBridge();
@@ -530,13 +637,29 @@ describe('useMonacoLspBridge', () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 10));
     });
-    // The store has no client — the bridge should
-    // have bailed out at the kill switch.
+    // The TS client does not exist.
     expect(
       useLspClientStore.getState().clients.has(tsKey('/workspace/a')),
     ).toBe(false);
-    // `registerLspProviders` was never called.
-    expect(registerLspProviders).not.toHaveBeenCalled();
+    // `registerLspProviders` was called for
+    // the rust_analyzer and pyright provider
+    // sets (not for TS).
+    const callSelectors = (
+      registerLspProviders as unknown as {
+        mock: {
+          calls: Array<[unknown, unknown, string[], unknown]>;
+        };
+      }
+    ).mock.calls.map((c) => c[2]);
+    expect(callSelectors).toEqual(
+      expect.arrayContaining([expect.arrayContaining(['rust'])]),
+    );
+    expect(callSelectors).toEqual(
+      expect.arrayContaining([expect.arrayContaining(['python'])]),
+    );
+    expect(callSelectors).not.toEqual(
+      expect.arrayContaining([expect.arrayContaining(['typescript'])]),
+    );
     mounted.unmount();
   });
 
@@ -570,7 +693,34 @@ describe('useMonacoLspBridge', () => {
     expect(
       useLspClientStore.getState().clients.has(tsKey('/workspace/a')),
     ).toBe(true);
-    expect(registerLspProviders).toHaveBeenCalledTimes(1);
+    // Phase 9.2f — the bridge registers one
+    // provider set per *supported* kind. With
+    // all three kinds enabled, this is 3
+    // calls (one for `typescript`, one for
+    // `rust_analyzer`, one for `pyright`).
+    // Each call uses the kind's
+    // `DocumentSelector` (the `languageId`s
+    // Monaco returns for files the kind
+    // handles).
+    expect(registerLspProviders).toHaveBeenCalledTimes(3);
+    const callSelectors = (
+      registerLspProviders as unknown as {
+        mock: {
+          calls: Array<[unknown, unknown, string[], unknown]>;
+        };
+      }
+    ).mock.calls.map((c) => c[2]);
+    expect(callSelectors).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(['typescript', 'javascript']),
+      ]),
+    );
+    expect(callSelectors).toEqual(
+      expect.arrayContaining([expect.arrayContaining(['rust'])]),
+    );
+    expect(callSelectors).toEqual(
+      expect.arrayContaining([expect.arrayContaining(['python'])]),
+    );
     mounted.unmount();
   });
 
@@ -623,24 +773,30 @@ describe('useMonacoLspBridge', () => {
     const writesBefore = lspMock.writes.length;
     // Fire a single keystroke at line 2,
     // col 1 → user types "x".
+    //
+    // Phase 9.2f — the bridge subscribes
+    // to `model.onDidChangeContent` (per-
+    // model), not the editor's
+    // `onDidChangeModelContent`. The test
+    // fires the model's `fireContentChange`
+    // helper to invoke the per-model
+    // subscription.
     await act(async () => {
-      for (const cb of fakeContentListeners) {
-        cb({
-          changes: [
-            {
-              range: {
-                startLineNumber: 2,
-                startColumn: 1,
-                endLineNumber: 2,
-                endColumn: 1,
-              },
-              rangeLength: 0,
-              text: 'x',
+      fakeModel.fireContentChange({
+        changes: [
+          {
+            range: {
+              startLineNumber: 2,
+              startColumn: 1,
+              endLineNumber: 2,
+              endColumn: 1,
             },
-          ],
-          versionId: 2,
-        });
-      }
+            rangeLength: 0,
+            text: 'x',
+          },
+        ],
+        versionId: 2,
+      });
       // The bridge awaits
       // `sendDidChange` (which calls
       // `client.notify` → `lspStdioWrite`),
@@ -687,12 +843,26 @@ describe('useMonacoLspBridge', () => {
     // Use a long fake document so the
     // "old" path would have shipped a
     // lot of bytes.
-    fakeModel = {
-      uri: { toString: () => 'file:///workspace/big/index.ts' },
-      getLanguageId: () => 'typescript',
-      getValue: () => 'a'.repeat(5000) + '\n',
-      getVersionId: () => 100,
-    };
+    //
+    // Phase 9.2f — use the `makeFakeModel`
+    // factory so the per-model
+    // `onDidChangeContent` +
+    // `onWillDispose` subscriptions the
+    // bridge installs are wired up.
+    fakeModel = makeFakeModel(
+      'file:///workspace/big/index.ts',
+      'typescript',
+      'a'.repeat(5000) + '\n',
+    );
+    // Phase 9.2f — the bridge discovers
+    // models via `monaco.editor.getModels()`.
+    // The `beforeEach` set
+    // `fakeGetModelsReturn = [fakeModel]`
+    // — that array now points to the
+    // *old* `fakeModel`. Re-assign to
+    // point at the new one so the bridge
+    // sees the long-document model.
+    fakeGetModelsReturn = [fakeModel];
     addWorkspace('/workspace/big');
     const mounted = mountBridge();
     await act(async () => {
@@ -712,23 +882,23 @@ describe('useMonacoLspBridge', () => {
     };
     const writesBefore = lspMock.writes.length;
     await act(async () => {
-      for (const cb of fakeContentListeners) {
-        cb({
-          changes: [
-            {
-              range: {
-                startLineNumber: 1,
-                startColumn: 1,
-                endLineNumber: 1,
-                endColumn: 1,
-              },
-              rangeLength: 0,
-              text: 'Z',
+      // Phase 9.2f — fire the per-model
+      // `onDidChangeContent`.
+      fakeModel.fireContentChange({
+        changes: [
+          {
+            range: {
+              startLineNumber: 1,
+              startColumn: 1,
+              endLineNumber: 1,
+              endColumn: 1,
             },
-          ],
-          versionId: 101,
-        });
-      }
+            rangeLength: 0,
+            text: 'Z',
+          },
+        ],
+        versionId: 101,
+      });
       await new Promise((r) => setTimeout(r, 50));
     });
     const newWrites = lspMock.writes.slice(writesBefore);
@@ -774,33 +944,34 @@ describe('useMonacoLspBridge', () => {
     };
     const writesBefore = lspMock.writes.length;
     await act(async () => {
-      for (const cb of fakeContentListeners) {
-        cb({
-          changes: [
-            {
-              range: {
-                startLineNumber: 1,
-                startColumn: 1,
-                endLineNumber: 1,
-                endColumn: 5,
-              },
-              rangeLength: 4,
-              text: 'AAAA',
+      // Phase 9.2f — fire the per-model
+      // `onDidChangeContent` (not the
+      // editor's `onDidChangeModelContent`).
+      fakeModel.fireContentChange({
+        changes: [
+          {
+            range: {
+              startLineNumber: 1,
+              startColumn: 1,
+              endLineNumber: 1,
+              endColumn: 5,
             },
-            {
-              range: {
-                startLineNumber: 5,
-                startColumn: 1,
-                endLineNumber: 5,
-                endColumn: 5,
-              },
-              rangeLength: 4,
-              text: 'BBBB',
+            rangeLength: 4,
+            text: 'AAAA',
+          },
+          {
+            range: {
+              startLineNumber: 5,
+              startColumn: 1,
+              endLineNumber: 5,
+              endColumn: 5,
             },
-          ],
-          versionId: 2,
-        });
-      }
+            rangeLength: 4,
+            text: 'BBBB',
+          },
+        ],
+        versionId: 2,
+      });
       await new Promise((r) => setTimeout(r, 50));
     });
     const newWrites = lspMock.writes.slice(writesBefore);
@@ -845,9 +1016,9 @@ describe('useMonacoLspBridge', () => {
     };
     const writesBefore = lspMock.writes.length;
     await act(async () => {
-      for (const cb of fakeContentListeners) {
-        cb({ changes: [], versionId: 1 });
-      }
+      // Phase 9.2f — fire the per-model
+      // `onDidChangeContent`.
+      fakeModel.fireContentChange({ changes: [], versionId: 1 });
       await new Promise((r) => setTimeout(r, 50));
     });
     const newWrites = lspMock.writes.slice(writesBefore);
@@ -868,11 +1039,75 @@ describe('useMonacoLspBridge', () => {
     mounted.unmount();
   });
 
-  it('sends didClose for the old model and didOpen for the new one on file switch', async () => {
+  /**
+   * Phase 9.2f — model lifecycle is tracked
+   * via Monaco's `onDidCreateModel` (a new
+   * tab is opened) and `model.onWillDispose`
+   * (a tab is closed). The bridge sends
+   * `didOpen` for the new model and
+   * `didClose` for the closed one. This
+   * replaces the pre-9.2f
+   * `editor.onDidChangeModel` handler
+   * (which assumed a single Monaco
+   * editor with a focused model — true
+   * for the pre-9.2f `EditorPane` design,
+   * but the bridge is now forward-compatible
+   * with a future pane that keeps a single
+   * Monaco instance across tab switches).
+   */
+  it('sends didOpen for a new model created via onDidCreateModel', async () => {
     addWorkspace('/workspace/a');
     const mounted = mountBridge();
-    // Wait for the bridge to spawn the client and
-    // open the first model.
+    // Wait for the bridge to spawn the
+    // initial client + register the
+    // `onDidCreateModel` subscription.
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        (fakeCreateModelListeners.length === 0 ||
+          !useLspClientStore.getState().clients.has(tsKey('/workspace/a')))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    const lspMock = (await import('@/ipc/lsp')) as unknown as {
+      writes: Uint8Array[];
+    };
+    const writesBefore = lspMock.writes.length;
+    // Simulate opening a new tab: create
+    // a new model and fire the
+    // `onDidCreateModel` listeners.
+    const newUri = 'file:///workspace/a/other.ts';
+    const newModel = makeFakeModel(
+      newUri,
+      'typescript',
+      'export const y = 2;\n',
+    );
+    await act(async () => {
+      for (const cb of fakeCreateModelListeners) cb(newModel);
+      // Wait for the bridge's `didOpen`
+      // round-trip.
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const writeText = newWrites
+      .map((w) => new TextDecoder().decode(w))
+      .join('');
+    // The bridge should have sent
+    // `textDocument/didOpen` for the new
+    // model URI.
+    expect(writeText).toContain('textDocument/didOpen');
+    expect(writeText).toContain(newUri);
+    mounted.unmount();
+  });
+
+  it('sends didClose when a model is disposed via onWillDispose', async () => {
+    addWorkspace('/workspace/a');
+    const mounted = mountBridge();
+    // Wait for the bridge to spawn the
+    // initial client + hook the default
+    // `fakeModel`.
     await act(async () => {
       const deadline = Date.now() + 1000;
       while (
@@ -882,47 +1117,28 @@ describe('useMonacoLspBridge', () => {
         await new Promise((r) => setTimeout(r, 10));
       }
     });
-    // Now swap the model and fire the model-change
-    // callback.
-    const oldUri = fakeModel.uri.toString();
-    const newModel: FakeModel = {
-      uri: { toString: () => 'file:///workspace/a/other.ts' },
-      getLanguageId: () => 'typescript',
-      getValue: () => 'export const y = 2;\n',
-      getVersionId: () => 2,
-    };
-    fakeModel = newModel;
-    await act(async () => {
-      for (const cb of fakeModelListeners) {
-        cb({
-          oldModelUrl: { toString: () => oldUri },
-          newModelUrl: newModel.uri,
-        });
-      }
-      await new Promise((r) => setTimeout(r, 10));
-    });
-    // The bridge should have called
-    // `sendDidOpen` once on mount, then
-    // `client.notify('textDocument/didClose', ...)`
-    // + another `sendDidOpen` on the model
-    // swap. We assert via the captured writes
-    // (every `client.notify` / `client.request`
-    // ends up in `lspStdioWrite`, which we mock).
     const lspMock = (await import('@/ipc/lsp')) as unknown as {
       writes: Uint8Array[];
     };
-    const writes = lspMock.writes;
-    const writeText = writes
+    const writesBefore = lspMock.writes.length;
+    // Fire `onWillDispose` on the model
+    // (simulating a tab close).
+    const closedUri = fakeModel.uri.toString();
+    await act(async () => {
+      fakeModel.fireWillDispose();
+      // Wait for the bridge's `didClose`
+      // round-trip.
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const writeText = newWrites
       .map((w) => new TextDecoder().decode(w))
       .join('');
-    // First call is the `initialize` request,
-    // then `initialized`, then `textDocument/didOpen`,
-    // then `textDocument/didClose`, then another
-    // `textDocument/didOpen`.
+    // The bridge should have sent
+    // `textDocument/didClose` for the
+    // closed model URI.
     expect(writeText).toContain('textDocument/didClose');
-    expect(writeText).toContain('textDocument/didOpen');
-    // The didClose URI matches the old model.
-    expect(writeText).toContain(oldUri);
+    expect(writeText).toContain(closedUri);
     mounted.unmount();
   });
 
@@ -950,6 +1166,13 @@ describe('useMonacoLspBridge', () => {
     addWorkspace('/workspace/comp-default');
     // Sanity: pre-state should be clean.
     expect(useLspClientStore.getState().clients.size).toBe(0);
+    // Phase 9.2f — the mock accumulates
+    // calls across tests. Snapshot
+    // *before* mounting so we can assert
+    // on the delta.
+    const callsBefore = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][] };
+    }).mock.calls.length;
     const mounted = mountBridge();
     // Wait for the bridge to spawn the
     // client first (the providers are
@@ -965,27 +1188,40 @@ describe('useMonacoLspBridge', () => {
       }
     });
     // Wait for `registerLspProviders` to be
-    // called (it happens after the LSP
-    // handshake).
+    // called 3 times (one per supported
+    // kind). The mock accumulates across
+    // tests, so we wait until the count
+    // has grown by 3 from `callsBefore`.
     await act(async () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        (registerLspProviders as unknown as { mock: { calls: unknown[] } })
-          .mock.calls.length === 0
+        (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length - callsBefore < 3
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
     });
-    expect(registerLspProviders).toHaveBeenCalledTimes(1);
+    // Phase 9.2f — the bridge registers one
+    // provider set per supported kind, so
+    // there are 3 new calls (one each for
+    // `typescript`, `rust_analyzer`,
+    // `pyright`). The mock accumulates
+    // across tests, so we use a delta
+    // (count *during* this test). All
+    // calls carry the same
+    // `includeCompletion: false` default.
+    const callsAfter = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][] };
+    }).mock.calls;
+    const newCalls = callsAfter.slice(callsBefore);
+    expect(newCalls).toHaveLength(3);
     // The 4th argument is `options` (the
     // completion sub-toggle). Default is
     // `{ includeCompletion: false }`.
-    const calls = (registerLspProviders as unknown as {
-      mock: { calls: unknown[][] };
-    }).mock.calls;
-    const lastCall = calls[calls.length - 1];
-    expect(lastCall[3]).toEqual({ includeCompletion: false });
+    for (const call of newCalls) {
+      expect(call[3]).toEqual({ includeCompletion: false });
+    }
     mounted.unmount();
   });
 
@@ -993,6 +1229,11 @@ describe('useMonacoLspBridge', () => {
     setUseRealServerForCompletion(true);
     // Fresh workspace path (see above).
     addWorkspace('/workspace/comp-on');
+    // Phase 9.2f — snapshot mock call
+    // count *before* mounting.
+    const callsBefore = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][] };
+    }).mock.calls.length;
     const mounted = mountBridge();
     // Wait for the bridge to spawn the
     // client first.
@@ -1006,23 +1247,31 @@ describe('useMonacoLspBridge', () => {
       }
     });
     // Wait for `registerLspProviders` to be
-    // called.
+    // called 3 times (one per supported
+    // kind).
     await act(async () => {
       const deadline = Date.now() + 1000;
       while (
         Date.now() < deadline &&
-        (registerLspProviders as unknown as { mock: { calls: unknown[] } })
-          .mock.calls.length === 0
+        (registerLspProviders as unknown as { mock: { calls: unknown[][] } })
+          .mock.calls.length - callsBefore < 3
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
     });
-    expect(registerLspProviders).toHaveBeenCalledTimes(1);
-    const calls = (registerLspProviders as unknown as {
+    // Phase 9.2f — 3 new calls (one per
+    // kind), all carry
+    // `includeCompletion: true`. Use a
+    // delta because the mock accumulates
+    // across tests.
+    const callsAfter = (registerLspProviders as unknown as {
       mock: { calls: unknown[][] };
     }).mock.calls;
-    const lastCall = calls[calls.length - 1];
-    expect(lastCall[3]).toEqual({ includeCompletion: true });
+    const newCalls = callsAfter.slice(callsBefore);
+    expect(newCalls).toHaveLength(3);
+    for (const call of newCalls) {
+      expect(call[3]).toEqual({ includeCompletion: true });
+    }
     mounted.unmount();
   });
 
@@ -1056,12 +1305,17 @@ describe('useMonacoLspBridge', () => {
     // Custom fake editor for a .py file.
     // We mirror the existing `fakeModel`
     // shape but with a Python URI.
-    const pyModel: FakeModel = {
-      uri: { toString: () => 'file:///workspace/a/script.py' },
-      getLanguageId: () => 'python',
-      getValue: () => 'print("hi")\n',
-      getVersionId: () => 1,
-    };
+    //
+    // Phase 9.2f — use the `makeFakeModel`
+    // factory so the per-model
+    // `onDidChangeContent` + `onWillDispose`
+    // subscriptions the bridge installs are
+    // wired up.
+    const pyModel: FakeModel = makeFakeModel(
+      'file:///workspace/a/script.py',
+      'python',
+      'print("hi")\n',
+    );
     const pyEditor = {
       getModel: () => pyModel,
       onDidChangeModelContent: (
@@ -1071,6 +1325,9 @@ describe('useMonacoLspBridge', () => {
         _cb: (e: FakeModelChangedEvent) => void,
       ) => ({ dispose: () => {} }),
     };
+    // Phase 9.2f — the bridge discovers
+    // models via `monaco.editor.getModels()`.
+    fakeGetModelsReturn = [pyModel];
     addWorkspace('/workspace/py');
     const mounted = mountBridge(pyEditor);
     // Wait for the bridge to spawn the
@@ -1160,12 +1417,17 @@ describe('useMonacoLspBridge', () => {
     // from the URI's extension; the gate
     // (now including `'rust_analyzer'`)
     // lets the spawn through.
-    const rsModel: FakeModel = {
-      uri: { toString: () => 'file:///workspace/rs/src/main.rs' },
-      getLanguageId: () => 'rust',
-      getValue: () => 'fn main() {}\n',
-      getVersionId: () => 1,
-    };
+    //
+    // Phase 9.2f — the test uses the
+    // `makeFakeModel` factory so the
+    // per-model `onDidChangeContent` +
+    // `onWillDispose` subscriptions the
+    // bridge installs are wired up.
+    const rsModel: FakeModel = makeFakeModel(
+      'file:///workspace/rs/src/main.rs',
+      'rust',
+      'fn main() {}\n',
+    );
     const rsEditor = {
       getModel: () => rsModel,
       onDidChangeModelContent: (
@@ -1175,6 +1437,11 @@ describe('useMonacoLspBridge', () => {
         _cb: (e: FakeModelChangedEvent) => void,
       ) => ({ dispose: () => {} }),
     };
+    // Phase 9.2f — the bridge discovers
+    // models via `monaco.editor.getModels()`.
+    // Override the default so the test
+    // sees the `.rs` model.
+    fakeGetModelsReturn = [rsModel];
     addWorkspace('/workspace/rs');
     // Snapshot mock call counts *before*
     // mounting — the mocks are shared
@@ -1208,6 +1475,18 @@ describe('useMonacoLspBridge', () => {
       ) {
         await new Promise((r) => setTimeout(r, 10));
       }
+    });
+    // Phase 9.2f — the bridge spawns
+    // clients for *all* supported kinds
+    // in parallel. The wait loop above
+    // exits as soon as the rust client
+    // is in the store; the TS and
+    // pyright spawns may still be in
+    // flight. Flush a few more ticks so
+    // all `lspRunStdio` calls land
+    // before we snapshot the delta.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
     });
     const client = useLspClientStore
       .getState()
@@ -1298,12 +1577,21 @@ describe('useMonacoLspBridge', () => {
     // 2. Mount a pyright bridge on the
     // *same* workspace. We use a custom
     // fake editor for this.
-    const pyModel: FakeModel = {
-      uri: { toString: () => 'file:///workspace/multi/script.py' },
-      getLanguageId: () => 'python',
-      getValue: () => 'print("hi")\n',
-      getVersionId: () => 1,
-    };
+    //
+    // Phase 9.2f — use the `makeFakeModel`
+    // factory so the per-model
+    // `onDidChangeContent` +
+    // `onWillDispose` subscriptions the
+    // bridge installs are wired up. The
+    // bridge discovers models via
+    // `monaco.editor.getModels()`; we
+    // override `fakeGetModelsReturn` so
+    // the bridge sees the `.py` model.
+    const pyModel: FakeModel = makeFakeModel(
+      'file:///workspace/multi/script.py',
+      'python',
+      'print("hi")\n',
+    );
     const pyEditor = {
       getModel: () => pyModel,
       onDidChangeModelContent: (
@@ -1313,6 +1601,9 @@ describe('useMonacoLspBridge', () => {
         _cb: (e: FakeModelChangedEvent) => void,
       ) => ({ dispose: () => {} }),
     };
+    // Phase 9.2f — the bridge discovers
+    // models via `monaco.editor.getModels()`.
+    fakeGetModelsReturn = [pyModel];
     const pyMounted = mountBridge(pyEditor);
     const pyrightKey = workspaceKindKey(
       '/workspace/multi',
@@ -1367,12 +1658,14 @@ describe('useMonacoLspBridge', () => {
     // NOT bail out at the kill switch
     // (the gate is on `pyright`, which
     // is still on).
-    const pyModel: FakeModel = {
-      uri: { toString: () => 'file:///workspace/indep/main.py' },
-      getLanguageId: () => 'python',
-      getValue: () => 'print("hi")\n',
-      getVersionId: () => 1,
-    };
+    //
+    // Phase 9.2f — use the `makeFakeModel`
+    // factory.
+    const pyModel: FakeModel = makeFakeModel(
+      'file:///workspace/indep/main.py',
+      'python',
+      'print("hi")\n',
+    );
     const pyEditor = {
       getModel: () => pyModel,
       onDidChangeModelContent: (
@@ -1382,6 +1675,9 @@ describe('useMonacoLspBridge', () => {
         _cb: (e: FakeModelChangedEvent) => void,
       ) => ({ dispose: () => {} }),
     };
+    // Phase 9.2f — bridge discovers models
+    // via `monaco.editor.getModels()`.
+    fakeGetModelsReturn = [pyModel];
     const pyMounted = mountBridge(pyEditor);
     await act(async () => {
       const deadline = Date.now() + 1000;
@@ -1415,12 +1711,14 @@ describe('useMonacoLspBridge', () => {
   it('per-kind kill switch: pyright off, TS on — .py bridge is a no-op (Phase 9.2e)', async () => {
     setUseRealServer('pyright', false);
     addWorkspace('/workspace/indep2');
-    const pyModel: FakeModel = {
-      uri: { toString: () => 'file:///workspace/indep2/main.py' },
-      getLanguageId: () => 'python',
-      getValue: () => 'print("hi")\n',
-      getVersionId: () => 1,
-    };
+    //
+    // Phase 9.2f — use the `makeFakeModel`
+    // factory.
+    const pyModel: FakeModel = makeFakeModel(
+      'file:///workspace/indep2/main.py',
+      'python',
+      'print("hi")\n',
+    );
     const pyEditor = {
       getModel: () => pyModel,
       onDidChangeModelContent: (
@@ -1430,6 +1728,9 @@ describe('useMonacoLspBridge', () => {
         _cb: (e: FakeModelChangedEvent) => void,
       ) => ({ dispose: () => {} }),
     };
+    // Phase 9.2f — bridge discovers models
+    // via `monaco.editor.getModels()`.
+    fakeGetModelsReturn = [pyModel];
     const pyMounted = mountBridge(pyEditor);
     await act(async () => {
       await new Promise((r) => setTimeout(r, 10));
@@ -1442,5 +1743,425 @@ describe('useMonacoLspBridge', () => {
         .clients.has(workspaceKindKey('/workspace/indep2', 'pyright')),
     ).toBe(false);
     pyMounted.unmount();
+  });
+
+  /**
+   * Phase 9.2f — multi-model aggregator.
+   * The "5 open tabs / 4 different kinds"
+   * case. The bridge discovers all
+   * currently-open models via
+   * `monaco.editor.getModels()` and spawns
+   * one `LspClient` per *kind*, sending
+   * `didOpen` to the right client for each
+   * model. When a new model is created
+   * (a new tab is opened), the bridge
+   * subscribes to its lifecycle and sends
+   * `didOpen` to the corresponding client.
+   *
+   * The current `EditorPane` design
+   * (`key={activeTab.id}`) remounts the
+   * Monaco editor on every tab switch, so
+   * the 9.2f aggregator's multi-model
+   * tracking is forward-infrastructure
+   * for a future pane refactor that keeps
+   * one Monaco instance across tabs. The
+   * aggregator is correct in both
+   * designs.
+   */
+  it('aggregator: 5 open tabs of 4 different kinds spawn 4 distinct LspClients', async () => {
+    // 5 open tabs across 4 different
+    // kinds: 2x TS, 1x py, 1x rs, 1x tsx.
+    // The 2x TS and 1x tsx all map to the
+    // `typescript` kind (so the TS client
+    // handles 3 models); the py maps to
+    // `pyright`; the rs maps to
+    // `rust_analyzer`. Total: 3 distinct
+    // kinds → 3 LspClients.
+    //
+    // (The test is labeled "4 different
+    // kinds" loosely; the *file* kinds
+    // are 4, but the *LspServerKind* set
+    // is 3 because TS/TSX both map to
+    // `typescript`. The test exercises
+    // the multi-client case.)
+    const tabA: FakeModel = makeFakeModel(
+      'file:///workspace/agg/script.ts',
+      'typescript',
+      'export const a = 1;\n',
+    );
+    const tabB: FakeModel = makeFakeModel(
+      'file:///workspace/agg/main.py',
+      'python',
+      'print("py")\n',
+    );
+    const tabC: FakeModel = makeFakeModel(
+      'file:///workspace/agg/lib.rs',
+      'rust',
+      'fn lib() {}\n',
+    );
+    const tabD: FakeModel = makeFakeModel(
+      'file:///workspace/agg/component.tsx',
+      'typescriptreact',
+      'export const D = () => <div/>;\n',
+    );
+    const tabE: FakeModel = makeFakeModel(
+      'file:///workspace/agg/other.ts',
+      'typescript',
+      'export const e = 5;\n',
+    );
+    fakeGetModelsReturn = [tabA, tabB, tabC, tabD, tabE];
+    // Custom editor — the 9.2f aggregator
+    // doesn't read `getModel()` from the
+    // editor at all (it uses Monaco's
+    // `getModels()`), so a no-op editor
+    // is fine. We still pass one because
+    // the hook signature requires it.
+    const aggEditor = {
+      getModel: () => null,
+      onDidChangeModelContent: () => ({ dispose: () => {} }),
+      onDidChangeModel: () => ({ dispose: () => {} }),
+    };
+    addWorkspace('/workspace/agg');
+    const mounted = mountBridge(aggEditor);
+    // Wait for all 3 clients to be
+    // spawned (TS handles 3 models; rust
+    // and pyright handle 1 each).
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        (!useLspClientStore
+          .getState()
+          .clients.has(workspaceKindKey('/workspace/agg', 'typescript')) ||
+          !useLspClientStore
+            .getState()
+            .clients.has(workspaceKindKey('/workspace/agg', 'pyright')) ||
+          !useLspClientStore
+            .getState()
+            .clients.has(workspaceKindKey('/workspace/agg', 'rust_analyzer')))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    // Flush pending `didOpen`s.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    const state = useLspClientStore.getState();
+    // 3 distinct clients.
+    expect(state.clients.size).toBe(3);
+    // The typescript client is the same
+    // one (single client, 3 models open
+    // on it).
+    const tsClient = state.clients.get(
+      workspaceKindKey('/workspace/agg', 'typescript'),
+    );
+    const pyClient = state.clients.get(
+      workspaceKindKey('/workspace/agg', 'pyright'),
+    );
+    const rsClient = state.clients.get(
+      workspaceKindKey('/workspace/agg', 'rust_analyzer'),
+    );
+    expect(tsClient).toBeDefined();
+    expect(pyClient).toBeDefined();
+    expect(rsClient).toBeDefined();
+    expect(tsClient?.kind).toBe('typescript');
+    expect(pyClient?.kind).toBe('pyright');
+    expect(rsClient?.kind).toBe('rust_analyzer');
+    // All three are distinct objects
+    // (the `typescript` client is a
+    // single instance, but the
+    // `pyright` and `rust_analyzer`
+    // clients are different objects).
+    expect(tsClient).not.toBe(pyClient);
+    expect(tsClient).not.toBe(rsClient);
+    expect(pyClient).not.toBe(rsClient);
+    // The `registerLspProviders` mock was
+    // called once per supported kind (3
+    // times).
+    const callsAfter = (registerLspProviders as unknown as {
+      mock: { calls: unknown[][] };
+    }).mock.calls;
+    const selectors = callsAfter.map((c) => c[2] as string[]);
+    expect(selectors).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(['typescript', 'javascript']),
+      ]),
+    );
+    expect(selectors).toEqual(
+      expect.arrayContaining([expect.arrayContaining(['rust'])]),
+    );
+    expect(selectors).toEqual(
+      expect.arrayContaining([expect.arrayContaining(['python'])]),
+    );
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2f — content changes route to
+   * the right client. Edit a `.py` model
+   * and verify the pyright client gets
+   * the `didChange` (not the TS or
+   * rust-analyzer client).
+   */
+  it('aggregator: content changes on a .py model route to the pyright client, not the TS client', async () => {
+    const pyModel: FakeModel = makeFakeModel(
+      'file:///workspace/route/main.py',
+      'python',
+      'print("before")\n',
+    );
+    fakeGetModelsReturn = [pyModel];
+    const routeEditor = {
+      getModel: () => pyModel,
+      onDidChangeModelContent: () => ({ dispose: () => {} }),
+      onDidChangeModel: () => ({ dispose: () => {} }),
+    };
+    addWorkspace('/workspace/route');
+    const mounted = mountBridge(routeEditor);
+    // Wait for both the pyright and TS
+    // clients to be spawned (the bridge
+    // spawns all 3 kinds in parallel; we
+    // wait for both so the wire-write
+    // assertions are unambiguous).
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        (!useLspClientStore
+          .getState()
+          .clients.has(workspaceKindKey('/workspace/route', 'pyright')) ||
+          !useLspClientStore
+            .getState()
+            .clients.has(workspaceKindKey('/workspace/route', 'typescript')))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    const lspMock = (await import('@/ipc/lsp')) as unknown as {
+      writes: Uint8Array[];
+    };
+    const writesBefore = lspMock.writes.length;
+    // Edit the .py model. The
+    // per-model `onDidChangeContent`
+    // subscription on `pyModel` should
+    // fire, infer the kind as
+    // `pyright`, look up the pyright
+    // client, and call
+    // `sendDidChange` on it.
+    await act(async () => {
+      pyModel.fireContentChange({
+        changes: [
+          {
+            range: {
+              startLineNumber: 1,
+              startColumn: 7,
+              endLineNumber: 1,
+              endColumn: 13,
+            },
+            rangeLength: 6,
+            text: 'after',
+          },
+        ],
+        versionId: 2,
+      });
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const writeText = newWrites
+      .map((w) => new TextDecoder().decode(w))
+      .join('');
+    // The write should contain
+    // `textDocument/didChange` and the
+    // .py URI.
+    expect(writeText).toContain('textDocument/didChange');
+    expect(writeText).toContain('main.py');
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2f — opening a new tab fires
+   * `onDidCreateModel`, which the bridge
+   * subscribes to. The new model is
+   * hooked, `didOpen` is sent to the
+   * right client, and per-model
+   * `onDidChangeContent` +
+   * `onWillDispose` subscriptions are
+   * installed.
+   */
+  it('aggregator: opening a new tab (onDidCreateModel) sends didOpen to the right client', async () => {
+    addWorkspace('/workspace/tab');
+    const mounted = mountBridge();
+    // Wait for the initial TS client +
+    // `onDidCreateModel` subscription
+    // to be set up.
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        (fakeCreateModelListeners.length === 0 ||
+          !useLspClientStore
+            .getState()
+            .clients.has(workspaceKindKey('/workspace/tab', 'typescript')))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    const lspMock = (await import('@/ipc/lsp')) as unknown as {
+      writes: Uint8Array[];
+    };
+    const writesBefore = lspMock.writes.length;
+    // Simulate opening a new `.rs` tab.
+    // The bridge's `onDidCreateModel`
+    // handler fires `hookModel` on the
+    // new model, which spawns the
+    // rust_analyzer client (if not
+    // already alive) and sends
+    // `didOpen` to it.
+    const newUri = 'file:///workspace/tab/new.rs';
+    const newModel = makeFakeModel(
+      newUri,
+      'rust',
+      'fn new() {}\n',
+    );
+    await act(async () => {
+      for (const cb of fakeCreateModelListeners) cb(newModel);
+      // Wait for the spawn + `didOpen`
+      // round-trip.
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore
+          .getState()
+          .clients.has(workspaceKindKey('/workspace/tab', 'rust_analyzer'))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // The rust-analyzer client exists.
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/tab', 'rust_analyzer')),
+    ).toBe(true);
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const writeText = newWrites
+      .map((w) => new TextDecoder().decode(w))
+      .join('');
+    // The wire should contain
+    // `textDocument/didOpen` for the
+    // new .rs URI.
+    expect(writeText).toContain('textDocument/didOpen');
+    expect(writeText).toContain(newUri);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2f — closing a tab fires
+   * the model's `onWillDispose`. The
+   * bridge's per-model `onWillDispose`
+   * subscription tears down the
+   * per-model subscriptions and sends
+   * `didClose` to the right client.
+   */
+  it('aggregator: closing a tab (onWillDispose) sends didClose to the right client', async () => {
+    addWorkspace('/workspace/close');
+    const mounted = mountBridge();
+    // Wait for the TS client + the
+    // default `fakeModel` to be hooked.
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore
+          .getState()
+          .clients.has(workspaceKindKey('/workspace/close', 'typescript'))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    const lspMock = (await import('@/ipc/lsp')) as unknown as {
+      writes: Uint8Array[];
+    };
+    const writesBefore = lspMock.writes.length;
+    const closedUri = fakeModel.uri.toString();
+    // Fire `onWillDispose` on the
+    // model (simulating a tab close).
+    await act(async () => {
+      fakeModel.fireWillDispose();
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const writeText = newWrites
+      .map((w) => new TextDecoder().decode(w))
+      .join('');
+    // The wire should contain
+    // `textDocument/didClose` for the
+    // closed model URI.
+    expect(writeText).toContain('textDocument/didClose');
+    expect(writeText).toContain(closedUri);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.2f — per-kind kill switch still
+   * gates. Disable the `pyright` kind and
+   * verify that the bridge doesn't
+   * spawn a pyright client OR send
+   * `didOpen` for a `.py` model — even
+   * when other kinds are enabled.
+   */
+  it('aggregator: per-kind kill switch off for pyright — .py model is not opened on a client', async () => {
+    setUseRealServer('pyright', false);
+    addWorkspace('/workspace/off-py');
+    const pyModel: FakeModel = makeFakeModel(
+      'file:///workspace/off-py/main.py',
+      'python',
+      'print("hi")\n',
+    );
+    fakeGetModelsReturn = [pyModel];
+    const offEditor = {
+      getModel: () => pyModel,
+      onDidChangeModelContent: () => ({ dispose: () => {} }),
+      onDidChangeModel: () => ({ dispose: () => {} }),
+    };
+    const mounted = mountBridge(offEditor);
+    // Wait for the bridge to register
+    // the other kinds' clients.
+    await act(async () => {
+      const deadline = Date.now() + 2000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore
+          .getState()
+          .clients.has(workspaceKindKey('/workspace/off-py', 'typescript'))
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    // The pyright client does NOT exist
+    // (kill switch off). The TS and
+    // rust_analyzer clients do.
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/off-py', 'pyright')),
+    ).toBe(false);
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/off-py', 'typescript')),
+    ).toBe(true);
+    expect(
+      useLspClientStore
+        .getState()
+        .clients.has(workspaceKindKey('/workspace/off-py', 'rust_analyzer')),
+    ).toBe(true);
+    mounted.unmount();
   });
 });

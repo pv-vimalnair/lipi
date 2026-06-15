@@ -3,61 +3,101 @@
  * Phase 9 (Tiniest scope) real
  * `typescript-language-server` integration.
  *
- * The hook takes the live typedEditor instance (passed
- * from `EditorPane.handleMount`) and:
+ * Phase 9.2f — multi-client aggregator. The
+ * bridge tracks *every* open Monaco model
+ * (not just the focused one) and routes LSP
+ * traffic to the right `(root, kind)` client:
  *
- *   1. Looks up the `LspClient` for the active
- *      workspace (or creates one via
- *      `lspClientStore.getOrCreate`).
- *   2. Subscribes to Monaco's `onDidChangeModelContent`
- *      and sends `textDocument/didChange` to the
- *      server for every edit.
- *   3. Subscribes to the typedEditor's `onDidChangeModel`
- *      and sends `textDocument/didClose` for the
- *      old model + `didOpen` for the new one.
- *   4. Calls the `registerLspProviders` helper to
- *      wire up the per-method providers (definition,
- *      references, rename, hover, etc.). The returned
- *      `IDisposable[]` is held in a ref and disposed
- *      on typedEditor unmount / workspace switch.
- *   5. Reads the kill switch (`getUseRealServer`)
- *      and is a no-op when the user has disabled the
- *      real server.
+ *   - `didOpen` is sent for each model on
+ *     create (the right client per kind).
+ *   - `didChange` is sent on every
+ *     `onDidChangeModelContent` (debounced
+ *     implicitly by Monaco's batching — see
+ *     Phase 9.1).
+ *   - `didClose` is sent on every
+ *     `onWillDispose` (a tab was closed).
+ *   - One provider set is registered *per
+ *     supported kind* (typescript,
+ *     rust_analyzer, pyright) using each
+ *     kind's `DocumentSelector` (the
+ *     `languageId`s Monaco returns for files
+ *     the kind handles). Monaco's provider
+ *     registry routes to the right provider
+ *     per file based on the `DocumentSelector`
+ *     match.
  *
- * Per Rule 6 (section isolation) the hook is the
- * ONLY place that wires the `LspClient` to a
- * specific Monaco instance. The `lspClientStore` is
- * monaco-agnostic; the providers are lsp-monaco-
- * agnostic. The bridge is the seam.
+ * The bridge is a no-op when:
+ *   - `editor` is `null` (before first
+ *     mount, or after a tab switch in the
+ *     pre-9.2f `EditorPane` design).
+ *   - The per-kind kill switch is OFF for
+ *     the file's kind (Phase 9.2e).
+ *   - The active workspace has no root
+ *     (no `workspaceStore.activeId`).
  *
- * Per Rule 3 (screen-folder layout) the hook lives
- * in `src/screens/EditorWorkspace/hooks/`, not in
- * `src/shared/hooks/` — only the EditorPane uses it.
+ * Per Rule 6 (section isolation) the hook is
+ * the ONLY place that wires the `LspClient`
+ * to a specific Monaco instance. The
+ * `lspClientStore` is monaco-agnostic; the
+ * providers are lsp-monaco-agnostic. The
+ * bridge is the seam.
  *
- * ## Keying
+ * Per Rule 3 (screen-folder layout) the hook
+ * lives in
+ * `src/screens/EditorWorkspace/hooks/`, not
+ * in `src/shared/hooks/` — only the
+ * EditorPane uses it.
  *
- * The hook is keyed by `(typedEditor, workspaceRoot,
- * modelUri)` via the `useEffect` deps. A workspace
- * switch tears down the old providers (the
- * effect's cleanup function disposes them) and the
- * old model subscription, then sets up the new
- * ones. A `monaco.editor.ITextModel`'s URI is
- * stable for its lifetime; using it as a dep
- * means re-mounts only happen on actual model
- * changes, not on content edits.
+ * ## Phase 9.2f migration notes
+ *
+ * The pre-9.2f bridge keyed its effect on
+ * `(editor, workspaceRoot, clientHandleId)`
+ * and re-ran on every `(root, kind)`
+ * change — tearing down old providers +
+ * subscriptions and setting up new ones.
+ * The 9.2f bridge keys on
+ * `(editor, workspaceRoot)` and tracks
+ * *all* open models internally. A
+ * `(root, kind)` change no longer
+ * causes a re-run (the bridge registers
+ * providers for *every* supported kind
+ * up front, and dispatches traffic
+ * per-model on demand). The
+ * `lspClientStore` still re-creates clients
+ * on respawn (Phase 9.5), so the
+ * bridge's per-model client ref is
+ * re-derived lazily on each `didChange` /
+ * `didClose` (cheap — one `Map.get`).
+ *
+ * The current `EditorPane` design
+ * (`key={activeTab.id}`) still remounts
+ * the editor on every tab switch — the
+ * aggregator handles this correctly:
+ * unmount tears down *all* per-model
+ * subscriptions and provider sets, and
+ * the next mount discovers the new
+ * editor's model(s) from scratch. A
+ * future `EditorPane` refactor that
+ * keeps a single Monaco instance
+ * across tab switches (with manual
+ * `editor.setModel()` calls) is the
+ * "5 tabs / 4 different kinds live at
+ * once" case the aggregator is built
+ * for — no bridge change needed.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import * as monaco from 'monaco-editor';
 
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 import {
   useLspClientStore,
   workspaceKindKey,
-} from '../state/lspClientStore';
-import {
+  SUPPORTED_LSP_SERVER_KINDS,
+  KIND_TO_LANGUAGE_IDS,
   inferServerKind,
   isSupportedKind,
   type LspServerKind,
+  type LspClient,
 } from '../state/lspClientStore';
 import {
   getUseRealServer,
@@ -89,364 +129,406 @@ export function useMonacoLspBridge({
   // The bridge reads the active workspace root
   // from the shared `workspaceStore` (same
   // source of truth as the rest of the editor).
-  // Reading via the store (vs. a prop) keeps the
-  // `ActiveEditor` signature tight and avoids
-  // threading a 4th prop through `EditorPane`.
   const workspaceRoot = useWorkspaceStore((s) =>
     s.activeId ? s.workspaces.find((w) => w.id === s.activeId)?.path ?? null : null,
   );
-  // Phase 9.5 — also subscribe to the
-  // workspace's LspClient handleId. When the
-  // store respawns a crashed client, the
-  // handleId changes; we re-run the effect to
-  // tear down the old providers and re-register
-  // fresh ones on the new client. Without this
-  // dep, the bridge would keep calling
-  // `client.request()` on the dead client.
-  //
-  // Phase 9.2d — the bridge keys on
-  // `(workspaceRoot, initialKind)`. The kind
-  // is inferred from the *editor's current
-  // model* (the file the user has open). When
-  // the user switches from a `.ts` file to a
-  // `.py` file in the same workspace, the
-  // kind changes, the key changes, and the
-  // effect re-runs (tearing down the TS
-  // providers + the TS client subscription,
-  // then setting up the pyright ones). The
-  // `initialKind` for the first effect run is
-  // computed inside the effect body (the
-  // editor may not have a model at selector-
-  // call time).
-  const clientHandleId = useLspClientStore((s) => {
-    if (!workspaceRoot) return null;
-    if (!editor) return null;
-    const ed = editor as monaco.editor.IStandaloneCodeEditor;
-    const model = ed.getModel();
-    if (!model) return null;
-    const kind = inferServerKind(model.uri.toString());
-    if (!isSupportedKind(kind)) return null;
-    const c = s.clients.get(workspaceKindKey(workspaceRoot, kind));
-    return c?.handleId ?? null;
-  });
-  // Stable ref to the per-instance disposables.
-  // The hook tears them down on cleanup (tab
-  // switch, workspace close).
-  const disposablesRef = useRef<monaco.IDisposable[] | null>(null);
-  // Phase 9.5 — track the handleId of the
-  // last `LspClient` we registered providers
-  // against. When the store respawns a
-  // crashed client, the handleId changes and
-  // the `useEffect` re-runs. We use a ref
-  // (not a dep) so the *initial* mount
-  // doesn't double-register providers — the
-  // first effect run registers against
-  // handleId #1; the second effect run
-  // (triggered by the dep change) sees the
-  // same handleId in the ref and bails.
-  const lastRegisteredHandleIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!editor || !workspaceRoot) return;
-    // Cast the store's `unknown` editor to
-    // Monaco's typed shape. The store uses
-    // `unknown` to stay monaco-agnostic (see
-    // `editorControllerStore`); the bridge is
-    // the seam that knows it's actually an
-    // `IStandaloneCodeEditor`.
     const typedEditor = editor as monaco.editor.IStandaloneCodeEditor | null;
     if (!typedEditor) return;
 
-    // Phase 9.2 — gate on the inferred
-    // server kind. The bridge is multi-server
-    // from day one: a `.ts` file spawns
-    // `typescript-language-server`; a `.rs`
-    // file spawns `rust-analyzer` (wired in
-    // Phase 9.2b); a `.py` / `.pyi` file
-    // spawns `pyright-langserver` (wired in
-    // Phase 9.2c); a `.md` / `.json` / etc.
-    // file has `serverKind === 'unknown'`
-    // and we never spawn a child.
-    //
-    // The current build's `SUPPORTED_LSP_SERVER_KINDS`
-    // is `['typescript', 'rust_analyzer',
-    // 'pyright']`. The gate is a no-op for
-    // the three wired paths; it's a hook
-    // for future kinds (e.g. a future
-    // `gopls` arm for Go would just extend
-    // the supported list — no bridge change
-    // needed).
-    const initialModel = typedEditor.getModel();
-    const initialKind: LspServerKind = initialModel
-      ? inferServerKind(initialModel.uri.toString())
-      : 'unknown';
-    if (!isSupportedKind(initialKind)) {
-      // Either 'unknown' (e.g. .md, .json)
-      // or a not-yet-supported kind (a
-      // future slice could add `'gopls'`
-      // for Go, `'clangd'` for C++, etc.).
-      // Either way, the bridge is a no-op:
-      // no client spawned, no providers
-      // registered, no per-workspace status
-      // to render. Monaco's built-in
-      // language services handle the file.
-      return;
-    }
-    // Phase 9.2e — kill switch is per-kind.
-    // Bail out if the user has disabled the
-    // real server for *this kind*. A user
-    // who has disabled `pyright` (e.g. they
-    // don't have it installed and the
-    // install hint is annoying) can still
-    // use the TS or rust-analyzer servers;
-    // disabling one kind doesn't affect
-    // the others. The Phase 7 built-in TS
-    // service stays in place for the
-    // disabled kind.
-    if (!getUseRealServer(initialKind)) return;
+    // Phase 9.2e — global kill switch for the
+    // bridge. If *every* supported kind is
+    // off, the bridge is a no-op (no clients,
+    // no providers). If at least one kind is
+    // on, the bridge registers providers for
+    // the enabled kinds; per-model traffic is
+    // gated on the *file's* kind's kill
+    // switch (handled in the per-model
+    // subscription below).
+    const anyKindEnabled = SUPPORTED_LSP_SERVER_KINDS.some(
+      (k) => k !== 'unknown' && getUseRealServer(k),
+    );
+    if (!anyKindEnabled) return;
 
-    // Get-or-create the LspClient for this
-    // workspace. The first call spawns the
-    // child + runs the `initialize` handshake;
-    // subsequent calls return the same client.
-    //
-    // Phase 9.2b — pass the kind we already
-    // inferred (and gated on) into the store.
-    // The store uses it to pick the right
-    // binary via `kindToSpawnSpec`. We pass
-    // the *raw* `initialKind` (not the gated
-    // version) so a future Phase 9.2c slice
-    // can flip the gate without changing the
-    // bridge. The gate is the bridge's
-    // responsibility, not the store's; the
-    // store assumes its caller already
-    // decided "yes, spawn something".
+    // `cancelled` is set on unmount. Async
+    // work (the per-model `getOrCreate` +
+    // `didOpen` round-trip) checks `cancelled`
+    // before mutating the per-model map and
+    // before sending the notification.
     let cancelled = false;
-    const startBridge = async (): Promise<void> => {
-      let client;
-      try {
-        client = await useLspClientStore
-          .getState()
-          .getOrCreate(workspaceRoot, initialKind);
-      } catch (e) {
-        // Spawn or `initialize` failed. The
-        // store has already flipped the
-        // status to `error` and removed the
-        // client; the settings card will show
-        // the install hint. The Phase 7
-        // built-in TS service stays in place
-        // for this session.
-        if (import.meta.env.DEV) {
-          console.warn(
-            '[lspBridge] failed to start LSP client:',
-            e,
-          );
-        }
-        return;
-      }
+
+    /**
+     * Per-model state. The key is the model's
+     * `uri.toString()` (a stable identity for
+     * the lifetime of the model — Monaco
+     * guarantees the URI doesn't change). The
+     * value carries the per-model
+     * `IDisposable` subscriptions (for
+     * `onDidChangeModelContent` + the
+     * `onWillDispose` hook we install below)
+     * so the cleanup function can tear them
+     * down on model dispose.
+     */
+    interface ModelState {
+      model: monaco.editor.ITextModel;
+      kind: LspServerKind;
+      contentSub: monaco.IDisposable;
+      willDisposeSub: monaco.IDisposable;
+    }
+    const modelStates = new Map<string, ModelState>();
+    // Per-kind provider-set disposables. The
+    // bridge registers one `registerLspProviders`
+    // call per supported kind using
+    // `KIND_TO_LANGUAGE_IDS[kind]` as the
+    // selector. Monaco's provider registry
+    // routes to the right set per file.
+    const providerDisposables = new Map<LspServerKind, monaco.IDisposable[]>();
+
+    /**
+     * Spawn the LspClient for a kind (if not
+     * already alive), then send `didOpen`
+     * for the model to that client. Called
+     * from the initial discovery pass +
+     * from the `onDidCreateModel`
+     * subscription. Idempotent — if a
+     * client is already in the store for
+     * `(root, kind)`, we use it; if not,
+     * we `getOrCreate` (which spawns +
+     * runs the `initialize` handshake).
+     */
+    const openModelOnClient = async (
+      model: monaco.editor.ITextModel,
+      kind: LspServerKind,
+    ): Promise<void> => {
       if (cancelled) return;
-
-      // Phase 9.5 — `clientHandleId` is a
-      // dep of this effect, so it re-runs
-      // when the store creates a fresh
-      // client (e.g. on respawn). On the
-      // *initial* mount it ALSO re-runs:
-      // first with `clientHandleId = null`
-      // (subscribed value before the store
-      // has a client), then again with the
-      // new handleId (after `getOrCreate`
-      // finishes). To avoid double-registering
-      // providers in that back-to-back case,
-      // check the ref: if the last
-      // registration was against the same
-      // handleId, bail.
-      if (lastRegisteredHandleIdRef.current === client.handleId) {
-        return;
-      }
-      lastRegisteredHandleIdRef.current = client.handleId;
-
-      const model = typedEditor.getModel();
-      if (!model) return;
-
-      // Register the per-method providers.
-      // We use a DocumentSelector keyed by the
-      // model's language (typescript /
-      // typescriptreact / javascript /
-      // javascriptreact). The provider only
-      // fires for files the server supports.
-      //
-      // `includeCompletion` is the Phase 9.6
-      // sub-toggle. When `true`, the completion
-      // provider is registered (delegating to
-      // `textDocument/completion`); when `false`,
-      // completion stays on Monaco's built-in
-      // TS service. Default is `false` (the
-      // built-in is faster on the hot path).
-      const disposables = registerLspProviders(
-        client,
-        monaco,
-        [model.getLanguageId()],
-        { includeCompletion: getUseRealServerForCompletion() },
-      );
-      disposablesRef.current = disposables;
-
-      // Send `didOpen` for the current model.
+      // Per-kind kill switch. If the user
+      // disabled the `pyright` kind, we
+      // don't send `didOpen` to the
+      // pyright client for a `.py` file.
+      if (!getUseRealServer(kind)) return;
+      const client = await useLspClientStore
+        .getState()
+        .getOrCreate(workspaceRoot, kind);
+      if (cancelled) return;
       try {
-        await sendDidOpen(
-          client,
-          model,
-          model.getLanguageId(),
-        );
+        await sendDidOpen(client, model, model.getLanguageId());
       } catch {
-        // Notification failed — usually means
-        // the child died between the
+        // Notification failed — usually
+        // means the child died between
         // `initialize` and the first
-        // didOpen. The next didChange /
-        // didClose attempts will also fail,
-        // and Monaco will fall through to
-        // its built-in. Don't tear down the
-        // providers — the user might restart
-        // the server from the settings card.
+        // `didOpen`. The store will flip
+        // the status to `error` and
+        // schedule a respawn. Don't tear
+        // down providers — the user might
+        // restart the server from the
+        // settings card.
       }
     };
-    void startBridge();
 
-    // Wire up the model-content subscription
-    // for `didChange`. Phase 9.1 — send
-    // *incremental* `TextDocumentContentChangeEvent`s
-    // (range + text per change) instead of
-    // the previous full-content re-send.
-    // Monaco's `onDidChangeModelContent`
-    // gives us a `changes[]` of precise
-    // `IModelContentChange` (range, text,
-    // rangeLength), and the LSP spec accepts
-    // multiple changes in one `didChange` —
-    // so the wire payload drops from
-    // "full file text" to "the diff" for
-    // every edit. For a single keystroke
-    // this is ~50 bytes vs. a 5k-line file's
-    // ~50 KiB.
-    const changeSub = typedEditor.onDidChangeModelContent(async (event) => {
-      if (cancelled) return;
-      const model = typedEditor.getModel();
-      if (!model) return;
-      // Phase 9.2d — the client for the
-      // *current* model is at
-      // `(workspaceRoot, kindOfCurrentModel)`.
-      // The kind may differ from `initialKind`
-      // if the user has switched files since
-      // mount (we re-run via the `clientHandleId`
-      // dep, which is also a function of the
-      // current kind).
-      const kind = inferServerKind(model.uri.toString());
-      if (!isSupportedKind(kind)) return;
-      const client = useLspClientStore
+    /**
+     * Send `didClose` to the kind's client
+     * and tear down the per-model
+     * subscriptions. Called from the
+     * `onWillDispose` subscription.
+     */
+    const closeModelOnClient = async (
+      uri: string,
+      kind: LspServerKind,
+    ): Promise<void> => {
+      // Look up the client *now* (lazily,
+      // at dispose time) so a respawn that
+      // happened between open and close is
+      // reflected. If the client is gone
+      // (e.g. the user disposed the
+      // workspace), the lookup returns
+      // `null` and we skip the
+      // notification.
+      const client: LspClient | undefined = useLspClientStore
         .getState()
         .clients.get(workspaceKindKey(workspaceRoot, kind));
-      if (!client) return;
-      try {
-        await sendDidChange(client, model, event);
-      } catch {
-        // Swallow — see the didOpen branch
-        // for the rationale.
-      }
-    });
-
-    // Wire up the model-swap subscription
-    // for `didClose` (old model) + `didOpen`
-    // (new model). Monaco fires this when
-    // the user switches to a different file
-    // (we tear down + re-set up providers
-    // via the `useEffect` deps on the
-    // model URI).
-    const modelSub = typedEditor.onDidChangeModel(async (e: monaco.editor.IModelChangedEvent) => {
-      if (cancelled) return;
-      // Phase 9.2d — find the client for the
-      // *current* model. The old model (if
-      // any) gets a `didClose` against the
-      // old client; the new model gets a
-      // `didOpen` against the new client.
-      // If the user is switching kinds
-      // (e.g. `.ts` → `.py`), each side
-      // talks to a different client.
-      const newModel = typedEditor.getModel();
-      const newKind: LspServerKind = newModel
-        ? inferServerKind(newModel.uri.toString())
-        : 'unknown';
-      const newClient = isSupportedKind(newKind)
-        ? useLspClientStore
-            .getState()
-            .clients.get(workspaceKindKey(workspaceRoot, newKind)) ?? null
-        : null;
-      if (!newClient) return;
-      // Close the old model. `IModelChangedEvent`
-      // only gives us the URI (not the model
-      // itself — it may have already been
-      // disposed). We send the URI string. The
-      // `didClose` for the old model goes to the
-      // *old* client's kind (the one inferred
-      // from `oldModelUrl`), not the new model's
-      // kind. If the user is staying on the same
-      // kind (e.g. `.ts` → another `.ts`), this
-      // is the same client; if the user is
-      // switching kinds (`.ts` → `.py`), this
-      // is the old client and `newClient` is a
-      // different one.
-      if (e.oldModelUrl) {
-        const oldKind = inferServerKind(
-          e.oldModelUrl.toString(),
-        );
-        const oldClient = isSupportedKind(oldKind)
-          ? useLspClientStore
-              .getState()
-              .clients.get(
-                workspaceKindKey(workspaceRoot, oldKind),
-              ) ?? null
-          : null;
-        if (oldClient) {
-          try {
-            await oldClient.notify('textDocument/didClose', {
-              textDocument: { uri: e.oldModelUrl.toString() },
-            });
-          } catch {
-            // ignore
-          }
-        }
-      }
-      // Open the new model on the *new* client.
-      if (newModel) {
+      if (client) {
         try {
-          await sendDidOpen(
-            newClient,
-            newModel,
-            newModel.getLanguageId(),
-          );
+          await client.notify('textDocument/didClose', {
+            textDocument: { uri },
+          });
         } catch {
           // ignore
         }
       }
-    });
+    };
+
+    /**
+     * Hook a model's lifecycle: subscribe
+     * to its `onDidChangeModelContent` +
+     * `onWillDispose`. Stores the
+     * subscriptions in `modelStates` so
+     * the cleanup function can dispose
+     * them. Triggers the `didOpen` on
+     * the kind's client (fire-and-forget
+     * async — the model's editor is
+     * already showing the content; the
+     * LSP server just needs to know
+     * about the file).
+     */
+    const hookModel = (model: monaco.editor.ITextModel): void => {
+      const uri = model.uri.toString();
+      if (modelStates.has(uri)) return; // already hooked
+      const kind: LspServerKind = inferServerKind(uri);
+      if (!isSupportedKind(kind)) return;
+      // Subscribe to the model's content
+      // changes. Phase 9.1 — send
+      // incremental
+      // `TextDocumentContentChangeEvent`s
+      // (Monaco's `changes[]`).
+      const contentSub = model.onDidChangeContent(
+        async (event: monaco.editor.IModelContentChangedEvent) => {
+          if (cancelled) return;
+          // Per-kind kill switch — if the
+          // user disabled *this* kind, the
+          // model is open in Monaco but not
+          // on a server. The provider
+          // registry routes to the built-in
+          // service.
+          if (!getUseRealServer(kind)) return;
+          const c = useLspClientStore
+            .getState()
+            .clients.get(workspaceKindKey(workspaceRoot, kind));
+          if (!c) return;
+          try {
+            await sendDidChange(c, model, event);
+          } catch {
+            // Swallow — see the didOpen branch
+            // for the rationale.
+          }
+        },
+      );
+      // Subscribe to the model's dispose
+      // (tab close, model GC). Sends
+      // `didClose` to the kind's client
+      // and tears down the per-model
+      // subscriptions.
+      const willDisposeSub = model.onWillDispose(() => {
+        if (cancelled) return;
+        const state = modelStates.get(uri);
+        if (state) {
+          try {
+            state.contentSub.dispose();
+          } catch {
+            // ignore
+          }
+          modelStates.delete(uri);
+        }
+        void closeModelOnClient(uri, kind);
+      });
+      modelStates.set(uri, {
+        model,
+        kind,
+        contentSub,
+        willDisposeSub,
+      });
+      // Fire-and-forget the `didOpen`.
+      void openModelOnClient(model, kind);
+    };
+
+    /**
+     * Discover all currently-open models
+     * and hook them. Called once at bridge
+     * mount. The bridge uses
+     * `monaco.editor.getModels()` — the
+     * *global* model registry — not the
+     * single editor's model, so all open
+     * tabs across the pane (or future
+     * panes) are tracked.
+     */
+    const discoverAndHookAllModels = (): void => {
+      const allModels = monaco.editor.getModels();
+      for (const m of allModels) {
+        hookModel(m);
+      }
+    };
+
+    // Register a provider set per supported
+    // kind. The selector is the kind's
+    // `languageId`s (e.g. `['rust']` for
+    // `rust_analyzer`); Monaco's registry
+    // routes to the right set per file.
+    // We skip kinds that are kill-switched
+    // off at mount time — a per-kind
+    // re-mount on kill-switch flip is the
+    // card's responsibility, not the
+    // bridge's.
+    //
+    // The per-kind provider registration is
+    // *async*: `registerLspProviders` needs a
+    // live `LspClient` (the providers capture
+    // it in their closures for `client.request`).
+    // If no client exists yet for the kind,
+    // we `getOrCreate` first (which spawns the
+    // child + runs the `initialize` handshake).
+    // The provider registration is fire-and-
+    // forget; the bridge continues to set up
+    // the other kinds in parallel.
+    for (const kind of SUPPORTED_LSP_SERVER_KINDS) {
+      if (kind === 'unknown') continue;
+      if (!getUseRealServer(kind)) continue;
+      const selector = KIND_TO_LANGUAGE_IDS[kind];
+      if (selector.length === 0) continue;
+      const registerForKind = async (): Promise<void> => {
+        if (cancelled) return;
+        let client: LspClient | undefined;
+        try {
+          client = await useLspClientStore
+            .getState()
+            .getOrCreate(workspaceRoot, kind);
+        } catch (e) {
+          // Spawn or `initialize` failed.
+          // The store has flipped the
+          // status to `error` and removed
+          // the client; the settings card
+          // will show the install hint.
+          // The Phase 7 built-in service
+          // stays in place for this kind.
+          if (import.meta.env.DEV) {
+            console.warn(
+              '[lspBridge] failed to start LSP client for kind',
+              kind,
+              ':',
+              e,
+            );
+          }
+          return;
+        }
+        if (cancelled) return;
+        // Phase 9.6: the completion
+        // sub-toggle is global
+        // (card-level), but each
+        // per-kind provider set reads
+        // it independently. If the user
+        // enables completion, every
+        // registered kind's providers
+        // include the completion
+        // provider.
+        const disposables = registerLspProviders(
+          client,
+          monaco,
+          selector as string[],
+          { includeCompletion: getUseRealServerForCompletion() },
+        );
+        // The pre-9.2f
+        // `registerLspProviders`
+        // closure captures the
+        // `client` reference. If the
+        // client respawns (the store
+        // creates a new `LspClient`
+        // with a new `handleId`),
+        // the provider closures
+        // still point at the old
+        // client. The `didChange` /
+        // `didClose` dispatch
+        // (which looks up the client
+        // lazily on every event)
+        // does the right thing on
+        // respawn — the user gets
+        // `didChange` on the new
+        // client. The provider itself
+        // still points at the old
+        // client; provider respawn
+        // handling is deferred to a
+        // follow-up slice.
+        providerDisposables.set(kind, disposables);
+      };
+      void registerForKind();
+    }
+
+    // Discover the currently-open models +
+    // hook them. We do this synchronously
+    // — the `hookModel` call is cheap
+    // (creates two `IDisposable`s +
+    // fires a `getOrCreate` + `didOpen`
+    // async, both of which are
+    // non-blocking).
+    discoverAndHookAllModels();
+
+    // Subscribe to *future* model creation.
+    // Monaco fires this for every model
+    // created via `monaco.editor.createModel`
+    // (the `<Editor>` wrapper does this
+    // for every open tab). The hook
+    // attaches our content +
+    // willDispose subscriptions.
+    const createModelSub = monaco.editor.onDidCreateModel(
+      (model: monaco.editor.ITextModel) => {
+        if (cancelled) return;
+        hookModel(model);
+      },
+    );
 
     return () => {
       cancelled = true;
-      changeSub.dispose();
-      modelSub.dispose();
-      if (disposablesRef.current) {
-        for (const d of disposablesRef.current) {
+      // Tear down the create-model
+      // subscription.
+      try {
+        createModelSub.dispose();
+      } catch {
+        // ignore
+      }
+      // Tear down every per-model
+      // subscription. The `onWillDispose`
+      // hook on the model itself won't
+      // fire for the bridge-level teardown
+      // (the model isn't being disposed —
+      // the bridge is), so we walk the
+      // map and explicitly dispose each.
+      for (const [, state] of modelStates) {
+        try {
+          state.contentSub.dispose();
+        } catch {
+          // ignore
+        }
+        try {
+          state.willDisposeSub.dispose();
+        } catch {
+          // ignore
+        }
+        // Send `didClose` to the kind's
+        // client for the model. We
+        // resolve the client *now* (at
+        // teardown time) so a
+        // post-respawn client is the
+        // one that gets the
+        // notification. The lookup is
+        // O(1) and idempotent.
+        void closeModelOnClient(
+          state.model.uri.toString(),
+          state.kind,
+        );
+      }
+      modelStates.clear();
+      // Tear down every per-kind
+      // provider set.
+      for (const disposables of providerDisposables.values()) {
+        for (const d of disposables) {
           try {
             d.dispose();
           } catch {
             // ignore
           }
         }
-        disposablesRef.current = null;
       }
+      providerDisposables.clear();
     };
-    // `clientHandleId` is the Phase 9.5 dep —
-    // when the store respawns a crashed
-    // client, the handleId changes and the
-    // effect re-runs, tearing down the
-    // dead-client providers and re-registering
-    // on the new client.
-  }, [editor, workspaceRoot, clientHandleId]);
+    // Phase 9.2f — the effect no longer
+    // re-runs on `clientHandleId` change.
+    // A client respawn tears down the old
+    // client's `LspClient` instance and
+    // creates a new one; the bridge's
+    // per-model dispatch (which looks up
+    // the client lazily on every event)
+    // picks up the new client. Provider
+    // respawn is deferred to a follow-up
+    // slice (see the `registerLspProviders`
+    // comment above).
+  }, [editor, workspaceRoot]);
 }

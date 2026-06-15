@@ -6,6 +6,100 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 9.6 — Real-server completion adapter)
+
+The `typescript-language-server` integration now
+**also drives `textDocument/completion`** —
+opt-in via a new sub-toggle in the
+`LanguageServerCard` settings UI. The trade-off
+is latency: Monaco's built-in TS service answers
+completion in 5-20 ms; the real server's round-trip
+is 50-200 ms. The real server is smarter
+(`node_modules` types, `paths` aliases in
+`tsconfig.json`, cross-file imports) — useful when
+editing library code or non-trivial `tsconfig`
+setups. The default is **off** (built-in is
+faster for the hot path).
+
+- **`lspKillSwitch.ts`** — extracted a shared
+  `readBool` / `writeBool` helper; added
+  `getUseRealServerForCompletion` /
+  `setUseRealServerForCompletion` (default `false`,
+  separate `localStorage` key
+  `lipi:lsp:useRealServerForCompletion:v1`,
+  independent of the master kill switch).
+- **`lspProviders.ts`** — new
+  `registerCompletionProvider(client, monaco, selector)`
+  function (~190 lines including a
+  `fromLspCompletionItem` converter + a
+  `fromLspCompletionItemKind` enum mapper).
+  Handles both LSP `CompletionItem[]` (the
+  `typescript-language-server` shape) and
+  `CompletionList` (the wrapper-with-`isIncomplete`
+  shape) responses. `triggerCharacters` is
+  `[".", '"', "'", "`", "/", "@", "#"]` to match
+  what the real server expects. Errors and
+  null responses fall through to `{ suggestions: [] }`
+  so Monaco uses its built-in completion as a
+  safety net.
+- **`lspProviders.ts`** — `registerLspProviders`
+  now takes an `options: { includeCompletion?: boolean }`
+  arg (default `false`). When `true`, the
+  completion provider is added to the disposable
+  list.
+- **`useMonacoLspBridge.tsx`** — reads
+  `getUseRealServerForCompletion()` on mount and
+  passes `{ includeCompletion: <bool> }` to
+  `registerLspProviders`. Toggling the sub-toggle
+  in the settings card will only take effect on
+  the next file open (the bridge re-reads the
+  toggle on each `(editor, workspaceRoot)` effect
+  run).
+- **`lspClientStore.ts`** — fixed a
+  `startPromises` map leak in `dispose()` (the
+  `dispose` path now clears the `startPromises`
+  entry so a subsequent `getOrCreate` for the
+  same workspace starts a fresh client instead
+  of returning the now-disposed one's resolved
+  promise). Also: `getOrCreate` now re-adds the
+  client to the `clients` map when returning an
+  inflight (already-resolved) promise after a
+  `setState` reset (defensive — only happens
+  in tests, but the fix is harmless in
+  production).
+- **`LanguageServerCard.tsx`** — new "Use real
+  server for completion (slower, smarter)"
+  toggle, hidden when the master kill switch is
+  OFF (because then the real server isn't in
+  use at all, so the sub-toggle is meaningless).
+  Independent of the master kill switch.
+- **`lspProviders.completion.test.ts`** (new, 6
+  tests) — covers the conversion of bare
+  `CompletionItem[]` responses, `CompletionList`
+  wrapper responses, `textEdit.range`
+  precedence over word-at-position, null /
+  error fall-through, the `includeCompletion`
+  opt-in flag, and the LSP documentation
+  `{kind, value}` unwrap to a plain Monaco
+  string.
+- **`lspKillSwitch.test.ts`** (new, 13 tests) —
+  covers the default values, malformed-value
+  fallbacks, and the independence of the two
+  `localStorage` keys.
+- **`useMonacoLspBridge.test.tsx`** — 2 new
+  tests verify the bridge passes
+  `{ includeCompletion: false }` by default and
+  `{ includeCompletion: true }` when the
+  sub-toggle is on.
+- **`LanguageServerCard.test.tsx`** — 2 new
+  tests verify the sub-toggle is hidden when
+  the master is off, and clicking the
+  sub-toggle persists to `localStorage`.
+
+**Test results:** 1055/1055 vitest pass
+(+23 from Phase 9's 1032); 335/335 cargo pass;
+`tsc --noEmit` clean.
+
 ### Changed (Phase 8 — Inline AI edits (Cmd+K))
 
 The Phase 5b-5 modal-based `Cmd+K` flow is **gone**.

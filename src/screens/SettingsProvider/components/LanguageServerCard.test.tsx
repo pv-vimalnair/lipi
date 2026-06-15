@@ -27,7 +27,12 @@ vi.mock('@/ipc/lsp', () => ({
 
 import { lspCheckAvailable } from '@/ipc/lsp';
 import { useLspClientStore } from '@/screens/EditorWorkspace/state/lspClientStore';
-import { setUseRealServer, getUseRealServer } from '@/screens/EditorWorkspace/state/lspKillSwitch';
+import {
+  setUseRealServer,
+  getUseRealServer,
+  setUseRealServerForCompletion,
+  getUseRealServerForCompletion,
+} from '@/screens/EditorWorkspace/state/lspKillSwitch';
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 
 import { LanguageServerCard } from './LanguageServerCard';
@@ -98,11 +103,17 @@ beforeEach(() => {
     activeId: null,
   });
   setUseRealServer(true);
+  // Phase 9.6: completion sub-toggle defaults
+  // to `false` (built-in is faster for the
+  // hot path). Reset to the default in
+  // `beforeEach` so tests don't leak state.
+  setUseRealServerForCompletion(false);
   vi.clearAllMocks();
 });
 
 afterEach(() => {
   setUseRealServer(true);
+  setUseRealServerForCompletion(false);
 });
 
 describe('LanguageServerCard', () => {
@@ -186,6 +197,66 @@ describe('LanguageServerCard', () => {
     expect(
       useLspClientStore.getState().clients.has('/workspace/a'),
     ).toBe(false);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.6 — the completion sub-toggle.
+   *
+   *   - The sub-toggle is hidden when the
+   *     master kill switch is OFF (real
+   *     server is not in use, so completion
+   *     toggle is meaningless).
+   *   - The sub-toggle is visible when the
+   *     master kill switch is ON.
+   *   - Clicking the sub-toggle persists
+   *     the new value to localStorage.
+   */
+  it('hides the completion sub-toggle when the master kill switch is OFF', async () => {
+    // Master off → built-in is used for
+    // everything, completion sub-toggle
+    // is hidden.
+    setUseRealServer(false);
+    addWorkspace('/workspace/a');
+    const mounted = mountCard();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    const completionToggle = mounted.container.querySelector(
+      '[data-testid="lsp-completion-toggle"]',
+    );
+    expect(completionToggle).toBeNull();
+    mounted.unmount();
+  });
+
+  it('toggles the completion sub-toggle and persists to localStorage', async () => {
+    setUseRealServer(true); // Master on (default)
+    setUseRealServerForCompletion(false); // Completion off (default)
+    addWorkspace('/workspace/a');
+    const mounted = mountCard();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+    });
+    // The sub-toggle should be visible (the
+    // master is on) and currently unchecked
+    // (built-in is used for completion).
+    const checkbox = mounted.container.querySelector(
+      '[data-testid="lsp-completion-toggle"]',
+    ) as HTMLInputElement;
+    expect(checkbox).toBeTruthy();
+    expect(checkbox.checked).toBe(false);
+    // Click the sub-toggle ON. Use
+    // `Simulate.change` so React's internal
+    // value tracker updates and `onChange`
+    // fires.
+    await act(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      Simulate.change(checkbox, { target: { checked: true } } as any);
+      await new Promise((r) => setTimeout(r, 5));
+    });
+    // localStorage should now be 'true'.
+    expect(getUseRealServerForCompletion()).toBe(true);
+    expect(checkbox.checked).toBe(true);
     mounted.unmount();
   });
 });

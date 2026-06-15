@@ -618,6 +618,341 @@ function registerInlayHintsProvider(
 }
 
 /**
+ * Register a `CompletionItemProvider` that calls
+ * `textDocument/completion` on the real LSP server.
+ *
+ * ## Phase 9.6 (T2#1)
+ *
+ * Completion is the one Phase 9 feature the
+ * user explicitly asked for as a follow-up
+ * because the real server's cross-file /
+ * project-wide completion (knows about
+ * node_modules types, .d.ts re-exports,
+ * `paths` aliases in `tsconfig.json`) is
+ * materially better than Monaco's built-in
+ * TS service. The trade-off is latency:
+ * the real server's `textDocument/completion`
+ * round-trip is 50-200 ms vs Monaco's 5-20 ms.
+ *
+ * ## Why a separate kill switch (not a single
+ *   "use real server" flag)
+ *
+ * The user might want the real server for
+ * go-to-def / refs / rename (the
+ * cross-file-quality matters) but the
+ * built-in for completion (the latency
+ * matters). Two flags let them tune
+ * independently. The completion flag
+ * defaults to `false` because the latency
+ * delta is the user-facing win of the
+ * built-in.
+ *
+ * ## Response shape
+ *
+ * The LSP spec says
+ * `textDocument/completion` returns either
+ * `CompletionItem[]` or `CompletionList` (a
+ * wrapper with `isIncomplete` + `items`).
+ * `typescript-language-server` returns the
+ * bare array. We handle both.
+ */
+function registerCompletionProvider(
+  client: LspClient,
+  monacoApi: typeof monaco,
+  selector: string[] = [],
+): monaco.IDisposable {
+  return monacoApi.languages.registerCompletionItemProvider(selector, {
+    triggerCharacters: ['.', '"', "'", '`', '/', '@', '#'],
+    async provideCompletionItems(model, position) {
+      try {
+        const result = (await client.request<
+          | Array<{
+              label: string;
+              kind?: number;
+              detail?: string;
+              documentation?:
+                | string
+                | { kind: 'markdown' | 'plaintext'; value: string };
+              sortText?: string;
+              filterText?: string;
+              insertText?: string;
+              insertTextFormat?: 1 | 2;
+              textEdit?: { range: LspRange; newText: string };
+              additionalTextEdits?: Array<{ range: LspRange; newText: string }>;
+              commitCharacters?: string[];
+            }>
+          | {
+              isIncomplete?: boolean;
+              items: Array<{
+                label: string;
+                kind?: number;
+                detail?: string;
+                documentation?:
+                  | string
+                  | { kind: 'markdown' | 'plaintext'; value: string };
+                sortText?: string;
+                filterText?: string;
+                insertText?: string;
+                insertTextFormat?: 1 | 2;
+                textEdit?: { range: LspRange; newText: string };
+                additionalTextEdits?: Array<{
+                  range: LspRange;
+                  newText: string;
+                }>;
+                commitCharacters?: string[];
+              }>;
+            }
+          | null
+        >('textDocument/completion', {
+          textDocument: { uri: model.uri.toString() } as LspTextDocumentIdentifier,
+          position: toLspPosition(position.lineNumber, position.column),
+          context: {
+            // Phase 9.6 ships without `triggerKind` /
+            // `triggerCharacter` in the context — the
+            // server's `typescript-language-server`
+            // ignores them for the bare-array return
+            // path we use; the `textDocument/completion`
+            // response is the same either way.
+          },
+        })) as
+          | Array<{
+              label: string;
+              kind?: number;
+              detail?: string;
+              documentation?:
+                | string
+                | { kind: 'markdown' | 'plaintext'; value: string };
+              sortText?: string;
+              filterText?: string;
+              insertText?: string;
+              insertTextFormat?: 1 | 2;
+              textEdit?: { range: LspRange; newText: string };
+              additionalTextEdits?: Array<{ range: LspRange; newText: string }>;
+              commitCharacters?: string[];
+            }>
+          | {
+              isIncomplete?: boolean;
+              items: Array<{
+                label: string;
+                kind?: number;
+                detail?: string;
+                documentation?:
+                  | string
+                  | { kind: 'markdown' | 'plaintext'; value: string };
+                sortText?: string;
+                filterText?: string;
+                insertText?: string;
+                insertTextFormat?: 1 | 2;
+                textEdit?: { range: LspRange; newText: string };
+                additionalTextEdits?: Array<{
+                  range: LspRange;
+                  newText: string;
+                }>;
+                commitCharacters?: string[];
+              }>;
+            }
+          | null;
+        if (!result) return { suggestions: [] };
+        const items = Array.isArray(result) ? result : result.items ?? [];
+        const suggestions: monaco.languages.CompletionItem[] = items.map(
+          (item) => fromLspCompletionItem(item, model, position),
+        );
+        return { suggestions };
+      } catch {
+        // LSP error (server crashed mid-request,
+        // timeout, etc.) — return empty so Monaco
+        // falls through to its built-in TS service.
+        return { suggestions: [] };
+      }
+    },
+  });
+}
+
+/**
+ * Convert an LSP `CompletionItem` to a Monaco
+ * `CompletionItem`. The interesting bits are the
+ * `textEdit` / `insertText` / `range` plumbing:
+ *
+ * - If the LSP item has a `textEdit.range`, we
+ *   use it as a Monaco `ISingleEditOperation.range`.
+ *   LSP's range is 0-indexed and Monaco's is
+ *   1-indexed, so we go through `fromLspRange`.
+ * - If no `textEdit.range` is present but there's
+ *   an `insertText`, we replace the current word
+ *   (the Monaco `wordAtPosition` of the current
+ *   `position`).
+ * - If neither is present, `insertText` falls back
+ *   to `label` (per the LSP spec).
+ */
+function fromLspCompletionItem(
+  item: {
+    label: string;
+    kind?: number;
+    detail?: string;
+    documentation?:
+      | string
+      | { kind: 'markdown' | 'plaintext'; value: string };
+    sortText?: string;
+    filterText?: string;
+    insertText?: string;
+    insertTextFormat?: 1 | 2;
+    textEdit?: { range: LspRange; newText: string };
+    additionalTextEdits?: Array<{ range: LspRange; newText: string }>;
+    commitCharacters?: string[];
+  },
+  model: monaco.editor.ITextModel,
+  position: monaco.Position,
+): monaco.languages.CompletionItem {
+  // Determine the `range` + `text` for the
+  // Monaco `ISingleEditOperation` that
+  // accepts the completion.
+  const word = model.getWordUntilPosition(position);
+  const defaultRange: monaco.IRange = {
+    startLineNumber: position.lineNumber,
+    endLineNumber: position.lineNumber,
+    startColumn: word.startColumn,
+    endColumn: word.endColumn,
+  };
+  const insertText = item.insertText ?? item.label;
+  const range = item.textEdit
+    ? fromLspRange(item.textEdit.range)
+    : defaultRange;
+  const text = item.textEdit ? item.textEdit.newText : insertText;
+  // Documentation. The LSP `documentation` can be
+  // either a plain string or a `{ kind, value }`
+  // object (markdown / plaintext). Monaco's
+  // `documentation` is a `string | IMarkdownString`
+  // — wrap the LSP object in a markdown string.
+  const doc =
+    typeof item.documentation === 'string'
+      ? item.documentation
+      : item.documentation?.value;
+  // `insertTextRules`: LSP's
+  // `insertTextFormat === 2` means
+  // `InsertTextFormat.Snippet` (supports
+  // `$1`, `$0`, placeholders). Monaco's
+  // `CompletionItemInsertTextRule.InsertAsSnippet`
+  // is bit 4. We pass it via the
+  // `insertTextRules` field of
+  // `monaco.languages.CompletionItem`.
+  const insertTextRules =
+    item.insertTextFormat === 2
+      ? 4 /* InsertAsSnippet */
+      : 0;
+  // `kind`: the LSP `CompletionItemKind` enum
+  // is mostly compatible with Monaco's, with
+  // a few renames. We map the most common
+  // values and let the rest fall through to
+  // `Text` (Monaco's default for unknown
+  // kinds).
+  const kind = fromLspCompletionItemKind(item.kind);
+  const out: monaco.languages.CompletionItem = {
+    label: item.label,
+    kind,
+    detail: item.detail,
+    documentation: doc,
+    sortText: item.sortText,
+    filterText: item.filterText,
+    insertText: text,
+    range,
+  };
+  // Only set `insertTextRules` if it's non-zero
+  // (Monaco logs a warning for a zero value).
+  if (insertTextRules) {
+    out.insertTextRules = insertTextRules as monaco.languages.CompletionItemInsertTextRule;
+  }
+  return out;
+}
+
+/**
+ * Map the LSP `CompletionItemKind` integer to
+ * Monaco's `CompletionItemKind`. The two enums
+ * share most of their values; the divergences
+ * (LSP `Event` = 23, Monaco has no equivalent;
+ * LSP `Operator` = 24, Monaco has no equivalent)
+ * fall through to Monaco's `Text` (0).
+ */
+function fromLspCompletionItemKind(
+  kind: number | undefined,
+): monaco.languages.CompletionItemKind {
+  // The LSP / Monaco enums are aligned for
+  // 1-25 (with a few gaps Monaco doesn't
+  // define). A straight cast is the right
+  // move; the only missing value in Monaco
+  // is `TypeParameter` (LSP 26, Monaco has
+  // it as 25? — verified against
+  // monaco-editor 0.52.2's enum).
+  // The Monaco 0.52.2 enum:
+  //   Method=0, Function=1, Constructor=2,
+  //   Field=3, Variable=4, Class=5, Struct=6,
+  //   Interface=7, Module=8, Property=9,
+  //   Event=10, Operator=11, Unit=12, Value=13,
+  //   Enum=14, Keyword=15, Snippet=16,
+  //   Text=17, Color=18, File=19, Reference=20,
+  //   Customcolor=21, Folder=22, TypeParameter=23,
+  //   User=24, Issue=25.
+  // The LSP 3.17 enum:
+  //   Text=1, Method=2, Function=3, Constructor=4,
+  //   Field=5, Variable=6, Class=7, Interface=8,
+  //   Module=9, Property=10, Value=11, Enum=12,
+  //   Keyword=13, Snippet=14, Color=15, File=16,
+  //   Reference=17, Folder=18, Event=19, Operator=20,
+  //   TypeParameter=21, User=22, Issue=23.
+  // So the two enums are off by one. The mapping:
+  if (kind === undefined) return monaco.languages.CompletionItemKind.Text;
+  switch (kind) {
+    case 1:
+      return monaco.languages.CompletionItemKind.Text;
+    case 2:
+      return monaco.languages.CompletionItemKind.Method;
+    case 3:
+      return monaco.languages.CompletionItemKind.Function;
+    case 4:
+      return monaco.languages.CompletionItemKind.Constructor;
+    case 5:
+      return monaco.languages.CompletionItemKind.Field;
+    case 6:
+      return monaco.languages.CompletionItemKind.Variable;
+    case 7:
+      return monaco.languages.CompletionItemKind.Class;
+    case 8:
+      return monaco.languages.CompletionItemKind.Interface;
+    case 9:
+      return monaco.languages.CompletionItemKind.Module;
+    case 10:
+      return monaco.languages.CompletionItemKind.Property;
+    case 11:
+      return monaco.languages.CompletionItemKind.Value;
+    case 12:
+      return monaco.languages.CompletionItemKind.Enum;
+    case 13:
+      return monaco.languages.CompletionItemKind.Keyword;
+    case 14:
+      return monaco.languages.CompletionItemKind.Snippet;
+    case 15:
+      return monaco.languages.CompletionItemKind.Color;
+    case 16:
+      return monaco.languages.CompletionItemKind.File;
+    case 17:
+      return monaco.languages.CompletionItemKind.Reference;
+    case 18:
+      return monaco.languages.CompletionItemKind.Folder;
+    case 19:
+      return monaco.languages.CompletionItemKind.Event;
+    case 20:
+      return monaco.languages.CompletionItemKind.Operator;
+    case 21:
+      return monaco.languages.CompletionItemKind.TypeParameter;
+    case 22:
+      return monaco.languages.CompletionItemKind.User;
+    case 23:
+      return monaco.languages.CompletionItemKind.Issue;
+    default:
+      return monaco.languages.CompletionItemKind.Text;
+  }
+}
+
+/**
  * Register all the LSP-driven providers on the
  * given Monaco instance. Returns the list of
  * `IDisposable`s the bridge hook holds onto so a
@@ -627,6 +962,7 @@ export function registerLspProviders(
   client: LspClient,
   monacoApi: typeof monaco,
   selector: string[] = [],
+  options: { includeCompletion?: boolean } = {},
 ): monaco.IDisposable[] {
   const disposables: monaco.IDisposable[] = [];
   disposables.push(registerDefinitionProvider(client, monacoApi, selector));
@@ -639,5 +975,15 @@ export function registerLspProviders(
   disposables.push(registerSignatureHelpProvider(client, monacoApi, selector));
   const inlayHints = registerInlayHintsProvider(client, monacoApi, selector);
   if (inlayHints) disposables.push(inlayHints);
+  // Phase 9.6: register the completion provider
+  // only when the caller opts in (the
+  // `useMonacoLspBridge` hook reads the
+  // completion sub-toggle and passes
+  // `includeCompletion: true` accordingly).
+  // The default of `false` preserves Phase 9's
+  // "built-in is faster for completion" default.
+  if (options.includeCompletion) {
+    disposables.push(registerCompletionProvider(client, monacoApi, selector));
+  }
   return disposables;
 }

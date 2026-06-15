@@ -56,6 +56,8 @@ import { useLspClientStore, type LspStatus } from '@/screens/EditorWorkspace/sta
 import {
   getUseRealServer,
   setUseRealServer,
+  getUseRealServerForCompletion,
+  setUseRealServerForCompletion,
 } from '@/screens/EditorWorkspace/state/lspKillSwitch';
 
 import styles from './LanguageServerCard.module.css';
@@ -99,6 +101,17 @@ export function LanguageServerCard() {
   const [probe, setProbe] = useState<CheckAvailableResult | null>(null);
   // The kill switch toggle.
   const [useRealServer, setUseRealServerLocal] = useState<boolean>(getUseRealServer());
+  // Phase 9.6: the completion sub-toggle.
+  // Independent of the master kill switch so the
+  // user can keep the real server for go-to-def /
+  // refs / rename (cross-file-quality matters) but
+  // keep the built-in for completion (latency
+  // matters). Defaults to `false` (built-in is
+  // faster for autocomplete).
+  const [
+    useRealServerForCompletion,
+    setUseRealServerForCompletionLocal,
+  ] = useState<boolean>(getUseRealServerForCompletion());
 
   useEffect(() => {
     let cancelled = false;
@@ -141,6 +154,26 @@ export function LanguageServerCard() {
       }
     },
     [activeWorkspaceRoot],
+  );
+
+  /**
+   * Phase 9.6 — completion sub-toggle handler.
+   * Toggling completion doesn't need to dispose
+   * the live client (the LSP session itself is
+   * unchanged; only the per-method provider
+   * registration changes). The user will see the
+   * new completion behaviour on the next file
+   * open (the bridge re-reads the toggle and
+   * registers / skips the completion provider
+   * accordingly).
+   */
+  const handleCompletionToggleChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const next = e.target.checked;
+      setUseRealServerForCompletion(next);
+      setUseRealServerForCompletionLocal(next);
+    },
+    [],
   );
 
   const handleRestart = useCallback(() => {
@@ -199,6 +232,32 @@ export function LanguageServerCard() {
           find-references, rename with preview, and code actions.
         </p>
       </div>
+      {/* Phase 9.6: completion sub-toggle. Only
+          meaningful when the master kill switch
+          is OFF (i.e. the real server is in use
+          for go-to-def / refs / etc.). If the
+          master is on (built-in), the
+          completion sub-toggle is hidden. */}
+      {useRealServer && (
+        <div className={styles.toggleRow}>
+          <label className={styles.toggleLabel}>
+            <input
+              type="checkbox"
+              checked={useRealServerForCompletion}
+              onChange={handleCompletionToggleChange}
+              data-testid="lsp-completion-toggle"
+            />
+            Use real server for completion (slower, smarter)
+          </label>
+          <p className={styles.toggleHint}>
+            The real server&apos;s <code>textDocument/completion</code> knows
+            about <code>node_modules</code> types, <code>paths</code>{' '}
+            aliases in <code>tsconfig.json</code>, and cross-file imports —
+            but each completion is a 50-200&nbsp;ms round-trip vs{' '}
+            5-20&nbsp;ms for the built-in. Default is the built-in.
+          </p>
+        </div>
+      )}
       {activeWorkspaceRoot && status !== 'stopped' && (
         <div className={styles.buttonRow}>
           <button

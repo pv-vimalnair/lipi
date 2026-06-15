@@ -30,6 +30,9 @@
  * "missing key" path returns the default
  * `useRealServer: true`).
  */
+
+/** Master kill switch (Phase 9): use the real `typescript-language-server`
+ * for go-to-def / refs / rename / etc. */
 const STORAGE_KEY = 'lipi:lsp:useRealServer:v1';
 
 /**
@@ -41,40 +44,93 @@ const STORAGE_KEY = 'lipi:lsp:useRealServer:v1';
  */
 const DEFAULT_USE_REAL_SERVER = true;
 
+/** Phase 9.6 sub-toggle: use the real server *also* for
+ * `textDocument/completion`. The default is `false` because
+ * the real server's 50-200ms round-trip is too slow for the
+ * autocomplete hot path (Monaco's built-in TS service is
+ * 5-20ms). Users can opt in via the settings card. */
+const STORAGE_KEY_COMPLETION = 'lipi:lsp:useRealServerForCompletion:v1';
+
 /**
- * Read the kill switch flag. Returns the persisted
- * value, or the default (`true`) if the key is
- * missing / unreadable / not a boolean.
+ * Default for the completion sub-toggle. `false` =
+ * the real server is NOT used for completion (the
+ * faster built-in is). The settings card mirrors
+ * this default in its toggle UI.
+ */
+const DEFAULT_USE_REAL_SERVER_FOR_COMPLETION = false;
+
+/**
+ * Read the master kill switch flag. Returns the
+ * persisted value, or the default (`true`) if the
+ * key is missing / unreadable / not a boolean.
  */
 export function getUseRealServer(): boolean {
-  if (typeof localStorage === 'undefined') return DEFAULT_USE_REAL_SERVER;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return DEFAULT_USE_REAL_SERVER;
-    if (raw === 'true') return true;
-    if (raw === 'false') return false;
-    // Malformed value — fall back to default.
-    return DEFAULT_USE_REAL_SERVER;
-  } catch {
-    return DEFAULT_USE_REAL_SERVER;
-  }
+  return readBool(STORAGE_KEY, DEFAULT_USE_REAL_SERVER);
 }
 
 /**
- * Write the kill switch flag. Failures (Safari
+ * Write the master kill switch flag. Failures (Safari
  * private mode, quota exceeded) are non-fatal —
  * the in-memory value of `getUseRealServer` will
  * be stale until the next successful write.
  */
 export function setUseRealServer(value: boolean): void {
+  writeBool(STORAGE_KEY, value, 'useRealServer');
+}
+
+/**
+ * Read the completion sub-toggle flag. Returns the
+ * persisted value, or the default (`false`) if the
+ * key is missing / unreadable / not a boolean.
+ *
+ * Independent of the master kill switch: the user
+ * can have the master on (real server for go-to-def
+ * / etc.) but keep completion on the built-in.
+ */
+export function getUseRealServerForCompletion(): boolean {
+  return readBool(STORAGE_KEY_COMPLETION, DEFAULT_USE_REAL_SERVER_FOR_COMPLETION);
+}
+
+/**
+ * Write the completion sub-toggle flag. Same
+ * best-effort semantics as `setUseRealServer`.
+ */
+export function setUseRealServerForCompletion(value: boolean): void {
+  writeBool(STORAGE_KEY_COMPLETION, value, 'useRealServerForCompletion');
+}
+
+/**
+ * Internal helper: read a boolean flag from
+ * `localStorage` with a default fallback. Returns
+ * the default if the runtime has no `localStorage`
+ * (SSR, sandboxed iframes) or the value is missing /
+ * malformed.
+ */
+function readBool(key: string, defaultValue: boolean): boolean {
+  if (typeof localStorage === 'undefined') return defaultValue;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return defaultValue;
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    return defaultValue;
+  } catch {
+    return defaultValue;
+  }
+}
+
+/**
+ * Internal helper: write a boolean flag to
+ * `localStorage`. Failures are logged (DEV) but
+ * otherwise non-fatal.
+ */
+function writeBool(key: string, value: boolean, name: string): void {
   if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, value ? 'true' : 'false');
+    localStorage.setItem(key, value ? 'true' : 'false');
   } catch (e) {
-    // Best-effort — log to the dev console so a
-    // debugging session can see the failure.
     if (typeof console !== 'undefined' && console.warn) {
-      console.warn('[lspKillSwitch] failed to persist:', e);
+      console.warn(`[lspKillSwitch] failed to persist ${name}:`, e);
     }
   }
 }

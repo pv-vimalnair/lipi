@@ -744,7 +744,27 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       const existing = get().clients.get(workspaceRoot);
       if (existing) return existing;
       const inflight = startPromises.get(workspaceRoot);
-      if (inflight) return inflight;
+      if (inflight) {
+        // A `getOrCreate` for this workspace is
+        // already in flight (or has just
+        // resolved but hasn't been re-added to
+        // the `clients` map after a `setState`
+        // reset — common in tests). Wait for it
+        // and re-add the client to the `clients`
+        // map so the caller can find it again.
+        const client = await inflight;
+        set((state) => {
+          const nextClients = new Map(state.clients);
+          nextClients.set(workspaceRoot, client);
+          const nextStatus = new Map(state.statusByWorkspace);
+          nextStatus.set(workspaceRoot, client.status);
+          return {
+            clients: nextClients,
+            statusByWorkspace: nextStatus,
+          };
+        });
+        return client;
+      }
 
       const client = new LspClient({ workspaceRoot });
       // Mirror status changes into the store
@@ -813,6 +833,19 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
           statusByWorkspace: nextStatus,
         };
       });
+      // Clear the `startPromises` entry so a
+      // subsequent `getOrCreate` for the same
+      // workspace actually starts a fresh
+      // client (the previous one is shutting
+      // down — returning its (resolved)
+      // promise would hand out a dead client).
+      // The `finally` in `getOrCreate` clears
+      // it on success/failure, but `dispose`
+      // may be called from outside the
+      // `getOrCreate` path (e.g. the bridge
+      // `useEffect` cleanup on workspace
+      // close) — so we clear it here too.
+      startPromises.delete(workspaceRoot);
       await client.shutdown();
     },
   };

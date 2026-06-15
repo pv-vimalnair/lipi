@@ -51,7 +51,10 @@ import * as monaco from 'monaco-editor';
 
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 import { useLspClientStore } from '../state/lspClientStore';
-import { getUseRealServer } from '../state/lspKillSwitch';
+import {
+  getUseRealServer,
+  getUseRealServerForCompletion,
+} from '../state/lspKillSwitch';
 import {
   registerLspProviders,
   sendDidChange,
@@ -142,10 +145,19 @@ export function useMonacoLspBridge({
       // typescriptreact / javascript /
       // javascriptreact). The provider only
       // fires for files the server supports.
+      //
+      // `includeCompletion` is the Phase 9.6
+      // sub-toggle. When `true`, the completion
+      // provider is registered (delegating to
+      // `textDocument/completion`); when `false`,
+      // completion stays on Monaco's built-in
+      // TS service. Default is `false` (the
+      // built-in is faster on the hot path).
       const disposables = registerLspProviders(
         client,
         monaco,
         [model.getLanguageId()],
+        { includeCompletion: getUseRealServerForCompletion() },
       );
       disposablesRef.current = disposables;
 

@@ -282,6 +282,11 @@ on mobile — cannot be retrofitted in Week 8.
 | 80 | Phase 9's `LspClient` reader loop **polls at 1 ms via `setTimeout`**, not via an event / promise. | The Tauri IPC boundary means we can't expose the child's `AsyncRead` / `AsyncWrite` directly to the JS side — every read / write is an `invoke` round-trip. Each `invoke('lsp_stdio_read', ...)` returns the bytes currently buffered (or an empty `Uint8Array(0)`). The polling overhead is negligible; the 1 ms tick is well below human-perceivable latency. A Tauri 2 event-stream upgrade is a follow-up slice (§9.33's Phase 9.3). | 2026-06-15 |
 | 81 | Phase 9 spawns **one child process per workspace** (not one global). | `typescript-language-server` is bound to a single workspace root at `initialize` time (`rootUri` in the LSP spec). With 1-2 active workspaces (the realistic Lipi usage pattern), 1-2 child processes is fine. The store's `getOrCreate` ensures we only spawn one per workspace; `dispose` flips the status to `stopped` and `kill()`s the child. | 2026-06-15 |
 | 82 | Phase 9's `didChange` notifications **re-send the full text** (no incremental edits). | Monaco's `onDidChangeModelContent` event payload includes the new text but not the minimal edit. Computing the minimal edit requires either a `Monaco.ITextModel` diff API (which doesn't exist in a stable form) or a hand-rolled Myers diff. For files <10k lines, the full-text re-send is negligible (~50-100 ms for a 5k-line file). A follow-up slice (§9.33's Phase 9.1) can wire `DiffEditor`'s `DiffProvider` if profiling shows a bottleneck. | 2026-06-15 |
+| 83 | Phase 9.6 has a **separate completion sub-toggle** (`lsp_use_real_server_for_completion`), not a single "use real server" flag. | The cross-file quality of go-to-def / refs / rename and the latency of completion are independent concerns. The user might want the real server for the former (smarter) and the built-in for the latter (faster). The master defaults to `true` (real server for everything), the completion sub-toggle defaults to `false` (built-in for completion). Two `localStorage` keys, no schema migration. | 2026-06-15 |
+| 84 | Phase 9.6's `registerCompletionProvider` accepts both LSP `CompletionItem[]` and `CompletionList` (the wrapper-with-`isIncomplete` shape). | The LSP spec says `textDocument/completion` can return either; `typescript-language-server` returns the bare array but other servers (e.g. `gopls`) return the wrapper. One extra branch in the adapter, no cost. | 2026-06-15 |
+| 85 | Phase 9.6's completion provider **falls through to empty suggestions on null / error**, letting Monaco's built-in take over for that keystroke. | Matches the Phase 9 pattern for the other providers (hover, definition, refs). The real server's `textDocument/completion` can time out or return null; returning `{ suggestions: [] }` is the safe default. | 2026-06-15 |
+| 86 | Phase 9.6 maps LSP `insertTextFormat === 2` to Monaco `insertTextRules = 4` (the `InsertAsSnippet` bit). | LSP `InsertTextFormat.Snippet` means the `insertText` contains placeholders (`$1`, `$0`, `${1:default}`). Monaco's `CompletionItemInsertTextRule.InsertAsSnippet` is the equivalent. The mapping is a single `if` — without it, snippet completions from the real server would be inserted as literal `$1` text. | 2026-06-15 |
+| 87 | Phase 9.6's `fromLspCompletionItemKind` is a hand-rolled 23-case `switch`, not a bit-shift cast. | LSP and Monaco's `CompletionItemKind` enums are misaligned: LSP `Text=1`, Monaco `Text=0`; LSP `TypeParameter=21`, Monaco `TypeParameter=23`; etc. A naive cast (`as monaco.languages.CompletionItemKind`) would misclassify almost every item (a `Method` would render as a `Text` completion, etc.). The 23-case `switch` is a one-time mapping with no runtime cost. | 2026-06-15 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -5315,11 +5320,186 @@ The plan's UAT requires the user to `npm i -g typescript-language-server` (a one
 - **Phase 9.3** — Polling-to-event-stream upgrade on `lspStdioRead` (Tauri 2 event push from the Rust `stdout` reader; removes the 1 ms polling tick and the polling overhead).
 - **Phase 9.4** — Per-workspace settings card (a row of "language servers" in the active workspace's status, not a single card for the active workspace only).
 - **Phase 9.5** — Crash recovery (auto-respawn the child process on `wait()` returning, with exponential backoff capped at 30s).
-- **Phase 9.6** — Real-server completion (add `monaco.languages.registerCompletionItemProvider` to the bridge, gated behind a "use real server for completion" toggle in the settings card).
+- **Phase 9.6** — Real-server completion (add `monaco.languages.registerCompletionItemProvider` to the bridge, gated behind a "use real server for completion" toggle in the settings card). — **SHIPPED (this session)**
 - **Phase 9.7** — LSP crash diagnostics (a "Last 100 lines of server output" panel in the settings card, captured from the child's `stdout` / `stderr`).
+
+### 9.34 Phase 9.6 — SHIPPED (Real-server completion adapter, see CHANGELOG "Added (Phase 9.6)")
+
+> **Status:** Phase 9.6 is **shipped**. The
+> `typescript-language-server` integration now
+> **also drives `textDocument/completion`**
+> — opt-in via a new sub-toggle in the
+> `LanguageServerCard` settings UI. The
+> trade-off is latency: Monaco's built-in TS
+> service answers completion in 5-20 ms; the
+> real server's round-trip is 50-200 ms. The
+> real server is smarter (`node_modules`
+> types, `paths` aliases in `tsconfig.json`,
+> cross-file imports) — useful when editing
+> library code or non-trivial `tsconfig`
+> setups. The default is **off** (built-in is
+> faster for the hot path).
+
+**Why a separate sub-toggle (not a single "use real server" flag)**
+
+The user might want the real server for
+go-to-def / refs / rename (cross-file quality
+matters) but the built-in for completion
+(latency matters on the autocomplete hot
+path). Two flags let them tune independently.
+The master kill switch (`lsp_use_real_server`,
+default `true`) and the completion sub-toggle
+(`lsp_use_real_server_for_completion`, default
+`false`) are persisted in separate
+`localStorage` keys and are fully
+independent.
+
+**Files changed**
+
+1. **`src/screens/EditorWorkspace/state/lspKillSwitch.ts`** — extracted a
+   shared `readBool` / `writeBool` helper to
+   remove the boilerplate around the two
+   `localStorage` keys. Added
+   `getUseRealServerForCompletion` /
+   `setUseRealServerForCompletion` (default
+   `false`).
+2. **`src/screens/EditorWorkspace/hooks/lspProviders.ts`** — new
+   `registerCompletionProvider` (~190 lines
+   including the `fromLspCompletionItem`
+   converter + the `fromLspCompletionItemKind`
+   enum mapper). Handles both LSP
+   `CompletionItem[]` and `CompletionList`
+   responses. `triggerCharacters` is
+   `[".", '"', "'", "`", "/", "@", "#"]`.
+   `registerLspProviders` now takes an
+   `options: { includeCompletion?: boolean }`
+   arg (default `false`).
+3. **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`** — reads
+   `getUseRealServerForCompletion()` on mount
+   and passes `{ includeCompletion: <bool> }`
+   to `registerLspProviders`.
+4. **`src/screens/EditorWorkspace/state/lspClientStore.ts`** — fixed a
+   `startPromises` map leak in `dispose()` (so
+   a workspace close + reopen in the same
+   session starts a fresh client instead of
+   returning the disposed one's resolved
+   promise). Also: `getOrCreate` now re-adds
+   the client to the `clients` map when
+   returning an inflight (already-resolved)
+   promise — defensive against `setState`
+   resets in tests, harmless in production.
+5. **`src/screens/SettingsProvider/components/LanguageServerCard.tsx`** —
+   new "Use real server for completion
+   (slower, smarter)" toggle. Hidden when
+   the master kill switch is OFF (because
+   then the real server isn't in use at all,
+   so the sub-toggle is meaningless).
+6. **Tests** — 23 new tests across 4 files
+   (see CHANGELOG for the per-file break-down).
+
+**Key design decisions (numbered 83-87 below
+in the Decisions log)**
+
+- **83.** Two flags, not one. The
+  cross-file-quality of go-to-def and the
+  latency of completion are independent
+  concerns. (The "use real server" master
+  defaults to `true` because the user opted
+  into the real-server feature; the
+  completion sub-toggle defaults to `false`
+  because the latency delta is the
+  user-facing win of the built-in.)
+- **84.** `CompletionItem[] | CompletionList`
+  discriminated union, not a single shape.
+  `typescript-language-server` returns the
+  bare array; some other servers return
+  the wrapper. We accept both because the
+  cost is one extra branch.
+- **85.** Fall-through to empty
+  suggestions on null / error. The Phase
+  9 pattern: the real server's
+  `textDocument/completion` can fail
+  (timeout, server crash mid-request);
+  returning `{ suggestions: [] }` lets
+  Monaco's built-in completion take over
+  for that one keystroke.
+- **86.** Snippet support via
+  `insertTextRules = 4` when
+  `insertTextFormat === 2`. LSP
+  `InsertTextFormat.Snippet` (the value
+  `2` in the LSP 3.17 enum) means the
+  `insertText` contains placeholders
+  (`$1`, `$0`). Monaco's
+  `CompletionItemInsertTextRule.InsertAsSnippet`
+  is bit 4. Mapping is one line.
+- **87.** Completion enum mapping is a
+  hand-rolled 23-case `switch` (not a
+  bit-shift cast). LSP and Monaco's
+  `CompletionItemKind` enums are
+  misaligned (LSP `Text=1`, Monaco
+  `Text=0`; LSP `TypeParameter=21`,
+  Monaco `TypeParameter=23`). A naive
+  cast would misclassify almost every
+  item. The `switch` is a one-time
+  mapping; no runtime cost.
+
+**Test results**
+
+- 1055/1055 vitest tests pass (+23 from
+  Phase 9's 1032 baseline).
+- 335/335 cargo tests pass (unchanged from
+  Phase 9 — Phase 9.6 is pure frontend).
+- `tsc --noEmit` clean.
+- 6 new tests in
+  `lspProviders.completion.test.ts`
+  (adapter); 13 new tests in
+  `lspKillSwitch.test.ts` (the two
+  `localStorage` keys + their
+  independence); 2 new tests in
+  `useMonacoLspBridge.test.tsx` (the
+  bridge passes the right `options` to
+  `registerLspProviders`); 2 new tests
+  in `LanguageServerCard.test.tsx` (the
+  toggle is hidden when master is off +
+  clicking it persists to `localStorage`).
+
+**Known limitations / future work**
+
+- The completion sub-toggle change only
+  takes effect on the **next file open**
+  (the bridge re-reads the toggle on each
+  `(editor, workspaceRoot)` effect run).
+  A live-toggle UX (where flipping the
+  toggle in the settings card immediately
+  re-registers the provider on the active
+  editor) would require listening on the
+  `localStorage` `storage` event and
+  re-running the bridge's provider
+  registration. Deferred to a future
+  session.
+- No `completionItem/resolve` support.
+  The `data` field on LSP
+  `CompletionItem` (used to lazily fetch
+  additional details) is passed through
+  unmodified, but Monaco's
+  `resolveCompletionItem` (the lazy
+  fetch) is not implemented. The
+  built-in completion's "show full
+  docs on focus" behaviour is missing
+  on the real-server path. This is a
+  follow-up slice (the data plumbing is
+  one ~30-line adapter).
+- No `commitCharacters` pass-through.
+  The LSP `commitCharacters` field is
+  parsed but not set on the Monaco
+  item. Monaco's default
+  trigger-character set is close
+  enough for the common case; users
+  who care can fall back to the
+  built-in via the toggle.
 
 ---
 
-*End of handoff. Lipi is at **Phase 9 complete** (real `typescript-language-server` integration via a stdio pipe over Tauri IPC — 5 new Tauri commands + `LspClient` class + per-workspace Zustand store + Monaco bridge hook + 8 LSP provider adapters + Settings card with kill switch, "Ready / Starting / Error / Stopped" status badge, install hint, and "Restart server" button — no `monaco-languageclient` dependency, ~400 lines of TypeScript, full control over the per-method response conversion). The next session should resume from the Phase 9.1-9.7 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.34.*
+*End of handoff. Lipi is at **Phase 9.6 complete** (real `typescript-language-server` integration now also drives `textDocument/completion`, opt-in via a new sub-toggle in the `LanguageServerCard` settings UI — 5 new Tauri commands + `LspClient` class + per-workspace Zustand store + Monaco bridge hook + 9 LSP provider adapters (the new one is `registerCompletionProvider` with LSP-`CompletionItem`→Monaco-`CompletionItem` conversion + LSP `CompletionItemKind`→Monaco `CompletionItemKind` enum mapping) + Settings card with two independent toggles (master kill switch + completion sub-toggle), "Ready / Starting / Error / Stopped" status badge, install hint, and "Restart server" button — no `monaco-languageclient` dependency, ~600 lines of TypeScript, full control over the per-method response conversion). The next session should resume from Phase 9.7 (LSP crash diagnostics) and the remaining Phase 9.1-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.35.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

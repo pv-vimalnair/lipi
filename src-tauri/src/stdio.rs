@@ -917,22 +917,142 @@ pub async fn stdio_close(
 }
 
 /// `lsp_check_available` — run `which` (POSIX) /
-/// `where` (Windows) for `typescript-language-server`,
-/// then `--version` to capture the version string.
-pub async fn check_available() -> Result<CheckAvailableResult, StdioError> {
-    // Step 1: probe PATH for the binary. The JS side
-    // could do this with `run_command` directly, but
-    // bundling it here means the "is the LSP
-    // available?" UX is one IPC call, not two.
+/// Phase 9.2b — the *kind* of language server
+/// to check for / spawn. Mirrors the TS
+/// `LspServerKind` in
+/// `src/screens/EditorWorkspace/state/lspClientStore.ts`.
+/// `unknown` is a valid value but never
+/// spawns a child (it's the bridge's "no
+/// real server for this file" signal).
+///
+/// New variants can be added without
+/// breaking the wire format: serde
+/// serialises unknown variants as the
+/// variant name (e.g. `"rust_analyzer"`),
+/// which the TS side reads back as a
+/// `LspServerKind` literal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LspServerKind {
+    Typescript,
+    RustAnalyzer,
+    /// Phase 9.2c — the `pyright-langserver`
+    /// Node CLI. Mirrors the TS `LspServerKind`
+    /// `'pyright'` literal.
+    Pyright,
+    Unknown,
+}
+
+/// `lsp_check_available` args. Phase 9.2b —
+/// the JS side passes a `serverKind` so the
+/// Rust side knows which binary to PATH-
+/// probe. Defaults to `Typescript` for
+/// backward compatibility (the pre-9.2b
+/// `lsp_check_available` was kind-less).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckAvailableArgs {
+    #[serde(default)]
+    pub server_kind: Option<LspServerKind>,
+}
+
+/// The binary name + install hint + probe
+/// args for a given server kind. The check
+/// helper is generic over these three; the
+/// per-kind values are in
+/// `server_kind_spec()`.
+struct ServerKindSpec {
+    binary: &'static str,
+    install_hint: &'static str,
+}
+
+/// Per-kind (binary, install-hint) lookup.
+/// Returns `None` for `Unknown` (the bridge
+/// shouldn't have called `check_available`
+/// for `Unknown`, but if it does we return
+/// `available: false` with a generic
+/// message).
+fn server_kind_spec(kind: LspServerKind) -> Option<ServerKindSpec> {
+    match kind {
+        LspServerKind::Typescript => Some(ServerKindSpec {
+            binary: "typescript-language-server",
+            install_hint: "npm install -g typescript-language-server",
+        }),
+        LspServerKind::RustAnalyzer => Some(ServerKindSpec {
+            binary: "rust-analyzer",
+            // `rustup component add rust-analyzer` is the
+            // canonical install; covers both
+            // `rustup`-managed and
+            // `brew install rust-analyzer` /
+            // `pacman -S rust-analyzer` etc.
+            install_hint: "rustup component add rust-analyzer",
+        }),
+        LspServerKind::Pyright => Some(ServerKindSpec {
+            // Phase 9.2c — `pyright-langserver`
+            // is the Node CLI wrapper around
+            // the Pyright type checker. The
+            // `--stdio` flag switches it to
+            // LSP-over-stdio mode (the default
+            // is the JSON-RPC over stdio
+            // protocol; `--stdio` makes it
+            // explicit and is the
+            // recommendation in the
+            // pyright-langserver README).
+            binary: "pyright-langserver",
+            install_hint: "npm install -g pyright",
+        }),
+        LspServerKind::Unknown => None,
+    }
+}
+
+/// `lsp_check_available` — public entry
+/// point. Dispatches to the per-kind probe
+/// and merges the result. The `Unknown`
+/// arm returns `available: false` +
+/// `install_hint: ""` (the bridge shouldn't
+/// have called us for an unknown file
+/// extension; this is a defensive
+/// fallback).
+pub async fn check_available(
+    args: Option<CheckAvailableArgs>,
+) -> Result<CheckAvailableResult, StdioError> {
+    let kind = args
+        .and_then(|a| a.server_kind)
+        .unwrap_or(LspServerKind::Typescript);
+    match server_kind_spec(kind) {
+        Some(spec) => check_available_for(&spec).await,
+        None => Ok(CheckAvailableResult {
+            available: false,
+            install_hint: String::new(),
+            version: None,
+        }),
+    }
+}
+
+/// Per-kind probe: `which <binary>` /
+/// `where <binary>` + `<binary> --version`.
+/// Returns `available: false` (with the
+/// kind's install hint) if the binary
+/// isn't on PATH; returns `version: Some(...)`
+/// if the binary is runnable.
+async fn check_available_for(
+    spec: &ServerKindSpec,
+) -> Result<CheckAvailableResult, StdioError> {
+    // Step 1: probe PATH for the binary. The
+    // JS side could do this with
+    // `run_command` directly, but bundling
+    // it here means the "is the LSP
+    // available?" UX is one IPC call, not
+    // two.
     #[cfg(windows)]
     let probe_program = "where";
     #[cfg(windows)]
-    let probe_args = vec!["typescript-language-server".to_string()];
+    let probe_args = vec![spec.binary.to_string()];
 
     #[cfg(not(windows))]
     let probe_program = "which";
     #[cfg(not(windows))]
-    let probe_args = vec!["typescript-language-server".to_string()];
+    let probe_args = vec![spec.binary.to_string()];
 
     let mut cmd = Command::new(probe_program);
     cmd.args(&probe_args);
@@ -946,7 +1066,7 @@ pub async fn check_available() -> Result<CheckAvailableResult, StdioError> {
         Ok(Err(_)) => {
             return Ok(CheckAvailableResult {
                 available: false,
-                install_hint: INSTALL_HINT.to_string(),
+                install_hint: spec.install_hint.to_string(),
                 version: None,
             });
         }
@@ -960,16 +1080,17 @@ pub async fn check_available() -> Result<CheckAvailableResult, StdioError> {
     if !probe_output.status.success() {
         return Ok(CheckAvailableResult {
             available: false,
-            install_hint: INSTALL_HINT.to_string(),
+            install_hint: spec.install_hint.to_string(),
             version: None,
         });
     }
 
-    // Step 2: spawn the server with `--version` to
-    // capture the version string. This also
-    // double-checks that the binary is actually
-    // runnable (not a stale PATH entry).
-    let mut version_cmd = Command::new("typescript-language-server");
+    // Step 2: spawn the server with
+    // `--version` to capture the version
+    // string. This also double-checks that
+    // the binary is actually runnable (not
+    // a stale PATH entry).
+    let mut version_cmd = Command::new(spec.binary);
     version_cmd.arg("--version");
     version_cmd.stdin(std::process::Stdio::null());
     version_cmd.stdout(std::process::Stdio::piped());
@@ -986,16 +1107,10 @@ pub async fn check_available() -> Result<CheckAvailableResult, StdioError> {
 
     Ok(CheckAvailableResult {
         available: version.is_some(),
-        install_hint: INSTALL_HINT.to_string(),
+        install_hint: spec.install_hint.to_string(),
         version,
     })
 }
-
-/// The install hint shown in the settings card. The
-/// canonical install command is `npm i -g
-/// typescript-language-server` (the
-/// `vscode-langservers-extracted` package).
-const INSTALL_HINT: &str = "npm install -g typescript-language-server";
 
 #[cfg(test)]
 mod tests {
@@ -1051,17 +1166,198 @@ mod tests {
     }
 
     #[test]
-    fn install_hint_is_stable() {
+    fn install_hint_is_stable_per_kind() {
         // The settings card surfaces this string. If
         // we change it, the card's tests need an
-        // update. Locking the value here catches
-        // accidental edits.
+        // update. Locking the value per-kind catches
+        // accidental edits without making future
+        // kinds (Phase 9.2c+) hard to add.
+        let ts = server_kind_spec(LspServerKind::Typescript)
+            .expect("typescript has a spec");
         assert_eq!(
-            INSTALL_HINT,
+            ts.install_hint,
             "npm install -g typescript-language-server"
+        );
+        let rust = server_kind_spec(LspServerKind::RustAnalyzer)
+            .expect("rust-analyzer has a spec");
+        assert_eq!(rust.install_hint, "rustup component add rust-analyzer");
+        // Phase 9.2c — the pyright install
+        // hint is `npm install -g pyright`
+        // (the `pyright-langserver` binary is
+        // shipped as part of the `pyright`
+        // Node package; installing `pyright`
+        // is enough to put the binary on
+        // PATH).
+        let py = server_kind_spec(LspServerKind::Pyright)
+            .expect("pyright has a spec");
+        assert_eq!(py.install_hint, "npm install -g pyright");
+    }
+
+    // --- Phase 9.2b — per-kind server dispatch ---
+
+    #[test]
+    fn lsp_server_kind_serialises_to_snake_case() {
+        // The wire format the TS side reads back as a
+        // `LspServerKind` literal. `rename_all =
+        // "snake_case"` on the enum must produce
+        // `"rust_analyzer"` (not `"rust_analyzer"` /
+        // `"RustAnalyzer"`).
+        assert_eq!(
+            serde_json::to_string(&LspServerKind::Typescript).unwrap(),
+            "\"typescript\""
+        );
+        assert_eq!(
+            serde_json::to_string(&LspServerKind::RustAnalyzer).unwrap(),
+            "\"rust_analyzer\""
+        );
+        // Phase 9.2c — the `pyright` variant
+        // serialises as `"pyright"`. No
+        // snake_case needed (single word).
+        assert_eq!(
+            serde_json::to_string(&LspServerKind::Pyright).unwrap(),
+            "\"pyright\""
+        );
+        assert_eq!(
+            serde_json::to_string(&LspServerKind::Unknown).unwrap(),
+            "\"unknown\""
         );
     }
 
+    #[test]
+    fn lsp_server_kind_deserialises_from_snake_case() {
+        // The TS side sends `"rust_analyzer"` —
+        // serde must map that back to the variant
+        // (not panic / not return Unknown).
+        let k: LspServerKind =
+            serde_json::from_str("\"rust_analyzer\"").unwrap();
+        assert_eq!(k, LspServerKind::RustAnalyzer);
+        let k: LspServerKind =
+            serde_json::from_str("\"typescript\"").unwrap();
+        assert_eq!(k, LspServerKind::Typescript);
+        // Phase 9.2c — the `'pyright'` wire
+        // literal maps back to the
+        // `Pyright` variant.
+        let k: LspServerKind =
+            serde_json::from_str("\"pyright\"").unwrap();
+        assert_eq!(k, LspServerKind::Pyright);
+        let k: LspServerKind =
+            serde_json::from_str("\"unknown\"").unwrap();
+        assert_eq!(k, LspServerKind::Unknown);
+    }
+
+    #[test]
+    fn server_kind_spec_picks_the_right_binary() {
+        // The probe step in
+        // `check_available_for` looks for
+        // `spec.binary` on PATH. Wrong binary
+        // = wrong server probed.
+        let ts = server_kind_spec(LspServerKind::Typescript).unwrap();
+        assert_eq!(ts.binary, "typescript-language-server");
+        let rust = server_kind_spec(LspServerKind::RustAnalyzer).unwrap();
+        assert_eq!(rust.binary, "rust-analyzer");
+        // Phase 9.2c — the pyright arm picks
+        // the `pyright-langserver` Node CLI
+        // binary. This must match the JS
+        // `kindToSpawnSpec('pyright').command`
+        // (the cross-side contract the
+        // `kindToSpawnSpec` test pins).
+        let py = server_kind_spec(LspServerKind::Pyright).unwrap();
+        assert_eq!(py.binary, "pyright-langserver");
+    }
+
+    #[test]
+    fn server_kind_spec_returns_none_for_unknown() {
+        // The bridge shouldn't have called us for
+        // `Unknown`, but if it does we return
+        // `available: false` rather than a bogus
+        // probe. The lookup is the only thing
+        // that has to know the Unknown is a
+        // no-op.
+        assert!(server_kind_spec(LspServerKind::Unknown).is_none());
+    }
+
+    #[test]
+    fn check_available_args_omits_kind_for_backward_compat() {
+        // The pre-9.2b `lsp_check_available` was
+        // kind-less. The TS side might still send
+        // `null` / no args. `Default` must yield
+        // `server_kind: None` so the dispatch
+        // falls back to Typescript (the pre-9.2b
+        // behaviour).
+        let args: CheckAvailableArgs = serde_json::from_str("{}").unwrap();
+        assert!(args.server_kind.is_none());
+        let args: CheckAvailableArgs =
+            serde_json::from_str("null").unwrap_or_default();
+        assert!(args.server_kind.is_none());
+    }
+
+    #[test]
+    fn check_available_args_camel_case_round_trip() {
+        // The TS side sends `{ serverKind:
+        // "rust_analyzer" }` (camelCase, the
+        // rest of the IPC uses camelCase keys).
+        // The struct has
+        // `rename_all = "camelCase"`.
+        let args: CheckAvailableArgs =
+            serde_json::from_str(r#"{"serverKind":"rust_analyzer"}"#)
+                .unwrap();
+        assert_eq!(args.server_kind, Some(LspServerKind::RustAnalyzer));
+        // Phase 9.2c — the `'pyright'` kind
+        // also flows through the IPC arg
+        // correctly. (The TS side calls
+        // `lspCheckAvailable({ serverKind:
+        // 'pyright' })` from the bridge for
+        // a `.py` file.)
+        let args: CheckAvailableArgs =
+            serde_json::from_str(r#"{"serverKind":"pyright"}"#)
+                .unwrap();
+        assert_eq!(args.server_kind, Some(LspServerKind::Pyright));
+    }
+
+    #[test]
+    fn check_available_for_unknown_returns_unavailable() {
+        // We can't actually spawn a real
+        // `check_available_for` here (it shells
+        // out to `which` / `where`), but the
+        // `Unknown` arm in `check_available()`
+        // itself is a pure function: no I/O, so
+        // we can test it directly.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(check_available(Some(CheckAvailableArgs {
+            server_kind: Some(LspServerKind::Unknown),
+        })));
+        let result = result.expect("Unknown arm shouldn't error");
+        assert!(!result.available, "Unknown must be unavailable");
+        assert!(
+            result.install_hint.is_empty(),
+            "Unknown must have an empty install hint"
+        );
+        assert!(
+            result.version.is_none(),
+            "Unknown must have no version"
+        );
+    }
+
+    #[test]
+    fn check_available_defaults_to_typescript_when_kind_omitted() {
+        // Backward-compat: pre-9.2b TS callers
+        // sent no `serverKind`. The dispatch
+        // must fall back to Typescript and run
+        // the existing probe (i.e. the
+        // `typescript-language-server` PATH
+        // check). We don't assert the
+        // availability (CI hosts may or may
+        // not have TS-LS), only that the
+        // function returns *something* shaped
+        // like a `CheckAvailableResult`.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(check_available(None));
+        let result =
+            result.expect("Typescript default probe shouldn't error");
+        // `available` is a bool; `install_hint`
+        // and `version` are present regardless.
+        let _ = result.available;
+    }
     // --- Phase 9.5 — crash recovery (stderr ring buffer + crash event) ---
 
     #[test]

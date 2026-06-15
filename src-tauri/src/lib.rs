@@ -175,9 +175,9 @@ pub use stdio::{
     stdio_close as stdio_close_rs, stdio_read as stdio_read_rs,
     stdio_read_stderr as stdio_read_stderr_rs,
     stdio_read_stderr_log as stdio_read_stderr_log_rs,
-    stdio_write as stdio_write_rs, CheckAvailableResult, LspCrashedPayload,
-    LspLogPayload, LSP_CRASHED_EVENT, LSP_LOG_EVENT, RunStdioArgs,
-    RunStdioResult, StdioError, StdioState,
+    stdio_write as stdio_write_rs, CheckAvailableArgs, CheckAvailableResult,
+    LspCrashedPayload, LspLogPayload, LspServerKind, LSP_CRASHED_EVENT,
+    LSP_LOG_EVENT, RunStdioArgs, RunStdioResult, StdioError, StdioState,
 };
 
 mod http;
@@ -563,8 +563,10 @@ async fn lsp_stdio_close(
 }
 
 #[tauri::command]
-async fn lsp_check_available() -> Result<CheckAvailableResult, StdioError> {
-    stdio_check_available_rs().await
+async fn lsp_check_available(
+    args: Option<CheckAvailableArgs>,
+) -> Result<CheckAvailableResult, StdioError> {
+    stdio_check_available_rs(args).await
 }
 
 #[tauri::command]

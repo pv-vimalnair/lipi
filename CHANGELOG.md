@@ -1083,6 +1083,149 @@ model is open at a time).
   `tsc --noEmit` clean; `cargo
   check` clean.
 
+### Added (Phase 9.30a — `lsp_check_available` per-kind dispatch + `kindToSpawnSpec` parity)
+
+The Phase 9.2 kind taxonomy
+(`'typescript' | 'rust_analyzer' |
+'pyright' | 'unknown'`) was
+*declared* in the bridge / store but
+*not wired through the IPC check
+path*: `lsp_check_available` still
+hard-coded
+`typescript-language-server` on
+both sides. Phase 9.30a makes the
+check call per-kind and pins the
+JS spawn spec ↔ Rust check table
+parity in a test.
+
+- **`src-tauri/src/stdio.rs`** —
+  new `LspServerKind` enum
+  (snake_case serde: `typescript`,
+  `rust_analyzer`, `pyright`,
+  `unknown`) + new
+  `CheckAvailableArgs { server_kind:
+  Option<LspServerKind> }` struct
+  (`#[serde(rename_all =
+  "camelCase")]` so the JS side
+  passes `serverKind`).
+  `check_available()` is now
+  generic: it picks
+  `server_kind_spec(kind)` and
+  delegates to a per-kind
+  `check_available_for(spec)`
+  helper. The `Unknown` arm
+  returns `available: false,
+  install_hint: ""` (the bridge
+  shouldn't have called us, but
+  the dispatcher is total).
+  Per-kind install hints:
+  - TS:
+    `npm install -g typescript-language-server`
+  - rust-analyzer:
+    `rustup component add rust-analyzer`
+  - pyright:
+    `npm install -g pyright`
+- **`src-tauri/src/lib.rs`** —
+  `lsp_check_available` is now
+  `async fn lsp_check_available(args:
+  Option<CheckAvailableArgs>) ->
+  ...` and re-exports
+  `CheckAvailableArgs` +
+  `LspServerKind` from `stdio`.
+  Pre-9.30a call sites (no args)
+  preserve the old behaviour —
+  Rust defaults the missing kind
+  to `LspServerKind::Typescript`.
+- **`src/ipc/lsp.ts`** — new
+  `LspServerKind` union (4
+  literals), new
+  `CheckAvailableArgs { serverKind?:
+  LspServerKind }` interface, new
+  `LspSpawnSpec { command, args,
+  installHint }` interface, new
+  `kindToSpawnSpec(kind)` pure
+  function, and the
+  `lspCheckAvailable(args?)`
+  wrapper now forwards the args
+  through to the Tauri command.
+  The Rust side is the source of
+  truth for the *check /
+  install-hint* spec, the JS
+  side is the source of truth for
+  the *spawn* spec — they agree
+  on the binary name, and
+  `lsp.test.ts` pins that
+  contract.
+- **`src/ipc/lsp.test.ts`** (new
+  file, 10 tests) — covers:
+  - `kindToSpawnSpec` returns the
+    canonical command + args +
+    install hint for each of
+    `'typescript'` /
+    `'rust_analyzer'` /
+    `'pyright'` and the
+    empty-spec fallback for
+    `'unknown'`.
+  - `kindToSpawnSpec` binary
+    names match the Rust
+    `server_kind_spec().binary`
+    table for every known kind
+    (cross-side parity contract).
+  - `lspCheckAvailable` invokes
+    the Tauri command with
+    `args: undefined` when called
+    with no args.
+  - `lspCheckAvailable` forwards
+    an explicit
+    `{ serverKind: 'rust_analyzer'
+    }` /
+    `{ serverKind: 'typescript'
+    }` /
+    `{ serverKind: 'pyright' }` /
+    `{ serverKind: 'unknown' }`
+    unchanged.
+- **Design decisions**:
+  - **D-147**: The JS side
+    `kindToSpawnSpec()` and the
+    Rust side
+    `server_kind_spec()` are
+    *two* tables that must agree
+    on the binary name and the
+    install hint. The cross-side
+    test
+    (`returns specs whose binary
+    names match the Rust
+    server_kind_spec table`)
+    pins that contract; a future
+    kind addition is a
+    1-arm-match change in both
+    files + 1 new row in the
+    test's `cases` table.
+  - **D-148**:
+    `lspCheckAvailable` is total
+    over the full `LspServerKind`
+    union (including `'unknown'`).
+    The Rust side returns
+    `available: false` for
+    `'unknown'`; the JS wrapper
+    is just a pass-through. The
+    bridge is still expected to
+    gate on `isSupportedKind`
+    *before* calling
+    `lspCheckAvailable`, but the
+    IPC layer doesn't enforce
+    that.
+- **Test results**: `vitest`
+  1162/1162 pass (was 1157; +5
+  from this slice — the +10 new
+  cases in `lsp.test.ts` net
+  against the 5 cases the prior
+  count already covered by the
+  IPC module's "existence"
+  tests); `tsc --noEmit` clean;
+  `cargo test --lib stdio` 29/29
+  pass; `cargo check` clean.
+
 ### Added (Phase 9.7 — LSP live server output panel)
 
 The `LanguageServerCard` settings UI now has a

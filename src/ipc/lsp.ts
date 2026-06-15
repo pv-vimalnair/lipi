@@ -95,6 +95,47 @@ export interface CheckAvailableResult {
 }
 
 /**
+ * Args for `lsp_check_available`. Phase 9.2b — the JS
+ * side passes a `serverKind` so the Rust side knows
+ * which binary to PATH-probe.
+ *
+ * `serverKind` is optional: omitting it preserves the
+ * pre-9.2b behaviour (Rust defaults to
+ * `LspServerKind::Typescript`). New code should pass
+ * the kind explicitly — `inferServerKind(uri)` is the
+ * canonical source.
+ */
+export interface CheckAvailableArgs {
+  serverKind?: LspServerKind;
+}
+
+/**
+ * The kind of LSP server to spawn / check. Mirrors the
+ * Rust `LspServerKind` enum in
+ * `src-tauri/src/stdio.rs`. The `snake_case` serde
+ * rename on the Rust side maps each variant to a
+ * string literal here:
+ *
+ *   - `'typescript'` → `typescript-language-server`
+ *   - `'rust_analyzer'` → `rust-analyzer`
+ *   - `'unknown'` → no real server (the bridge's
+ *     "no language server for this file" signal)
+ *
+ * The inference lives in
+ * `screens/EditorWorkspace/state/lspClientStore.ts`
+ * (`inferServerKind(uri)`); the spawn spec lives here
+ * (`kindToSpawnSpec(kind)`). Splitting inference from
+ * spawn lets the bridge know *whether* to spawn
+ * (`isSupportedKind`) without coupling that to
+ * *how* to spawn.
+ */
+export type LspServerKind =
+  | 'typescript'
+  | 'rust_analyzer'
+  | 'pyright'
+  | 'unknown';
+
+/**
  * Spawn a child process with piped stdio and return an
  * opaque `handleId`. The handle is owned by the Rust
  * `StdioState` (registered via Tauri's `manage()`) and
@@ -159,6 +200,14 @@ export async function lspStdioClose(handleId: string): Promise<void> {
  * `--version`. The settings card calls this on mount
  * and shows the install hint when `available: false`.
  *
+ * Phase 9.2b — `args` carries the `serverKind` so the
+ * Rust side knows which binary to probe. Omitting the
+ * kind (or the args) preserves the pre-9.2b behaviour
+ * (the Rust side defaults to Typescript). New code
+ * should pass the kind explicitly: pass the result of
+ * `inferServerKind(uri)` for the file the card is
+ * representing.
+ *
  * Note: the Rust side shells out to `which` / `where`
  * + a `--version` probe, so this IPC call can take up
  * to 5s in the worst case (the
@@ -166,8 +215,106 @@ export async function lspStdioClose(handleId: string): Promise<void> {
  * The settings card shows a "checking..." state
  * during that window.
  */
-export async function lspCheckAvailable(): Promise<CheckAvailableResult> {
-  return invoke<CheckAvailableResult>('lsp_check_available');
+export async function lspCheckAvailable(
+  args?: CheckAvailableArgs,
+): Promise<CheckAvailableResult> {
+  return invoke<CheckAvailableResult>('lsp_check_available', { args });
+}
+
+/**
+ * What the JS `LspClient` needs to spawn a server of
+ * the given kind. Mirrors the per-kind entry in the
+ * Rust `server_kind_spec()` table — the JS side and
+ * the Rust side must agree on the binary name and
+ * flags.
+ *
+ * The split is intentional: the Rust `lsp_run_stdio`
+ * command is *kind-agnostic* (it spawns whatever
+ * command the JS side passes). Only the
+ * `lsp_check_available` dispatch needs to know about
+ * kinds. So the JS side is the source of truth for
+ * the *spawn* spec, and the Rust side is the source
+ * of truth for the *check* / *install-hint* spec.
+ * They happen to agree on the binary name — that's
+ * the contract.
+ *
+ * `installHint` is the same string the Rust side
+ * returns from `lspCheckAvailable` when the binary
+ * isn't on PATH. The settings card surfaces the
+ * Rust-side value (it has the full path info), but
+ * this constant is exposed for callers that want to
+ * show a "before you even check" hint.
+ */
+export interface LspSpawnSpec {
+  command: string;
+  args: string[];
+  installHint: string;
+}
+
+/**
+ * Pick the right `LspSpawnSpec` for a given kind. The
+ * `Unknown` arm is intentionally permissive (an empty
+ * spec) — the bridge never calls this for an unknown
+ * file (the `isSupportedKind` gate rejects those), but
+ * a defensive return value keeps the function total
+ * so the type system is honest.
+ *
+ * Adding a new kind is a 1-arm match change here +
+ * adding the variant to the Rust `LspServerKind` enum.
+ * Nothing else has to know.
+ */
+export function kindToSpawnSpec(kind: LspServerKind): LspSpawnSpec {
+  switch (kind) {
+    case 'typescript':
+      return {
+        command: 'typescript-language-server',
+        args: ['--stdio'],
+        // Mirrors the Rust `server_kind_spec` for
+        // `LspServerKind::Typescript`. Keep in sync
+        // with `src-tauri/src/stdio.rs`.
+        installHint: 'npm install -g typescript-language-server',
+      };
+    case 'rust_analyzer':
+      return {
+        command: 'rust-analyzer',
+        // `rust-analyzer` speaks LSP over stdio by
+        // default — no `--stdio` flag needed. The
+        // binary uses the LSP framing protocol
+        // directly.
+        args: [],
+        // Mirrors the Rust `server_kind_spec` for
+        // `LspServerKind::RustAnalyzer`.
+        installHint: 'rustup component add rust-analyzer',
+      };
+    case 'pyright':
+      return {
+        // Phase 9.2d — `pyright-langserver`
+        // (the Node CLI wrapper) isn't actually
+        // wired into `lsp_run_stdio` yet. The
+        // spec is here so `kindToSpawnSpec`
+        // stays total; the bridge gate
+        // (`isSupportedKind`) rejects this
+        // kind for now. Once the Rust arm is
+        // added in Phase 9.2d, callers can
+        // flip the gate and the spec is
+        // already in place.
+        command: 'pyright-langserver',
+        args: ['--stdio'],
+        installHint: 'npm install -g pyright',
+      };
+    case 'unknown':
+    default:
+      // The bridge gate (`isSupportedKind`) should
+      // have rejected this before we got here. We
+      // return a no-op spec rather than throwing
+      // so callers that want to log the situation
+      // can do so without a try/catch.
+      return {
+        command: '',
+        args: [],
+        installHint: '',
+      };
+  }
 }
 
 /**

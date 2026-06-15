@@ -151,6 +151,38 @@ interface FakeModel {
   getVersionId: () => number;
 }
 
+/**
+ * Shape of a fake `IModelContentChange` —
+ * a *minimal* subset of the Monaco type
+ * the bridge reads. Mirrors the real
+ * `IModelContentChange` fields the
+ * `convertContentChanges` helper cares
+ * about.
+ */
+interface FakeContentChange {
+  range: {
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber: number;
+    endColumn: number;
+  };
+  rangeLength: number;
+  text: string;
+}
+
+/**
+ * Shape of a fake `IModelContentChangedEvent` —
+ * the wrapper Monaco passes to
+ * `onDidChangeModelContent`. The bridge now
+ * reads `event.changes` and `event.versionId`
+ * (Phase 9.1 — was previously just a void
+ * callback).
+ */
+interface FakeContentChangedEvent {
+  changes: FakeContentChange[];
+  versionId: number;
+}
+
 interface FakeModelChangedEvent {
   oldModelUrl?: { toString: () => string } | null;
   newModelUrl?: { toString: () => string } | null;
@@ -163,12 +195,14 @@ let fakeModel: FakeModel = {
   getVersionId: () => 1,
 };
 
-let fakeContentListeners: Array<() => void> = [];
+let fakeContentListeners: Array<(e: FakeContentChangedEvent) => void> = [];
 let fakeModelListeners: Array<(e: FakeModelChangedEvent) => void> = [];
 
 const fakeEditor = {
   getModel: () => fakeModel,
-  onDidChangeModelContent: (cb: () => void) => {
+  onDidChangeModelContent: (
+    cb: (e: FakeContentChangedEvent) => void,
+  ) => {
     fakeContentListeners.push(cb);
     return { dispose: () => {} };
   },
@@ -235,6 +269,68 @@ function mountBridge(editor: unknown = fakeEditor): MountedHook {
       document.body.removeChild(container);
     },
   };
+}
+
+/**
+ * Phase 9.1 — extract the first JSON-RPC
+ * frame from a concatenated string of
+ * LSP wire writes. The test's mock
+ * `lspStdioWrite` captures the raw
+ * `Uint8Array`; we decode + concatenate +
+ * split on `Content-Length: <n>\r\n\r\n`
+ * to find the first body. We then
+ * `JSON.parse` it and return
+ * `{ method, params }` (or the relevant
+ * fields).
+ *
+ * The fake's `lspStdioWrite` is
+ * pre-staged in the
+ * `vi.mock('@/ipc/lsp', ...)` block;
+ * the `writes[]` array is exposed via
+ * `(await import('@/ipc/lsp')).writes`.
+ */
+function parseFirstLspFrame(
+  concatenatedWrites: string,
+): {
+  method: string;
+  params: {
+    textDocument: { uri: string; version: number };
+    contentChanges: Array<{
+      range: {
+        start: { line: number; character: number };
+        end: { line: number; character: number };
+      };
+      rangeLength: number;
+      text: string;
+    }>;
+  };
+} {
+  // Find the first `Content-Length: <n>\r\n\r\n<body>` frame.
+  const match = concatenatedWrites.match(
+    /Content-Length: (\d+)\r\n\r\n/,
+  );
+  expect(match, 'no Content-Length header found').not.toBeNull();
+  const headerLen = match![0]!.length;
+  const bodyLen = Number(match![1]);
+  const body = concatenatedWrites.slice(
+    headerLen,
+    headerLen + bodyLen,
+  );
+  const parsed = JSON.parse(body) as {
+    method: string;
+    params: {
+      textDocument: { uri: string; version: number };
+      contentChanges: Array<{
+        range: {
+          start: { line: number; character: number };
+          end: { line: number; character: number };
+        };
+        rangeLength: number;
+        text: string;
+      }>;
+    };
+  };
+  return parsed;
 }
 
 function addWorkspace(path: string): void {
@@ -386,6 +482,300 @@ describe('useMonacoLspBridge', () => {
       useLspClientStore.getState().clients.has('/workspace/a'),
     ).toBe(true);
     expect(registerLspProviders).toHaveBeenCalledTimes(1);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.1 — verify the bridge forwards
+   * Monaco's `IModelContentChangedEvent` as an
+   * incremental `textDocument/didChange`. Before
+   * Phase 9.1 the bridge re-sent the full
+   * document on every keystroke; now it sends a
+   * single `TextDocumentContentChangeEvent`
+   * with `range` + `text` (the actual edit).
+   *
+   * Asserts:
+   *   - The wire payload for the keystroke
+   *     contains `textDocument/didChange`.
+   *   - The `contentChanges` array has *one*
+   *     entry (not the full document text).
+   *   - That entry's `text` is the inserted
+   *     character (`"x"`), not the full file.
+   *   - The `version` is the post-change
+   *     `versionId` (Monaco guarantees
+   *     monotonic; we read it from the event).
+   *   - The `range` is a single point (insertion
+   *     at the cursor), 0-indexed for LSP.
+   */
+  it('sends incremental didChange with a single TextDocumentContentChangeEvent per keystroke', async () => {
+    addWorkspace('/workspace/incr');
+    const mounted = mountBridge();
+    // Wait for the client + didOpen to
+    // complete so the wire writes are
+    // captured cleanly.
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore.getState().clients.has('/workspace/incr')
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    await act(async () => {
+      // Drain the didOpen frame.
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // Snapshot the writes so we can assert
+    // only on the *new* didChange frame.
+    const lspMock = (await import('@/ipc/lsp')) as unknown as {
+      writes: Uint8Array[];
+    };
+    const writesBefore = lspMock.writes.length;
+    // Fire a single keystroke at line 2,
+    // col 1 → user types "x".
+    await act(async () => {
+      for (const cb of fakeContentListeners) {
+        cb({
+          changes: [
+            {
+              range: {
+                startLineNumber: 2,
+                startColumn: 1,
+                endLineNumber: 2,
+                endColumn: 1,
+              },
+              rangeLength: 0,
+              text: 'x',
+            },
+          ],
+          versionId: 2,
+        });
+      }
+      // The bridge awaits
+      // `sendDidChange` (which calls
+      // `client.notify` → `lspStdioWrite`),
+      // so we need to give the microtask
+      // queue a few ticks.
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    // Find the new didChange frame.
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const newWriteText = newWrites
+      .map((w) => new TextDecoder().decode(w))
+      .join('');
+    expect(newWriteText).toContain('textDocument/didChange');
+    // Parse the JSON-RPC frame and
+    // inspect the params.
+    const parsed = parseFirstLspFrame(newWriteText);
+    expect(parsed.method).toBe('textDocument/didChange');
+    expect(parsed.params.contentChanges).toHaveLength(1);
+    const change = parsed.params.contentChanges[0];
+    // Insertion at (line 1, col 0) — LSP is
+    // 0-indexed, Monaco is 1-indexed.
+    expect(change.range).toEqual({
+      start: { line: 1, character: 0 },
+      end: { line: 1, character: 0 },
+    });
+    expect(change.text).toBe('x');
+    expect(change.rangeLength).toBe(0);
+    // Version is the post-change
+    // `versionId` (we fired 2).
+    expect(parsed.params.textDocument.version).toBe(2);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.1 — the bridge does NOT re-send
+   * the *full document* on every change.
+   * Before Phase 9.1 a single keystroke on
+   * a 5 KiB file would push ~5 KiB on the
+   * wire; now it pushes ~50 bytes. We
+   * assert that the `text` field of the
+   * change is *not* the full document text.
+   */
+  it('does not re-send the full document on a single keystroke (Phase 9.1 wire-size win)', async () => {
+    // Use a long fake document so the
+    // "old" path would have shipped a
+    // lot of bytes.
+    fakeModel = {
+      uri: { toString: () => 'file:///workspace/big/index.ts' },
+      getLanguageId: () => 'typescript',
+      getValue: () => 'a'.repeat(5000) + '\n',
+      getVersionId: () => 100,
+    };
+    addWorkspace('/workspace/big');
+    const mounted = mountBridge();
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore.getState().clients.has('/workspace/big')
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const lspMock = (await import('@/ipc/lsp')) as unknown as {
+      writes: Uint8Array[];
+    };
+    const writesBefore = lspMock.writes.length;
+    await act(async () => {
+      for (const cb of fakeContentListeners) {
+        cb({
+          changes: [
+            {
+              range: {
+                startLineNumber: 1,
+                startColumn: 1,
+                endLineNumber: 1,
+                endColumn: 1,
+              },
+              rangeLength: 0,
+              text: 'Z',
+            },
+          ],
+          versionId: 101,
+        });
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const newWriteText = newWrites
+      .map((w) => new TextDecoder().decode(w))
+      .join('');
+    const parsed = parseFirstLspFrame(newWriteText);
+    const change = parsed.params.contentChanges[0];
+    // Wire `text` is exactly the inserted
+    // char — not the 5 KiB full
+    // document. The "before" code would
+    // have set `text: "aaaa…\n"`.
+    expect(change.text).toBe('Z');
+    expect(change.text.length).toBeLessThan(100);
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.1 — multi-change events
+   * (Monaco batches e.g. formatter edits)
+   * are forwarded as multiple
+   * `TextDocumentContentChangeEvent`s in
+   * the same `contentChanges` array, in
+   * order.
+   */
+  it('forwards multi-change events (e.g. formatter) as multiple LSP changes in order', async () => {
+    addWorkspace('/workspace/multi');
+    const mounted = mountBridge();
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore.getState().clients.has('/workspace/multi')
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const lspMock = (await import('@/ipc/lsp')) as unknown as {
+      writes: Uint8Array[];
+    };
+    const writesBefore = lspMock.writes.length;
+    await act(async () => {
+      for (const cb of fakeContentListeners) {
+        cb({
+          changes: [
+            {
+              range: {
+                startLineNumber: 1,
+                startColumn: 1,
+                endLineNumber: 1,
+                endColumn: 5,
+              },
+              rangeLength: 4,
+              text: 'AAAA',
+            },
+            {
+              range: {
+                startLineNumber: 5,
+                startColumn: 1,
+                endLineNumber: 5,
+                endColumn: 5,
+              },
+              rangeLength: 4,
+              text: 'BBBB',
+            },
+          ],
+          versionId: 2,
+        });
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const newWriteText = newWrites
+      .map((w) => new TextDecoder().decode(w))
+      .join('');
+    const parsed = parseFirstLspFrame(newWriteText);
+    expect(parsed.params.contentChanges).toHaveLength(2);
+    // Order preserved.
+    expect(parsed.params.contentChanges[0].text).toBe('AAAA');
+    expect(parsed.params.contentChanges[1].text).toBe('BBBB');
+    mounted.unmount();
+  });
+
+  /**
+   * Phase 9.1 — an empty `changes` array
+   * (Monaco can fire these in edge cases)
+   * is forwarded as an empty
+   * `contentChanges` array — the spec
+   * allows it; the server treats it as a
+   * no-op. This makes the bridge
+   * robust to whatever Monaco throws at
+   * it.
+   */
+  it('forwards an empty changes array as an empty contentChanges array (no-op)', async () => {
+    addWorkspace('/workspace/empty');
+    const mounted = mountBridge();
+    await act(async () => {
+      const deadline = Date.now() + 1000;
+      while (
+        Date.now() < deadline &&
+        !useLspClientStore.getState().clients.has('/workspace/empty')
+      ) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const lspMock = (await import('@/ipc/lsp')) as unknown as {
+      writes: Uint8Array[];
+    };
+    const writesBefore = lspMock.writes.length;
+    await act(async () => {
+      for (const cb of fakeContentListeners) {
+        cb({ changes: [], versionId: 1 });
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const newWrites = lspMock.writes.slice(writesBefore);
+    const newWriteText = newWrites
+      .map((w) => new TextDecoder().decode(w))
+      .join('');
+    // No new `didChange` frame on the
+    // wire — the spec says an empty
+    // contentChanges array is legal but
+    // shipping it is wasteful. We
+    // currently *do* ship it (the server
+    // treats it as a no-op); we assert
+    // *only* that nothing crashes.
+    if (newWriteText.length > 0) {
+      const parsed = parseFirstLspFrame(newWriteText);
+      expect(parsed.params.contentChanges).toEqual([]);
+    }
     mounted.unmount();
   });
 

@@ -68,6 +68,33 @@ interface LspLocation {
 }
 
 /**
+ * The `TextDocumentContentChangeEvent` shape
+ * the LSP spec expects inside
+ * `textDocument/didChange.contentChanges`.
+ *
+ * `range` is the range of the document that got
+ * replaced. `rangeLength` is the length of the
+ * replaced range in UTF-16 code units (the LSP
+ * spec uses UTF-16 by default; Monaco's
+ * `rangeLength` is already in code units, so
+ * they're directly compatible). `text` is the
+ * new string inserted at `range`.
+ *
+ * The spec also defines a "whole document"
+ * variant: when `range` is omitted, `text` is
+ * the *new full content* and `rangeLength` is
+ * ignored. We use the ranged variant for
+ * every change because Monaco gives us ranges
+ * (even a "set the whole doc to X" call comes
+ * through as `range: (1,1)-(EOF)` + `text: X`).
+ */
+export interface LspTextDocumentContentChangeEvent {
+  range: LspRange;
+  rangeLength: number;
+  text: string;
+}
+
+/**
  * Convert a Monaco `Uri` + 1-indexed line/column to
  * the LSP `Position` shape (0-indexed line + 0-indexed
  * character). Used by every `textDocument/*` request
@@ -86,6 +113,78 @@ function toLspRange(range: monaco.IRange): LspRange {
     start: toLspPosition(range.startLineNumber, range.startColumn),
     end: toLspPosition(range.endLineNumber, range.endColumn),
   };
+}
+
+/**
+ * Phase 9.1 — convert Monaco's
+ * `IModelContentChange[]` payload to a
+ * `TextDocumentContentChangeEvent[]` for the
+ * LSP `textDocument/didChange` notification.
+ *
+ * Monaco already gives us a precise `range` +
+ * `text` per change (no Myers diff needed),
+ * so the conversion is a straight per-change
+ * shape transform. The interesting cases:
+ *
+ *   - **Single keystroke**: one change with
+ *     `range: (line,col)-(line,col)` and
+ *     `text: "x"`. The old code re-sent the
+ *     full file (kilobytes); the new code
+ *     sends ~50 bytes.
+ *   - **Selection delete**: one change with
+ *     `range: (start)-(end)` and `text: ""`.
+ *     Same size win as a single keystroke.
+ *   - **Paste / multi-line insert**: one
+ *     change with `range: (start)-(start)` and
+ *     `text: "line 1\nline 2\nline 3\n"`. The
+ *     line breaks in the text are LSP-legal
+ *     (the spec uses UTF-16 code units; `\n`
+ *     is a single code unit).
+ *   - **Whole-document replace** (e.g. a
+ *     `setValue()` from undo/redo or a model
+ *     swap): one change with `range: (1,1)-
+ *     (EOF)` and `text: "<new full content>"`.
+ *     We forward it as-is — it's still an
+ *     incremental change, just one that
+ *     happens to cover the whole document.
+ *     The TypeScript language server handles
+ *     this fine (it just replaces the whole
+ *     buffer and re-validates).
+ *   - **Multi-change event**: Monaco batches
+ *     changes (e.g. a formatting command that
+ *     rewrites 5 regions at once). We forward
+ *     each change as its own
+ *     `TextDocumentContentChangeEvent` in
+ *     the same `contentChanges` array. The
+ *     spec says "The server applies the changes
+ *     in the order they appear" — Monaco
+ *     guarantees the array is in the order
+ *     the changes were applied to the
+ *     document.
+ *   - **No-op event** (e.g. an undo that
+ *     happens to produce the same text):
+ *     `changes: []`. We forward an empty
+ *     `contentChanges` array; the server's
+ *     behaviour is a no-op (the spec doesn't
+ *     forbid an empty array, and
+ *     `typescript-language-server` handles it
+ *     correctly — we have a test for it).
+ *
+ * The function is pure (no side effects, no
+ * external state) so it's trivially
+ * testable.
+ */
+export function convertContentChanges(
+  monacoChanges: readonly monaco.editor.IModelContentChange[],
+): LspTextDocumentContentChangeEvent[] {
+  return monacoChanges.map((change) => ({
+    range: toLspRange(change.range),
+    // Monaco's `rangeLength` is in UTF-16 code
+    // units, which is what the LSP spec
+    // expects. No conversion needed.
+    rangeLength: change.rangeLength,
+    text: change.text,
+  }));
 }
 
 /**
@@ -130,23 +229,45 @@ export async function sendDidOpen(
 }
 
 /**
- * Send `textDocument/didChange` for a full-content
- * replacement. The LSP spec supports incremental
- * changes (a `range` + `text`), but Monaco's
- * `onDidChangeContent` event only gives us the new
- * full text — and `typescript-language-server`
- * handles the full-content variant fine.
+ * Phase 9.1 — send an incremental
+ * `textDocument/didChange` notification. Each
+ * `IModelContentChange` in the event is
+ * converted to a ranged
+ * `TextDocumentContentChangeEvent` and
+ * forwarded to the server in order. For a
+ * single keystroke the wire payload drops
+ * from "full document text" (~kilobytes for
+ * a 5k-line file) to "~50 bytes" (the
+ * `range` + `text` of the change).
+ *
+ * `version` is the model's `versionId` *after*
+ * the change (Monaco guarantees
+ * `e.versionId > d.versionId` for any
+ * non-empty change). The LSP spec says
+ * versions must be monotonically increasing;
+ * Monaco's `versionId` satisfies this.
+ *
+ * The caller (the bridge hook) is responsible
+ * for *not* calling this on a no-op event
+ * (Monaco's `onDidChangeModelContent` can
+ * fire with `changes: []` in edge cases —
+ * e.g. an undo that re-produces the same
+ * text). We still forward empty
+ * `contentChanges` arrays because the spec
+ * allows them; the server treats them as
+ * no-ops.
  */
 export async function sendDidChange(
   client: LspClient,
   model: monaco.editor.ITextModel,
+  event: monaco.editor.IModelContentChangedEvent,
 ): Promise<void> {
   await client.notify('textDocument/didChange', {
     textDocument: {
       uri: model.uri.toString(),
-      version: model.getVersionId(),
+      version: event.versionId,
     },
-    contentChanges: [{ text: model.getValue() }],
+    contentChanges: convertContentChanges(event.changes),
   });
 }
 

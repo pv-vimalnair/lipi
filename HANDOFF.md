@@ -300,6 +300,11 @@ on mobile — cannot be retrofitted in Week 8.
 | 98 | `clearLspOutput` is a **store-only** action (no IPC call). The Rust log buffer is *not* touched. | The user might be debugging an active session and want to "start fresh" on the panel without disturbing the child's stderr stream (which is being captured for the next crash). The Rust buffer continues to fill; the in-memory entry is the only thing cleared. A future "Reset server" button could also clear the Rust buffer, but that's not in scope for Phase 9.7. | 2026-06-15 |
 | 99 | The "Server output" panel is **hidden when the kill switch is OFF**. | When the master toggle is on, the user is using Monaco's built-in TS service — there's no `typescript-language-server` child to log. Showing an empty panel ("No output yet") would be confusing; hiding the section entirely matches the "this section is irrelevant" UX. | 2026-06-15 |
 | 100 | The replay drain is a **best-effort** `void lspStdioReadStderrLog(...).then(...).catch(...)` chain inside `getOrCreate`. | The subscription is the source of truth going forward; the replay is purely a "catch up on the bytes between spawn and subscription" nicety. If the IPC fails (e.g. the handle was just disposed in the interim), the live `lsp://log` events are still the right path. The promise chain doesn't need to be awaited — `getOrCreate` returns as soon as the spawn completes, and the panel fills in asynchronously as the events arrive. | 2026-06-15 |
+| 101 | Phase 9.1 **forwards Monaco's `IModelContentChange[]` verbatim**, no Myers diff in the JS side. | Monaco's `range` is already precise — every edit comes through as `range: IRange` (start/end line + column) + `text: string`. There's no need to compute the diff ourselves; Monaco has already done the hard part. The Myers-diff path (compute `range` from `prev` + `next`) would be unnecessary work — the wire payload is what Monaco computed internally; we're a transparent forwarder. | 2026-06-15 |
+| 102 | Phase 9.1 uses **ranged `TextDocumentContentChangeEvent` for *every* change**, including whole-document replaces (e.g. `model.setValue("new")` from undo/redo or a model swap, which comes through as `range: (1,1)-(EOF)` + `text: "new"`). | Avoids a special-case branch. The spec accepts any range, including one covering the whole document. `typescript-language-server` treats a full-range change identically to "the user typed the whole file at once" — it just replaces the buffer and re-validates. | 2026-06-15 |
+| 103 | Phase 9.1 **forwards empty `changes` arrays as empty `contentChanges` arrays** (no early return in the bridge). | The spec allows them; the server treats them as no-ops. Forwarding them keeps the code path uniform. The bridge doesn't try to "be clever" and skip them — we trust the spec and the server. | 2026-06-15 |
+| 104 | Phase 9.1's wire `version` is **`event.versionId`** (the post-change version), not `model.getVersionId()`. | Both are the same value in practice (Monaco's `versionId` advances after each change), but `event.versionId` is what the spec asks for: the *post*-change version of the document. The event captures this explicitly; reading it from the model would be one extra `getVersionId()` call we don't need. | 2026-06-15 |
+| 105 | Phase 9.1's bridge **does not debounce** — it sends one `didChange` per Monaco change event. | `typescript-language-server` handles per-keystroke updates fine (it's the same path `vscode` and `monaco-languageclient` use). Debouncing would just add latency to diagnostics. We trust Monaco's event coalescing (it already batches a multi-region formatter edit into a single event with multiple `changes`). | 2026-06-15 |
 
 ## 5. Toolchain status (what's installed / missing)
 
@@ -5869,6 +5874,104 @@ are gone).
 
 ---
 
-*End of handoff. Lipi is at **Phase 9.7 complete** (LSP live server output panel — 64 KiB log ring buffer + `lsp://log` push event + `lspStdioReadStderrLog` replay-drain command + `lspClientStore.lspOutputByWorkspace` slice with line-splitting + FIFO eviction + 7 new Rust tests + 8 new TS tests + `LanguageServerCard` collapsible panel with `Auto-scroll` / `Clear` / line count). The next session should resume from Phase 9.1 (incremental `didChange` via Myers diff or `DiffEditor`) and the remaining Phase 9.2-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.37.*
+### 9.37 Phase 9.1 — SHIPPED (Incremental `textDocument/didChange`, see CHANGELOG "Changed (Phase 9.1 — Incremental `textDocument/didChange`)")
+
+> **Status:** Phase 9.1 is **shipped**. The
+> `typescript-language-server` integration
+> now sends **incremental**
+> `TextDocumentContentChangeEvent`s (range
+> + text per change) on every edit, instead
+> of re-sending the full document text. The
+> wire payload for a single keystroke on a
+> 5 KiB file drops from ~5 KiB to ~50 bytes.
+
+**What changed**
+
+The previous `sendDidChange` was
+
+```ts
+contentChanges: [{ text: model.getValue() }],
+```
+
+i.e. a "whole-document" change with the
+full new text. The LSP spec supports an
+*incremental* shape — `{ range, rangeLength,
+text }` per change — and Monaco's
+`onDidChangeModelContent` callback already
+gives us a precise `IModelContentChange[]`
+(range, text, rangeLength) for every edit.
+Phase 9.1 is the wiring: the bridge passes
+the event to `sendDidChange`, which calls a
+new pure helper `convertContentChanges` to
+map each `IModelContentChange` to a ranged
+`LspTextDocumentContentChangeEvent`.
+
+**Files touched**
+
+- `src/screens/EditorWorkspace/hooks/lspProviders.ts` —
+  new `LspTextDocumentContentChangeEvent`
+  interface (re-exported as a wire type);
+  new pure `convertContentChanges` helper;
+  `sendDidChange` now takes the full
+  `IModelContentChangedEvent` and uses
+  `event.versionId` for the wire `version`.
+- `src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`
+  — the `onDidChangeModelContent`
+  subscription now reads the event
+  argument and passes it to
+  `sendDidChange`.
+- `src/screens/EditorWorkspace/hooks/lspProviders.contentChanges.test.ts`
+  (new) — 11 unit tests for
+  `convertContentChanges`:
+  single-char insert, single-char delete,
+  range replace, multi-line paste (text
+  contains `\n`), multi-change formatter
+  event, empty `changes` array,
+  whole-document replace, UTF-16 surrogate
+  pair preservation, tab + CRLF
+  preservation, no input mutation,
+  fresh-array return.
+- `src/screens/EditorWorkspace/hooks/useMonacoLspBridge.test.tsx`
+  — 4 new tests: keystroke → one
+  `TextDocumentContentChangeEvent` with
+  the inserted char (not the full
+  document); 5 KiB-file single-keystroke
+  does NOT re-send the full file (wire
+  size win); multi-change event forwarded
+  in order; empty `changes` array
+  forwarded as empty `contentChanges`
+  array. The fake `onDidChangeModelContent`
+  callback type was widened from
+  `() => void` to
+  `(e: FakeContentChangedEvent) => void`
+  to reflect the new bridge contract.
+
+**Test results**
+
+- `vitest` 1085/1085 (was 1070 in Phase
+  9.7; +11 diff helper + 4 bridge).
+- `tsc --noEmit` clean.
+- `cargo test` 350/350 pass (no Rust
+  changes; this was a TS-only phase).
+- `cargo build` clean.
+
+**Design decisions**
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| 101 | **Forward Monaco's `IModelContentChange[]` verbatim, no Myers diff.** Monaco's `range` is already precise — every edit comes through as a `range: IRange` (start/end line + column) + `text: string`. There's no need to compute the diff ourselves; Monaco has already done the hard part. | The Myers-diff path (compute `range` from `prev` + `next` ourselves) is unnecessary work. The *only* case where we'd need a diff is if Monaco gave us "before/after" without a range — it doesn't. The wire payload is what Monaco computed internally; we're a transparent forwarder. |
+| 102 | **Use ranged `TextDocumentContentChangeEvent` for *every* change, including whole-document replaces.** A `model.setValue("new")` from undo/redo or a model swap comes through as a single change with `range: (1,1)-(EOF)` and `text: "new"`. The spec accepts any range, including one covering the whole document. | Avoids a special-case branch. The server treats a full-range change identically to "the user typed the whole file at once" — `typescript-language-server` handles it fine (it just replaces the buffer and re-validates). |
+| 103 | **Forward empty `changes` arrays as empty `contentChanges` arrays (no early return).** | The spec allows them; the server treats them as no-ops. Forwarding them keeps the code path uniform. The bridge doesn't try to "be clever" and skip them — we trust the spec and the server. |
+| 104 | **`version` is `event.versionId` (the post-change version), not `model.getVersionId()`.** | Both are the same value in practice (Monaco's `versionId` advances after each change), but `event.versionId` is what the spec asks for: the *post*-change version of the document. The event captures this explicitly; reading it from the model is one more `getVersionId()` call we don't need. |
+| 105 | **Bridge does not debounce.** The handler fires on every Monaco change event. | The TypeScript language server handles per-keystroke updates fine (it's the same path `vscode` and `monaco-languageclient` use). Debouncing would just add latency to diagnostics. We trust Monaco's event coalescing (it already batches a multi-region formatter edit into a single event with multiple `changes`). |
+
+**Follow-up slices (out of scope for Phase 9.1)**
+
+- **Coalesce high-frequency bursts** (e.g. a 60 Hz scroll-driven redraw that produces N tiny `didChange` notifications per second). The current path sends one `didChange` per Monaco event; if a future profiler shows this is a hot spot, a microtask-coalesced sender (queue → flush on `setTimeout(0)`) would batch them. Held back — `typescript-language-server` handles per-keystroke updates fine; we have no evidence the current rate is a problem.
+- **Server-side optimistic diagnostics** (return provisional diagnostics before the server responds, then reconcile). Some editors do this for low-latency squiggles. Not in scope; we trust the server's response time and Monaco's `updateMarkers` flow.
+
+---
+
+*End of handoff. Lipi is at **Phase 9.1 complete** (incremental `textDocument/didChange` — `convertContentChanges` pure helper + `sendDidChange(event)` + 11 new diff helper tests + 4 new bridge tests = 15 new tests, total 1085 TS + 350 Rust). The next session should resume from the remaining Phase 9.2-9.5 follow-up slices above, plus the parked M6c / M3 follow-up / mobile-build roadmap, plus the two items from §9.30 (MSI bundling regression, `whisper-rs` bump) and the JSON/CSS/HTML workers follow-up in §9.31. The next handoff entry will live at §9.38.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

@@ -227,14 +227,21 @@ export function useMonacoLspBridge({
     void startBridge();
 
     // Wire up the model-content subscription
-    // for `didChange`. We re-send the full
-    // content (LSP supports incremental
-    // changes, but Monaco's
-    // `onDidChangeModelContent` event only
-    // gives us the new full text — see
-    // `lspProviders.sendDidChange` for the
-    // rationale).
-    const changeSub = typedEditor.onDidChangeModelContent(async () => {
+    // for `didChange`. Phase 9.1 — send
+    // *incremental* `TextDocumentContentChangeEvent`s
+    // (range + text per change) instead of
+    // the previous full-content re-send.
+    // Monaco's `onDidChangeModelContent`
+    // gives us a `changes[]` of precise
+    // `IModelContentChange` (range, text,
+    // rangeLength), and the LSP spec accepts
+    // multiple changes in one `didChange` —
+    // so the wire payload drops from
+    // "full file text" to "the diff" for
+    // every edit. For a single keystroke
+    // this is ~50 bytes vs. a 5k-line file's
+    // ~50 KiB.
+    const changeSub = typedEditor.onDidChangeModelContent(async (event) => {
       if (cancelled) return;
       const client = useLspClientStore
         .getState()
@@ -242,7 +249,7 @@ export function useMonacoLspBridge({
       const model = typedEditor.getModel();
       if (!client || !model) return;
       try {
-        await sendDidChange(client, model);
+        await sendDidChange(client, model, event);
       } catch {
         // Swallow — see the didOpen branch
         // for the rationale.

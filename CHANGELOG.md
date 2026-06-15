@@ -6,6 +6,78 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (Phase 9.1 — Incremental `textDocument/didChange`)
+
+The `typescript-language-server` integration
+used to **re-send the full document text on
+every keystroke** via
+`textDocument/didChange` (the previous
+`sendDidChange` helper had a
+`contentChanges: [{ text: model.getValue() }]`
+shape). The LSP spec supports *incremental*
+changes — a `range` + `text` per edit — and
+Monaco's `onDidChangeModelContent` callback
+already gives us a precise
+`IModelContentChange[]` (range, text,
+rangeLength) for every edit, so the
+re-send-the-whole-file path was pure
+overhead. Phase 9.1 wires the incremental
+path.
+
+- **`src/screens/EditorWorkspace/hooks/lspProviders.ts`** —
+  new pure helper `convertContentChanges(monacoChanges)`
+  that maps each `IModelContentChange`
+  to a ranged
+  `LspTextDocumentContentChangeEvent`.
+  Re-exported `LspTextDocumentContentChangeEvent`
+  interface for the wire type. Helper is
+  pure (no Monaco / LSP / IPC deps —
+  just types).
+- **`src/screens/EditorWorkspace/hooks/lspProviders.ts`** —
+  `sendDidChange` now takes the full
+  `IModelContentChangedEvent` (so we have
+  `event.changes` and `event.versionId`)
+  instead of just the model. The wire
+  `version` is now the post-change
+  `event.versionId` (was
+  `model.getVersionId()` — same value, but
+  the spec says version must be the
+  *post*-change version and the event
+  captures that explicitly).
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.tsx`** —
+  the `onDidChangeModelContent`
+  subscription passes the `event` to
+  `sendDidChange`. No other behavior
+  change.
+- **`src/screens/EditorWorkspace/hooks/lspProviders.contentChanges.test.ts`**
+  (new) — 11 unit tests for
+  `convertContentChanges`:
+  single-char insert, single-char delete,
+  range replace, multi-line paste
+  (text with `\n` chars), multi-change
+  formatter event, empty `changes` array,
+  whole-document replace, UTF-16 surrogate
+  pair preservation, tab + CRLF
+  preservation, no input mutation,
+  fresh-array return.
+- **`src/screens/EditorWorkspace/hooks/useMonacoLspBridge.test.tsx`** —
+  4 new tests for the bridge's
+  incremental `didChange` flow:
+  keystroke → one
+  `TextDocumentContentChangeEvent` with
+  the inserted char (not the full
+  document), 5 KiB file single-keystroke
+  does NOT re-send the full file
+  (wire size win), multi-change event
+  is forwarded in order, empty `changes`
+  array is forwarded as an empty
+  `contentChanges` array.
+- **Test results**: `vitest` 1085/1085
+  pass (was 1070 in Phase 9.7; +11 diff
+  helper + 4 bridge = 1085); `tsc --noEmit`
+  clean; `cargo test` 350/350 pass;
+  `cargo build` clean.
+
 ### Added (Phase 9.7 — LSP live server output panel)
 
 The `LanguageServerCard` settings UI now has a

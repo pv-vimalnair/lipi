@@ -201,6 +201,16 @@ hound = "3"
 # our m2c-native paths are still stubs that just `Ok(())`,
 # so no source code in src-tauri/ needs to change.
 whisper-rs = { version = "0.16", default-features = false, optional = true }
+# Mobile-build roadmap Phase A: tauri-plugin-stronghold
+# for Android (keyring 3.x doesn't support Android —
+# HANDOFF §9.4 explicitly notes this; Decision #177
+# in HANDOFF §9.48 picks Stronghold as the
+# replacement). Off by default — the `mobile` feature
+# enables it for the Android build. iOS uses
+# `keyring` 3.x's `apple-native` feature (already
+# wired) which covers both macOS + iOS per the
+# keyring 3.6 docs; desktop is unchanged.
+tauri-plugin-stronghold = { version = "2", optional = true }
 
 # Platform-specific deps are added per phase:
 # D2 (editor): notify for FS watcher        [W: shipped]
@@ -300,6 +310,12 @@ internal-tools = []
 # a real on-device STT build: `cargo build --features m2c-native`
 # (or one of `metal` / `cuda` / `vulkan` for hardware-accel).
 m2c-native = ["dep:whisper-rs"]
+# Mobile-build roadmap Phase A: enables the
+# tauri-plugin-stronghold backend for Android. The
+# desktop build does not need this (it has keyring).
+# The Android build enables this; iOS continues to
+# use keyring 3.x's apple-native feature.
+mobile = ["dep:tauri-plugin-stronghold"]
 metal = ["m2c-native", "whisper-rs/metal"]
 cuda = ["m2c-native", "whisper-rs/cuda"]
 vulkan = ["m2c-native", "whisper-rs/vulkan"]

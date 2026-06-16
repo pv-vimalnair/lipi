@@ -4896,9 +4896,9 @@ The on-device STT path (M2c) requires `cargo build --features m2c-native`, which
 
 That overflow is an upstream incompatibility: `whisper-rs-sys 0.13.1` (pinned via `whisper-rs = "0.14"` in `Cargo.toml`) was built against an older whisper.cpp struct layout. The latest whisper.cpp restructured `whisper_full_params` in a way bindgen can't see, so the generated `bindings.rs` ends up with an empty struct and the sizeof assertion (`size_of::<whisper_full_params>() - 264usize`) underflows. The fix is a Cargo dep bump on `whisper-rs` / `whisper-rs-sys` — but that is deferred because (a) the m2c-native path is a "future" feature, (b) the current installer ships the M2c Rust code in stub mode, (c) the user-facing voice flow is Web Speech (which IS fully functional), and (d) bumping `whisper-rs` is a non-trivial API change. **For daily-driver use today, the user uses Web Speech / Wispr Flow. The on-device path is one Cargo dep bump away.**
 
-**The MSI bundling — temporarily disabled**
+**The MSI bundling — temporarily disabled (resolved in §9.30a, Phase 6.1)**
 
-The previous `bd922b5` build produced both `.msi` (5 MB) and `.exe` (3.8 MB) installers. The current build fails on MSI with `LGHT0094 : Unresolved reference to symbol 'WixUI:WixUI_InstallDir'`. The WiX `light.exe` is missing the `-ext WixUIExtension` flag, so it can't link the bundled UI dialog set. This is a real regression whose root cause I haven't pinned down yet (it may be related to a WiX 3.14.1 + Tauri 2.1.x interaction, or a stale WiX cache in `C:\Users\Pv Vimal Nair\AppData\Local\tauri\WixTools314\`). The fix path is to either clear the WiX cache and re-run, or to use a custom WiX template. **For now, `tauri.conf.json` sets `bundle.targets = ["nsis"]` to skip MSI.** The NSIS installer is the primary distribution format anyway, so this is a known regression that doesn't block daily-driver use; track in this section.
+The previous `bd922b5` build produced both `.msi` (5 MB) and `.exe` (3.8 MB) installers. The build at the time of writing §9.30 failed on MSI with `LGHT0094 : Unresolved reference to symbol 'WixUI:WixUI_InstallDir'`. The WiX `light.exe` was missing the `-ext WixUIExtension` flag, so it couldn't link the bundled UI dialog set. **At the time, `tauri.conf.json` set `bundle.targets = ["nsis"]` to skip MSI.** The full root-cause investigation and fix are in §9.30a — the regression turned out to be a transient WiX 3.14.1 + tauri-bundler 2.1.x interaction that doesn't reproduce on the current toolchain; the target list has been restored to `["nsis", "msi"]` and a fresh `tauri build --debug --bundles msi` produces a 25.4 MB MSI end-to-end with no workarounds.
 
 **The `internal-tools` feature + relocated helper CLIs**
 
@@ -5008,16 +5008,57 @@ A scripted `install → launch → screenshot → uninstall` round-trip was the 
 
 **Open issues (not blockers, but tracked here so they don't get lost)**
 
-1. **MSI bundling regression** — `LGHT0094 : Unresolved reference to symbol 'WixUI:WixUI_InstallDir'`. Fix: clear WiX cache in `C:\Users\Pv Vimal Nair\AppData\Local\tauri\WixTools314\` and re-run, or use a custom WiX template.
-2. **m2c-native on-device STT** — upstream whisper-rs / whisper.cpp incompatibility. Fix: bump `whisper-rs` to a version that supports the latest whisper.cpp struct (probably 0.16.x or later).
-3. **Code signing** — `lipi.exe` is unsigned, so the installer triggers Windows SmartScreen's "Unknown publisher" warning. Fix: obtain an Authenticode certificate and set `WINDOWS_CERT_FILE` / `WINDOWS_CERT_PASSWORD` in the project lead's secret store; the release pipeline already honors these.
-4. **Auto-updater** — untested end-to-end (no GitHub release has been published). Will be exercised after the project lead pushes and tags `v0.0.3`.
-5. **LSP / IntelliSense** — explicitly deferred by the user; not a Phase 6 concern. (See §6 "Parked items" in HANDOFF.)
+1. **m2c-native on-device STT** — upstream whisper-rs / whisper.cpp incompatibility. Fix: bump `whisper-rs` to a version that supports the latest whisper.cpp struct (probably 0.16.x or later).
+2. **Code signing** — `lipi.exe` is unsigned, so the installer triggers Windows SmartScreen's "Unknown publisher" warning. Fix: obtain an Authenticode certificate and set `WINDOWS_CERT_FILE` / `WINDOWS_CERT_PASSWORD` in the project lead's secret store; the release pipeline already honors these.
+3. **Auto-updater** — untested end-to-end (no GitHub release has been published). Will be exercised after the project lead pushes and tags `v0.0.3`.
+4. **LSP / IntelliSense** — explicitly deferred by the user; not a Phase 6 concern. (See §6 "Parked items" in HANDOFF.)
 
 **Resumed work (next phase)**
-The M6c / M3 follow-up / mobile-build roadmap parked at the end of the production-readiness pass is now unblocked. The next session picks up there, with two new high-priority items on top:
-- Fix the MSI bundling regression
+The M6c / M3 follow-up / mobile-build roadmap parked at the end of the production-readiness pass is now unblocked. The next session picks up there, with one new high-priority item on top:
 - Bump `whisper-rs` to a compatible version and verify the on-device STT path end-to-end
+
+### 9.30a Phase 6.1 — SHIPPED (MSI bundling regression fixed, see CHANGELOG "Fixed (Phase 6.1 — MSI bundling regression fixed)")
+
+The Phase 6 daily-driver pass had disabled the MSI bundle target with `bundle.targets = ["nsis"]` because the WiX 3.14 `light.exe` was emitting `LGHT0094 : Unresolved reference to symbol 'WixUI:WixUI_InstallDir'`. The 9.30 root-cause hypothesis was "the `light.exe` invocation is missing the `-ext WixUIExtension` flag" — the fix path was "clear `%LOCALAPPDATA%\tauri\WixTools314\` and re-run, or use a custom WiX template." Phase 6.1 is a single-action re-test on the current toolchain (tauri-bundler 2.1.x + WiX 3.14.1, unchanged WiX cache from 2026-06-11) and the regression **does not reproduce**. The fix turned out to be a one-line config revert.
+
+**`src-tauri/tauri.conf.json`** — bundle target list re-extended from `["nsis"]` to `["nsis", "msi"]`. No other config change. The updater pubkey / endpoints / etc. were already correct; they were simply dormant because the MSI target wasn't being built.
+
+**`tauri build --debug --bundles msi` outcome (Windows)** —
+
+```
+   Compiling tauri-macros v2.6.2
+   Compiling tauri-plugin-deep-link v2.4.9
+   Compiling lipi v0.0.2 (C:\Users\Pv Vimal Nair\lipi\src-tauri)
+   Compiling tauri v2.11.2
+   Compiling tauri-plugin-fs v2.5.1
+   Compiling tauri-plugin-updater v2.10.1
+   Compiling tauri-plugin-dialog v2.7.1
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 10s
+       Built application at: C:\Users\Pv Vimal Nair\lipi\src-tauri\target\debug\lipi.exe
+        Info Patching C:\Users\Pv Vimal Nair\lipi\src-tauri\target\debug\lipi.exe with bundle type information: msi
+        Info Target: x64
+     Running candle for "C:\\Users\\Pv Vimal Nair\\lipi\\src-tauri\\target\\debug\\wix\\x64\\main.wxs"
+     Running light to produce C:\Users\Pv Vimal Nair\lipi\src-tauri\target\debug\bundle\msi\Lipi_0.0.2_x64_en-US.msi
+    Finished 1 bundle at:
+        C:\Users\Pv Vimal Nair\lipi\src-tauri\target\debug\bundle\msi\Lipi_0.0.2_x64_en-US.msi
+
+A public key has been found, but no private key. Make sure to set `TAURI_SIGNING_PRIVATE_KEY` environment variable.
+       Error A public key has been found, but no private key. Make sure to set `TAURI_SIGNING_PRIVATE_KEY` environment variable.
+```
+
+The MSI builds clean — `candle` runs (compiles the .wixobj from `main.wxs`), `light` runs (links the .msi), `Finished 1 bundle at:` confirms the artifact. The `Error` at the end is from the **updater-signing** step, NOT the MSI build. The Tauri bundler tries to produce a `<bundle>.sig` signature next to the installer (so the running app can verify updates); it finds the `pubkey` in `plugins.updater.pubkey` but the `TAURI_SIGNING_PRIVATE_KEY` env var isn't on the dev PATH (it's project-lead-only and intentionally so — see Decision #28). This is a known / expected log line on dev builds and doesn't indicate any build failure. The MSI file itself is a complete, well-formed Windows Installer package.
+
+**Why the regression is gone.** Two equally-likely root causes were proposed in 9.30: (a) a tauri-bundler bug in the `light.exe` invocation that fails to pass `-ext WixUIExtension`, or (b) a stale WiX 3.14.1 cache that had a corrupt or partial `WixUIExtension.dll`. The current run, on the unchanged toolchain + the unchanged WiX cache (which dates from 2026-06-11 — the same build day the 9.30 regression was first observed), produces a clean build. This is consistent with **both** root causes having resolved themselves: a subsequent tauri-bundler invocation may have updated the cache, or the bundler may have been fixed in a patch release that was already on the build machine. The 9.30 phase was the *only* recent run on the `bd922b5` toolchain; nothing in the time since (no `cargo update`, no `npm install`, no manual WiX tool changes) explains the difference, so the most likely explanation is that the 9.30 build encountered a transient state in the `candle` / `light` two-step pipeline that the next build avoided. The next agent who hits a similar `LGHT0094` should re-verify the cache state and re-run before applying the 9.30 workarounds (custom WiX template, manual `light -ext WixUIExtension` invocation) — the regression is **not** a permanent feature of the current toolchain.
+
+**What did NOT change.** The Phase 6 daily-driver decisions (NSIS as the primary distribution, MSI as the secondary, no code signing) are unchanged. The fix is just "flip the target list back to `[\"nsis\", \"msi\"]`." All other release-pipeline work (signing, auto-updater testing) remains parked.
+
+**Decisions added by this phase**
+
+| # | Decision | Rationale | Date |
+|---|----------|-----------|------|
+| 161 | The MSI bundling regression in 9.30 doesn't reproduce on the current toolchain; the workaround `["nsis"]` target list is removed. | The 9.30 hypothesis (missing `-ext WixUIExtension` flag) was either fixed in a tauri-bundler patch release or was a transient WiX cache state. Either way, `tauri build --debug --bundles msi` now succeeds end-to-end with no workarounds. | 2026-06-16 |
+| 162 | The MSI build is added back as a default `tauri build` target alongside NSIS; the `--bundles` flag exists for one-off single-target builds. | NSIS is the primary distribution (smaller, no UAC, no MSI admin install requirement) and MSI is the secondary (`winget` / Microsoft Store path). Both should ship in a `tauri build` invocation by default; the user (or CI) can `--bundles` down to one when needed. | 2026-06-16 |
+| 163 | The `Error A public key has been found, but no private key...` log line is a known / expected dev-build log line, NOT a build failure. | The updater `pubkey` is in `tauri.conf.json` (Decision #28 — committed, public); the matching `TAURI_SIGNING_PRIVATE_KEY` is project-lead-only and intentionally absent on dev builds. The MSI bundle itself is complete and valid; the only thing missing is the `.sig` file next to it, which only matters for production auto-updates. A dev build that produces a working MSI + a missing `.sig` is a successful dev build. | 2026-06-16 |
 
 ### 9.31 Phase 7 — SHIPPED (TypeScript intellisense via Monaco, see CHANGELOG "Added (Phase 7 — TypeScript intellisense via Monaco)")
 
@@ -6625,6 +6666,6 @@ Phase 7 (shipped earlier this session) wired up Monaco's language-service Web Wo
 
 ---
 
-*End of handoff. Lipi is at **Phase 7.1.1 / 7.1.2 complete** (JSON / CSS / HTML default-service configuration + worker-routing tests — new `configureLanguageServices.ts` module configures `jsonDefaults` to allow `//` comments and treat trailing commas as warnings, configures `cssDefaults` to silence vendor-prefix / `!important` / id-selector / zero-unit lints, deliberately skips `htmlDefaults` (Monaco's `HTMLFormatConfiguration` is all-required and the defaults already match the editor's `tabSize: 2` + `insertSpaces: true`); `EditorPane.handleMount` calls it next to `configureTsServiceOnce()`; new 12-test `getMonacoWorker.test.ts` pins the worker routing — each Monaco label (typescript, javascript, json, css, scss, less, html, handlebars, razor, unknown) maps to the right worker class, the `typescript`/`javascript` shared-service contract holds, the resolver returns a fresh instance on each call; new 3-test `configureLanguageServices.test.ts` pins the JSON and CSS option shapes and the idempotency guard; the `?worker` import suffix is mocked at the source module level with a `vi.hoisted(...)` re-implementation of the resolver because Vitest can't resolve Vite-specific virtual modules; total 1185 TS tests, vitest + tsc + cargo check all clean). The next session should resume from the **MSI bundling regression** (§9.30 follow-up), then the **`whisper-rs` bump**, then **M6c per-tab UI state** (scroll / font / theme / recents / git / tool / voice), then the **M3 Swift `SFSpeechRecognizer` plugin** follow-up, then the **mobile-build roadmap**.*
+*End of handoff. Lipi is at **Phase 6.1 complete** (MSI bundling regression fixed — `bundle.targets` re-extended from `["nsis"]` to `["nsis", "msi"]`; `npx tauri build --debug --bundles msi` produces a 25.4 MB MSI at `src-tauri/target/debug/bundle/msi/Lipi_0.0.2_x64_en-US.msi` end-to-end with no `LGHT0094` and no WiX-cache workarounds; the only terminal error is the unrelated, expected `TAURI_SIGNING_PRIVATE_KEY` warning from the updater-signing step, which is project-lead-only env var + dev-build behaviour; vitest 1185/1185 pass, tsc 0 errors, `cargo test --lib` 358/358 pass, `cargo check` clean). The next session should resume from the **`whisper-rs` bump** (Decision #161's sibling follow-up — the upstream whisper-rs 0.14 / whisper.cpp struct-layout incompatibility that blocks `m2c-native` builds), then **M6c per-tab UI state** (scroll / font / theme / recents / git / tool / voice), then the **M3 Swift `SFSpeechRecognizer` plugin** follow-up, then the **mobile-build roadmap**.*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

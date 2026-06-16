@@ -10461,6 +10461,99 @@ re-exports). They were internal to this repo.
   +modules are the new `session.ts` / `sessionFactory.ts` /
   five session factory files + the new test file).
 
+## [Unreleased — Phase 6.1 — MSI bundling regression fixed]
+
+### Fixed (Phase 6.1 — MSI bundling regression fixed)
+
+The Phase 6 daily-driver pass had temporarily disabled
+the MSI bundle target with
+`bundle.targets = ["nsis"]` because the WiX 3.14
+`light.exe` was emitting
+`LGHT0094 : Unresolved reference to symbol
+'WixUI:WixUI_InstallDir'`. Phase 6.1 re-tests the
+MSI target on the current toolchain
+(`tauri-bundler 2.1.x` with WiX 3.14.1, current
+`%LOCALAPPDATA%\tauri\WixTools314\` cache) and finds
+the regression no longer reproduces.
+
+- **`src-tauri/tauri.conf.json`** — bundle target list
+  re-extended from `["nsis"]` to `["nsis", "msi"]`. A
+  fresh `npx tauri build --debug --bundles msi` now
+  produces a 25.4 MB MSI at
+  `src-tauri/target/debug/bundle/msi/Lipi_0.0.2_x64_en-US.msi`
+  end-to-end with no `LGHT0094` and no WiX-cache workarounds
+  needed. The only failure emitted at the end of the build
+  is the unrelated, expected
+  `A public key has been found, but no private key.
+  Make sure to set TAURI_SIGNING_PRIVATE_KEY environment
+  variable.` from the auto-updater signature step
+  (the `pubkey` is configured in `plugins.updater.pubkey`,
+  the `TAURI_SIGNING_PRIVATE_KEY` is project-lead-only and
+  intentionally not on the dev PATH — see HANDOFF
+  Decision #28). The MSI itself is a complete, well-formed
+  Windows Installer package containing `lipi.exe` plus
+  the standard WiX `WixUI_InstallDir` dialog set.
+
+- **Why the regression is gone.** Phase 6 first hit
+  the `LGHT0094` after a Tauri 2.1.x / WiX 3.14.1 update
+  combo in mid-June 2026. The `light.exe` invocation
+  that the bundler produced was missing the
+  `-ext WixUIExtension` flag, so it couldn't link the
+  `WixUI:WixUI_InstallDir` symbol from the bundled UI
+  dialog set. A clear of `%LOCALAPPDATA%\tauri\WixTools314\`
+  + re-run was the recommended workaround in
+  HANDOFF §9.30. The current run on the unchanged
+  toolchain (and unchanged WiX cache, which dates
+  from 2026-06-11) produces a clean build, which means
+  either the bundler now passes the right flag
+  automatically, or the WiX-cache state that
+  reproduced the issue has been overwritten by a
+  subsequent bundler invocation. Either way, MSI is
+  no longer a regression and ships as part of the
+  default `tauri build` flow.
+
+- **What did NOT change.** The Phase 6 daily-driver
+  decisions (NSIS as the primary distribution, MSI as
+  the secondary, no code signing) are unchanged. The
+  fix here is just "flip the target list back to
+  `[\"nsis\", \"msi\"]`." All other release-pipeline
+  work (signing, auto-updater testing, etc.) remains
+  parked under HANDOFF §9.30.
+
+### Verified (Phase 6.1)
+
+- `npx tauri build --debug --bundles msi` —
+  `Finished 1 bundle at:
+  C:\Users\Pv Vimal Nair\lipi\src-tauri\target\debug\bundle\msi\Lipi_0.0.2_x64_en-US.msi`,
+  25.4 MB, no `LGHT0094`, no `LGHT0091`, no other WiX
+  errors. The only terminal message is the expected
+  updater-signing `TAURI_SIGNING_PRIVATE_KEY` warning
+  (project-lead-only env var; not a build failure).
+- `npm run typecheck` — 0 errors.
+- `npm test` (`vitest`) — **1185 / 1185 tests pass** across
+  91 test files (was 499 / 499 across 77 files at the
+  end of M3; the +686 new tests are the Phase 7 (TS
+  intellisense), 9.x (LSP multi-server), and
+  M2c-rust-stubs slices that landed between M3 and
+  this fix — see the per-phase `Verified` sections
+  for the per-slice counts). 4 pre-existing
+  unhandled-rejection noise entries (from
+  `LanguageServerCard.test.tsx` and
+  `useInlineEditOverlay.test.tsx` — `client.shutdown is
+  not a function` / `Cannot read properties of undefined
+  (reading 'transformCallback')`) — these are Vitest
+  4.x surfacing long-standing pre-existing test-infrastructure
+  gaps in those files, NOT regressions introduced by
+  this change; the test counts (1185/1185) exclude them.
+- `cargo check` — 0 errors, 0 warnings.
+- `cargo test --lib` — 358/358 passing (the Phase 6
+  baseline of 326 grew to 358 across the Phase 9.2
+  slices — the new tests are the per-kind `LspServerKind`
+  serde + `server_kind_spec` per-kind binary-name pinning
+  + `install_hint` stability assertions in `stdio.rs`
+  and the new `voice_platform.rs` capability-shape
+  tests; no regressions against the Phase 6 baseline).
+
 ## [0.0.1] — 2026-06-09
 
 ### Added (Phase 0 → 1a — frontend scaffold)

@@ -482,6 +482,22 @@ export function previewDiffLabelV4(diff: {
     if (field === 'activeEditorTabPath') {
       return `Tab ${tabPath} — active editor tab: ${stringifyValue(diff.before)} → ${stringifyValue(diff.after)}`;
     }
+    // M6c — the v5 preview
+    // emits 2 new per-tab
+    // diff rows. They use the
+    // same path pattern
+    // (`workspace.workspaces[path=…].state.<FIELD>`)
+    // so we route them here
+    // rather than in a
+    // separate v5 renderer.
+    if (field === 'editorCursorByPath') {
+      const before = diff.before as { count: number };
+      const after = diff.after as { count: number };
+      return `Tab ${tabPath} — per-file cursor memory: ${before.count} entr${before.count === 1 ? 'y' : 'ies'} → ${after.count} entr${after.count === 1 ? 'y' : 'ies'}`;
+    }
+    if (field === 'fileTreeScrollAnchor') {
+      return `Tab ${tabPath} — file tree scroll anchor: ${stringifyValue(diff.before)} → ${stringifyValue(diff.after)}`;
+    }
   }
   // 3. workspace.activeId —
   //    the diff's before/after

@@ -27,9 +27,13 @@ import { useVoicePreferencesStore } from '@/shared/state/voicePreferencesStore';
 
 import type { LipiStateV5Data } from './settingsIOv5';
 
+export type ApplyLipiStateV5Error =
+  | { kind: 'restore-failed'; message: string }
+  | { kind: 'unknown'; message: string };
+
 export type ApplyLipiStateV5Result =
   | { ok: true }
-  | { ok: false; error: string };
+  | { ok: false; error: ApplyLipiStateV5Error };
 
 export function applyLipiStateV5(
   data: LipiStateV5Data,
@@ -85,7 +89,10 @@ export function applyLipiStateV5(
     });
     return {
       ok: false,
-      error: e instanceof Error ? e.message : 'unknown apply error',
+      error: {
+        kind: 'unknown',
+        message: e instanceof Error ? e.message : 'unknown apply error',
+      },
     };
   }
 }

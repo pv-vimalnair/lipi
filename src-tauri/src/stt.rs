@@ -443,15 +443,18 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    #[cfg(not(feature = "m2c-native"))]
     #[test]
     fn list_installed_models_includes_every_curated_id_in_stub_mode() {
-        // This test is the same for both the stub and the
-        // real path, but in the stub path it returns every
-        // curated model (no real files). In the real path it
-        // filters by what's actually on disk. We assert the
-        // stub-shape behavior — that every curated id is
-        // present — because that's the only thing that
-        // doesn't depend on `m2c-native` being built.
+        // Stub-only test: `list_installed_models` in the stub
+        // branch returns every curated id (no real files to
+        // filter on), so the test asserts the stub-shape
+        // behavior — that every curated id is present. In the
+        // real (`m2c-native`) branch the function filters by
+        // `is_model_installed`, so without any files on disk
+        // the list is empty; that case is covered by the
+        // separate `list_installed_models_is_empty_when_no_models_on_disk_in_real_path`
+        // test below.
         let dir = fresh_dir("installed-stub");
         let installed = list_installed_models(&dir);
         for m in CURATED_MODELS {
@@ -461,6 +464,25 @@ mod tests {
                 m.id
             );
         }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(feature = "m2c-native")]
+    #[test]
+    fn list_installed_models_is_empty_when_no_models_on_disk_in_real_path() {
+        // Real-path counterpart to the stub-only test above.
+        // `list_installed_models` in the `m2c-native` branch
+        // filters by `is_model_installed`, so with a fresh
+        // (empty) app data dir the list is empty. This pins
+        // the contract that the real path correctly returns
+        // empty (not "every curated id") before any model has
+        // been installed.
+        let dir = fresh_dir("installed-real-empty");
+        let installed = list_installed_models(&dir);
+        assert!(
+            installed.is_empty(),
+            "real-path list_installed_models should be empty on a fresh app data dir; got {installed:?}"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

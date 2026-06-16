@@ -183,7 +183,24 @@ hound = "3"
 # whisper-rs is gated. The m2c-native feature pulls it in
 # along with the C++ build via whisper-rs-sys (which needs
 # libclang + cmake on the build machine).
-whisper-rs = { version = "0.14", default-features = false, optional = true }
+#
+# Bumped 2026-06-16 from "0.14" to "0.16": the vendored
+# whisper-rs-sys 0.13.1 ships a `bindings.rs` whose static
+# size assertion (`size_of::<whisper_full_params>() - 264usize`)
+# was written for the pre-v1.8 struct layout. whisper.cpp v1.8+
+# added a forward declaration of `whisper_full_params` near
+# the top of the header (the C-only-build guard), which
+# bindgen now picks up first and emits as an opaque type
+# (size 1). The vendored size assertion underflows and the
+# `cargo check --features m2c-native` build dies with
+# `error[E0080]: attempt to compute 1_usize - 264_usize`.
+# whisper-rs 0.16 pulls in whisper-rs-sys 0.15, which
+# vendors a newer whisper.cpp + a matching size assertion,
+# so the build succeeds. The API moved (WhisperContext::new
+# -> WhisperContext::new_with_params + create_state) but
+# our m2c-native paths are still stubs that just `Ok(())`,
+# so no source code in src-tauri/ needs to change.
+whisper-rs = { version = "0.16", default-features = false, optional = true }
 
 # Platform-specific deps are added per phase:
 # D2 (editor): notify for FS watcher        [W: shipped]

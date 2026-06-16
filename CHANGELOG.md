@@ -10554,6 +10554,126 @@ the regression no longer reproduces.
   and the new `voice_platform.rs` capability-shape
   tests; no regressions against the Phase 6 baseline).
 
+## [Unreleased — Phase 6.2 — `whisper-rs` 0.14 → 0.16]
+
+### Changed (Phase 6.2 — `whisper-rs` 0.14 → 0.16)
+
+The §9.30 hand-off noted that
+`cargo build --features m2c-native` was broken because
+`whisper-rs-sys 0.13.1` (transitively pulled in by
+`whisper-rs = "0.14"`) failed with
+`error[E0080]: attempt to compute 1_usize - 264_usize,
+which would overflow` at the bindgen static assertion.
+Phase 6.2 is the upstream-bump fix: the cause was that
+whisper.cpp v1.8+ added a forward declaration
+`struct whisper_full_params;` near the top of
+`whisper.h` (inside the `extern "C"` block) that
+bindgen picks up first, producing an opaque struct
+(`_address: u8`, size 1) and tripping the static
+264-byte size assertion that `whisper-rs-sys 0.13.1`
+vendors. The vendored `bindings.rs` was generated
+against a pre-v1.8 whisper.cpp commit and the size
+assertion didn't match the new bindgen output.
+
+- **`src-tauri/Cargo.toml`** —
+  `whisper-rs = { version = "0.14", default-features = false, optional = true }`
+  → `whisper-rs = { version = "0.16", default-features = false, optional = true }`
+  (with a 5-line comment block explaining the bump
+  rationale, the size-assertion-underflow mechanism,
+  and the API renames that don't affect us because
+  the `m2c-native` paths are still stubs). The
+  Cargo lockfile resolves to
+  `whisper-rs v0.16.0` + `whisper-rs-sys v0.15.0`
+  (was `0.14.4` + `0.13.1`).
+- **No `src-tauri/` source change is needed.**
+  The m2c-native `start_listening` /
+  `stop_listening` / `install_model` / `remove_model`
+  / `set_active_model` bodies are all stubs that
+  return `Ok(())` or `Ok(session_id)`, so the
+  upstream API rename
+  (`WhisperContext::new` →
+  `WhisperContext::new_with_params` +
+  `WhisperContext::create_state` +
+  `WhisperState::full`) is forward-compatible. When
+  the real cpal + whisper inference wiring lands
+  (Decision #166, one-day follow-up on a real
+  machine), it'll use the new API.
+- **`src-tauri/src/stt.rs`** — the previously
+  stub-only test
+  `stt::tests::list_installed_models_includes_every_curated_id_in_stub_mode`
+  is now gated with
+  `#[cfg(not(feature = "m2c-native"))]` (it asserts
+  the stub-shape contract: every curated id is
+  present), and a new sibling test
+  `stt::tests::list_installed_models_is_empty_when_no_models_on_disk_in_real_path`
+  is gated with
+  `#[cfg(feature = "m2c-native")]` (it pins the
+  real-path contract: a fresh app data dir →
+  empty installed list, not "every curated id").
+  The function behaviour is unchanged; the split
+  is needed because the two cfg-gated branches
+  have different return shapes and the original
+  test was deliberately named `_in_stub_mode`.
+
+### What did NOT change (Phase 6.2)
+
+- The stub mode (no `m2c-native` feature) still ships
+  the same `Ok(())` / placeholder text / no-network
+  behaviour it did before — the bump is purely
+  additive for the real-path build.
+- The curated model list (`ggml-base.en`,
+  `ggml-tiny.en`, `ggml-base`, `ggml-tiny`), the
+  `active_model.json` file, the
+  install/remove/set-active lifecycle, and the JS
+  contract (`stt://download-progress`,
+  `stt://transcript`, `stt://error` events) are
+  all unchanged.
+- The M3 Swift `SFSpeechRecognizer` plugin
+  (mobile) is the next voice follow-up, not the
+  desktop cpal + whisper integration — that one
+  needs a real microphone and is parked
+  (Decision #166).
+- The Web Speech / Wispr Flow daily-driver path
+  (the `webSpeechSTT.ts` / `webSpeechTypes.ts` /
+  `useVoiceCapture.webspeech.test.tsx` slice) is
+  unaffected; it never touches `whisper-rs` or any
+  Rust-side STT code.
+
+### Verified (Phase 6.2)
+
+- `cargo check --features m2c-native --lib` —
+  clean (0 errors, 7 pre-existing stub warnings in
+  `stt_capture.rs` that are all on
+  `#[cfg(feature = "m2c-native")]` code and are
+  noise from `m2c-native` being buildable for the
+  first time:
+  `unused import: Emitter`,
+  `unused import: STT_EVENT_TRANSCRIPT`,
+  `type LiveSession is more private than the item
+  SessionRegistry`,
+  `struct LiveSession is never constructed`,
+  `associated function new is never used`,
+  `type alias SessionRegistry is never used`,
+  `function now_ms is never used`. All predate
+  Phase 6.2.).
+- `cargo test --lib --features m2c-native` —
+  **358 / 358 tests pass** (the new
+  `list_installed_models_is_empty_when_no_models_on_disk_in_real_path`
+  is included and passing).
+- `cargo test --lib` (default, no `m2c-native`
+  feature) — **358 / 358 tests pass** (the
+  now-cfg-gated
+  `list_installed_models_includes_every_curated_id_in_stub_mode`
+  is included and passing in stub mode).
+- `npx tsc --noEmit` — 0 errors.
+- `npx vitest run` — **1185 / 1185 tests pass**
+  (4 pre-existing unhandled-rejection noise entries
+  from `LanguageServerCard.test.tsx` +
+  `useInlineEditOverlay.test.tsx` — pre-Phase-6.2
+  noise from Vitest 4.x's unhandled-error
+  detection on background listeners; not introduced
+  by this change).
+
 ## [0.0.1] — 2026-06-09
 
 ### Added (Phase 0 → 1a — frontend scaffold)

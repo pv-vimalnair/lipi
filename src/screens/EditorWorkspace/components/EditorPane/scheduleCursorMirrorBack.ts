@@ -64,6 +64,18 @@ interface ScheduleEntry {
 const schedules = new Map<string, ScheduleEntry>();
 
 function key(tabId: string, filePath: string): string {
+  // `'\0'` cannot appear in either field —
+  // tabId is a UUID-like string, filePath is a
+  // POSIX / Windows path, neither can contain
+  // a literal NUL byte. Using `'\0'` as a
+  // separator is therefore collision-free for
+  // any plausible input, even when filePath
+  // contains `:` (Windows drive letters) or
+  // `/` / `\` (path separators).
+  //
+  // Decision #168 (HANDOFF §9.46): the throttle
+  // helper keeps per-(tab, file) schedules in
+  // a single Map keyed by this composite.
   return `${tabId}\0${filePath}`;
 }
 
@@ -98,6 +110,12 @@ function cancel(entry: ScheduleEntry): void {
  * test envs (and in environments
  * where `requestIdleCallback` is
  * missing).
+ *
+ * Decision #168 (HANDOFF §9.46):
+ * `requestIdleCallback` with a
+ * `setTimeout(500ms)` fallback, plus a
+ * synchronous `_flushPendingCursor` for
+ * unmount-time flushing.
  *
  * Returns a `dispose` function.
  * Calling `dispose`:

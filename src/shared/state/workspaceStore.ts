@@ -155,6 +155,13 @@ export interface EditorCursor {
 }
 
 export interface WorkspaceTabState {
+  // M6c extends this with 2 new fields
+  // (`editorCursorByPath` +
+  // `fileTreeScrollAnchor`). The 4 M6b
+  // fields are preserved unchanged. See
+  // Decision #167 (HANDOFF §9.46) for the
+  // rationale and the v3 → v4 → v5 migration
+  // synthesis behaviour.
   // --- M6b fields (unchanged) ---
   expandedDirs: string[];
   selectedPath: string | null;
@@ -182,21 +189,50 @@ export interface WorkspaceTabState {
    * the tree).
    *
    * M6c.
+   *
+   * Decision #169 (HANDOFF §9.46): the anchor is a
+   * `data-tree-path` (the file path itself), not a
+   * pixel offset. This makes rehydrate layout-agnostic
+   * (the file tree has variable row heights) and
+   * works across machines with different display
+   * scaling.
    */
   fileTreeScrollAnchor: string | null;
 }
 
 /**
  * The canonical empty
- * `WorkspaceTabState`. All tabs
- * are initialised with this on
- * `open()` (M6b), and tabs
- * hydrated from a pre-M6b v1
- * `localStorage` key (no
- * `state` field) get a copy
- * of this. Exported for tests
- * and the v3 → v4 settings
- * import migration.
+ * `WorkspaceTabState`. The source of
+ * truth for the no-tab / freshly-opened
+ * default. Used by:
+ *   - `open()` (M6b) — every new tab
+ *     starts with a copy of this.
+ *   - `hydrate` — partial-state tabs
+ *     (missing fields, pre-M6b tabs
+ *     without a `state` field) are
+ *     padded to a copy of this.
+ *   - `activeTabState` selector —
+ *     returns a copy of this when no
+ *     tab is active.
+ *   - The v3 → v4 → v5 settings
+ *     migration chain — missing M6c
+ *     fields are synthesised with the
+ *     values from this.
+ *   - The tests — every test that
+ *     builds a `WorkspaceTabState`
+ *     fixture spreads this and
+ *     overrides the fields it cares
+ *     about.
+ *
+ * Exported so the v4 / v5 settings
+ * modules, the test suite, and any
+ * future restore path can all share
+ * the same default.
+ *
+ * M6c extends the 4 M6b fields with
+ * `editorCursorByPath: {}` +
+ * `fileTreeScrollAnchor: null` (see
+ * Decision #167, HANDOFF §9.46).
  */
 export const EMPTY_TAB_STATE: WorkspaceTabState = {
   expandedDirs: [],
@@ -405,7 +441,16 @@ interface WorkspaceState {
    * defence-in-depth in case a programmatic set happens
    * post-subscribe).
    *
-   * No-op if the tab id is not in the store. */
+   * No-op if the tab id is not in the store.
+   *
+   * Decision #171 (HANDOFF §9.46): the equality
+   * short-circuit is the loop-guard between the
+   * `ActiveEditor` rehydrate (`onDidChangeModel` →
+   * `editor.setPosition`) and the mirror-back
+   * (`onDidChangeCursorPosition` → this action). The
+   * two effects in `EditorPane.tsx` are tightly
+   * coupled: if you change one, you must change the
+   * other. */
   setEditorCursor: (
     tabId: string,
     filePath: string,
@@ -575,6 +620,37 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         ) {
           // M6b: validate / synthesise
           // the per-tab `state` field.
+          //
+          // M6c: the 2 new fields
+          // (`editorCursorByPath` and
+          // `fileTreeScrollAnchor`) follow
+          // the same defensive
+          // re-validation pattern as the
+          // 4 M6b fields above:
+          //   - non-object values
+          //     collapse to the
+          //     `EMPTY_TAB_STATE`
+          //     default
+          //   - map entries with
+          //     the wrong shape are
+          //     dropped (not
+          //     rejected)
+          //   - string / null
+          //     fields are
+          //     `typeof`-checked
+          //
+          // The pattern is "defensive
+          // against a future version's
+          // bug that drops a field, or
+          // a partially-corrupted
+          // localStorage entry." A
+          // next agent who changes
+          // this block should keep
+          // the same fall-back-to-
+          // default behaviour. See
+          // HANDOFF §9.46 (M6c) and
+          // §9.23 (M6b) for the
+          // rationale.
           const tab = w as WorkspaceTab;
           const rawState = (w as { state?: unknown }).state;
           const state: WorkspaceTabState =

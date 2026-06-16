@@ -220,6 +220,18 @@ function TreeRoot({ rootPath }: TreeRootProps) {
     let cancelled = false;
     const tryScroll = () => {
       if (cancelled) return;
+      // `CSS.escape` handles paths with `.`
+      // (e.g. Windows drive letters like
+      // `C:\proj\file.ts` or file extensions
+      // like `package.json`), or `\` (Windows
+      // path separators). Without the escape,
+      // the `.` in `package.json` would be
+      // parsed as a CSS class-name separator
+      // and the query would silently miss.
+      // `vitest.setup.ts` polyfills `CSS.escape`
+      // for jsdom (which doesn't ship it);
+      // production is unaffected (real browsers
+      // all implement it).
       const row = scrollContainerRef.current?.querySelector<HTMLElement>(
         `[data-tree-path="${CSS.escape(anchor)}"]`,
       );
@@ -246,6 +258,14 @@ function TreeRoot({ rootPath }: TreeRootProps) {
   // during a fast wheel; the rAF
   // throttling caps us at one read per
   // frame).
+  //
+  // Decision #169 (HANDOFF §9.46):
+  // the anchor is the topmost row's
+  // `data-tree-path`, NOT a pixel
+  // offset. This makes the rehydrate
+  // layout-agnostic and survives
+  // different display scaling / row
+  // height settings.
   //
   // The transition-only write guard
   // prevents null-storms on an empty
@@ -611,6 +631,19 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
         // attribute to every row so
         // the rehydrate and
         // mirror-back paths work.
+        //
+        // Decision #169 (HANDOFF
+        // §9.46): the anchor is the
+        // topmost row's `data-tree-path`
+        // (the file path itself), not
+        // a pixel offset. The
+        // rehydrate uses a
+        // CSS.escape'd attribute
+        // selector to look up the row.
+        // (The `data-tree-path`
+        // attribute is part of the
+        // Decision #169 mechanism, not
+        // a separate decision.)
         data-tree-path={entry.path}
         style={{ paddingLeft: `${depth * INDENT_PX + 8}px` }}
         onClick={handleClick}

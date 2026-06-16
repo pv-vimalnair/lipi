@@ -10771,10 +10771,14 @@ for a later phase.
 
 See `HANDOFF.md` §9.46 for the full writeup. New
 decisions are #167 (data model extension),
-#168 (mirror-back ownership — components, not
-store hooks), #169 (throttle + flush contract),
-#170 (v5 format string), and #171 (`data-tree-path`
-DOM marker for scroll anchor lookups).
+#168 (editor cursor mirror-back throttle +
+flush-on-unmount), #169 (file-tree scroll
+anchor is the topmost path, not a pixel
+offset), #170 (v5 format string), and #171
+(M6b loop-guard pattern preserved for the 2
+new fields — `setEditorCursor` equality
+short-circuit + scroll mirror-back transition-
+only write guard).
 
 ### No changes (Phase M6c — explicit non-changes)
 
@@ -10791,8 +10795,19 @@ DOM marker for scroll anchor lookups).
 ### Verified (Phase M6c)
 
 - `npx tsc -b` — 0 errors.
-- `npx vitest run` — all green (no new failures vs.
-  the M6b baseline; new tests cover the M6c additions).
+- `npx vitest run` — **1227 / 1227 pass** (was 1185
+  in Phase 6.2; +42 new M6c tests across
+  `settingsIOv5.test.ts` (10),
+  `settingsIOv5.apply.test.ts` (3),
+  `settingsIOv5.preview.test.ts` (3),
+  `scheduleCursorMirrorBack.test.ts` (5),
+  `EditorPane.cursor.test.tsx` (5),
+  `FileTreePane.scroll.test.tsx` (5), and the
+  M6c additions to `workspaceStore.test.ts` (5+)).
+  The 4 pre-existing unhandled-rejection noise
+  entries (`LanguageServerCard.test.tsx` +
+  `useInlineEditOverlay.test.tsx`, Tauri
+  `transformCallback` in jsdom) are unchanged.
 - `npm run build` — clean.
 - `cargo check --features m2c-native --lib` — clean
   (no Rust changes).

@@ -33,6 +33,12 @@ import { parseLipiStateV4, type LipiStateV4Data } from './settingsIOv4';
 
 export const LIPI_STATE_V5_VERSION = 5;
 export const LIPI_STATE_V5_FORMAT = 'lipi-state';
+// Decision #170 (HANDOFF §9.46): the format magic
+// stays `'lipi-state'` across v3 → v4 → v5 (it
+// identifies "this is a lipi settings file, not a
+// random JSON blob"); only the version integer bumps.
+// A v6+ migration will keep the same `FORMAT` and
+// bump `VERSION` to 6.
 
 export interface ExportedWorkspaceTabV5 {
   id: string;
@@ -71,6 +77,15 @@ export interface LipiStateV5File {
 
 export type LipiStateV5ParseResult =
   | { ok: true; data: LipiStateV5Data; sourceFormat: 'v3' | 'v4' | 'v5' }
+  // `sourceFormat` is the version the
+  // imported file was originally written
+  // in. v3 and v4 files are auto-migrated
+  // to v5 in memory; the field tells the
+  // UI which "imported as v3 / v4 / v5"
+  // notice to show. A v3 import will
+  // have empty per-tab cursor +
+  // fileTreeScrollAnchor (the 2 M6c
+  // fields), as will a v4 import.
   | { ok: false; error: LipiStateV5ParseError };
 
 export type LipiStateV5ParseError =

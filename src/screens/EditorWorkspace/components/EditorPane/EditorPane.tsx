@@ -474,6 +474,15 @@ function ActiveEditor({
   // per (tabId, filePath) and flushes
   // synchronously on dispose (so a cursor move
   // just before a tab close is never lost).
+  //
+  // Decision #168 (HANDOFF §9.46): the
+  // `requestIdleCallback` throttle lives in the
+  // helper, not here. The flush-on-dispose
+  // contract is critical: the next agent should
+  // never remove the `return () => { ... }`
+  // cleanup below without first reading
+  // `scheduleCursorMirrorBack`'s
+  // `_flushPendingCursor` doc.
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;

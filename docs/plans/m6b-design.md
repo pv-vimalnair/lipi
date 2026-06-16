@@ -5,11 +5,13 @@
 **Status**: Design (accepted for implementation; **superseded by M6c** — see below)
 **Supersedes**: the M6a v2 export format (which only had `currentPath` + `recents`)
 
-> **Superseded by M6c** (`docs/superpowers/specs/2026-06-16-m6c-per-tab-state-design.md`).
+> **Superseded by M6c** (`docs/superpowers/specs/2026-06-16-m6c-per-tab-state-design.md`,
+> `HANDOFF.md` §9.46, `docs/superpowers/plans/2026-06-16-m6c-per-tab-state.md`).
 > M6c extends `WorkspaceTabState` with `editorCursorByPath` + `fileTreeScrollAnchor`
 > and bumps the settings export/import format from v4 to v5. The M6b non-goals list
 > (per-tab font / theme / recents / tool / voice / git / search settings) is still
 > authoritative; M6c is the minimal slice that picks up the scroll/cursor items.
+> The M6b decisions (HANDOFF §9.23 — #81, #83, #84) are preserved unchanged.
 
 ## Goal
 

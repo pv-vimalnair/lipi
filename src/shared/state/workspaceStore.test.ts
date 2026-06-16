@@ -35,6 +35,7 @@ import {
   STORAGE_KEY_RECENTS_V2,
   STORAGE_KEY_WORKSPACES_V2,
   createWorkspaceTab,
+  EMPTY_TAB_STATE,
   useActivePath,
   useWorkspaceStore,
   workspaceStoreInternals,
@@ -697,6 +698,8 @@ describe('useWorkspaceStore', () => {
         selectedPath: null,
         openEditorTabPaths: [],
         activeEditorTabPath: null,
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       });
     });
 
@@ -755,6 +758,8 @@ describe('useWorkspaceStore', () => {
         selectedPath: '/proj/src/index.ts',
         openEditorTabPaths: ['/proj/src/index.ts'],
         activeEditorTabPath: '/proj/src/index.ts',
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       };
       useWorkspaceStore.getState().replaceTabState(tabId, next);
       const after = useWorkspaceStore.getState().workspaces[0]!;
@@ -786,6 +791,8 @@ describe('useWorkspaceStore', () => {
         selectedPath: null,
         openEditorTabPaths: ['/proj/a.ts', '/proj/b.ts'],
         activeEditorTabPath: '/proj/a.ts',
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       });
     });
 
@@ -811,6 +818,8 @@ describe('useWorkspaceStore', () => {
         selectedPath: null,
         openEditorTabPaths: [],
         activeEditorTabPath: null,
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       });
     });
 
@@ -843,6 +852,8 @@ describe('useWorkspaceStore', () => {
         selectedPath: null,
         openEditorTabPaths: [],
         activeEditorTabPath: null,
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       });
     });
 
@@ -886,6 +897,8 @@ describe('useWorkspaceStore', () => {
         selectedPath: null,
         openEditorTabPaths: [],
         activeEditorTabPath: null,
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       });
       // With an active tab —
       // returns its state.
@@ -894,6 +907,8 @@ describe('useWorkspaceStore', () => {
         selectedPath: '/proj/src/index.ts',
         openEditorTabPaths: ['/proj/src/index.ts'],
         activeEditorTabPath: '/proj/src/index.ts',
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       });
       expect(
         useActiveTabState({
@@ -938,6 +953,8 @@ describe('useWorkspaceStore', () => {
         selectedPath: '/proj/src/index.ts',
         openEditorTabPaths: ['/proj/src/index.ts'],
         activeEditorTabPath: '/proj/src/index.ts',
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       };
       const tab = createWorkspaceTab('/proj', 't1', 1000, custom);
       expect(tab).toEqual({
@@ -946,6 +963,107 @@ describe('useWorkspaceStore', () => {
         addedAt: 1000,
         state: custom,
       });
+    });
+  });
+
+  // -----------------------------------------------------------------
+  // M6c — per-file editor cursor (new field on WorkspaceTabState)
+  // -----------------------------------------------------------------
+  // M6c adds two new fields to
+  // WorkspaceTabState:
+  //   - `editorCursorByPath`:
+  //     per-file cursor memory.
+  //   - `fileTreeScrollAnchor`:
+  //     the first-visible path
+  //     in the file tree (Task 7).
+  // And one new store action:
+  //   - `setEditorCursor(tabId,
+  //     filePath, cursor)`:
+  //     writes the cursor for one
+  //     file in one tab, with an
+  //     equality short-circuit
+  //     (line+column match = no-op).
+  describe('EMPTY_TAB_STATE — M6c fields', () => {
+    it('has editorCursorByPath = {} and fileTreeScrollAnchor = null', () => {
+      expect(EMPTY_TAB_STATE.editorCursorByPath).toEqual({});
+      expect(EMPTY_TAB_STATE.fileTreeScrollAnchor).toBeNull();
+    });
+  });
+
+  describe('setEditorCursor (M6c)', () => {
+    beforeEach(() => {
+      // Reset the store to a
+      // clean idle state before
+      // each test (the outer
+      // `beforeEach(reset)` at
+      // line 59 already does
+      // this — but we re-assert
+      // it for clarity here).
+      useWorkspaceStore.setState({
+        hydrated: true,
+        workspaces: [],
+        activeId: null,
+        recents: [],
+        status: { kind: 'idle' },
+      });
+    });
+
+    it('writes the cursor into the active tab editorCursorByPath', () => {
+      useWorkspaceStore.getState().open('C:/proj');
+      const tabId = useWorkspaceStore.getState().activeId!;
+      useWorkspaceStore
+        .getState()
+        .setEditorCursor(tabId, 'C:/proj/index.ts', { line: 12, column: 4 });
+      const tab = useWorkspaceStore
+        .getState()
+        .workspaces.find((w) => w.id === tabId)!;
+      expect(tab.state.editorCursorByPath['C:/proj/index.ts']).toEqual({
+        line: 12,
+        column: 4,
+      });
+    });
+
+    it('merges new entries without overwriting existing ones', () => {
+      useWorkspaceStore.getState().open('C:/proj');
+      const tabId = useWorkspaceStore.getState().activeId!;
+      useWorkspaceStore
+        .getState()
+        .setEditorCursor(tabId, 'C:/proj/a.ts', { line: 1, column: 1 });
+      useWorkspaceStore
+        .getState()
+        .setEditorCursor(tabId, 'C:/proj/b.ts', { line: 5, column: 2 });
+      const tab = useWorkspaceStore
+        .getState()
+        .workspaces.find((w) => w.id === tabId)!;
+      expect(tab.state.editorCursorByPath).toEqual({
+        'C:/proj/a.ts': { line: 1, column: 1 },
+        'C:/proj/b.ts': { line: 5, column: 2 },
+      });
+    });
+
+    it('is a no-op when the incoming cursor matches the existing one (line+column)', () => {
+      useWorkspaceStore.getState().open('C:/proj');
+      const tabId = useWorkspaceStore.getState().activeId!;
+      useWorkspaceStore
+        .getState()
+        .setEditorCursor(tabId, 'C:/proj/a.ts', { line: 3, column: 7 });
+      const before = useWorkspaceStore.getState().workspaces;
+      useWorkspaceStore
+        .getState()
+        .setEditorCursor(tabId, 'C:/proj/a.ts', { line: 3, column: 7 });
+      const after = useWorkspaceStore.getState().workspaces;
+      // The workspaces array reference should be unchanged
+      // (no-op short-circuit at the top of setEditorCursor).
+      expect(after).toBe(before);
+    });
+
+    it('is a no-op when the tab id is unknown', () => {
+      useWorkspaceStore.getState().open('C:/proj');
+      useWorkspaceStore
+        .getState()
+        .setEditorCursor('not-a-tab', 'C:/proj/a.ts', { line: 1, column: 1 });
+      const tab = useWorkspaceStore.getState().workspaces[0]!;
+      expect(tab.state.editorCursorByPath).toEqual({});
     });
   });
 });

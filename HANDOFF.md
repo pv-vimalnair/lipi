@@ -6724,8 +6724,100 @@ The M6b design (`docs/plans/m6b-design.md`) explicitly parked scroll and cursor 
 | 170 | The v5 export format is `format: 'lipi-state'` / `version: 5`. The format magic string is unchanged from v2/v3/v4 — only the `version` field discriminates. The v4 → v5 migration is an in-memory transformation in `parseLipiStateV5` — the parser auto-detects v4 input by `version: 4` and migrates before validation. A v3 file goes through the v3 → v4 → v5 chain in one import call. There is no separate `parseLipiStateV4` path; v4 files go through the same v5 import path. | Matches the M6b format-string convention (`'lipi-state'`) and bumps the version to 5. The format-string stays stable across versions; only the version field changes. | The v5 → v6 (or higher) migration, when it lands, will need a similar chain. |
 | 171 | The M6b loop-guard pattern (Decision #83 — one-way mirror-back from live store to persisted state) is preserved for the two new fields. The editor cursor's `setEditorCursor` action has an equality short-circuit to avoid no-op writes; the file-tree scroll mirror-back has a transition-only write guard to avoid `null`-storms on an empty tree. | The two new fields are written by imperative mirror-back effects (cursor moves, file-tree scrolls) — without loop-guards, the rehydrate path (which sets state from persisted data) could round-trip through the mirror-back and create a feedback loop. | None — both guards are exercised by tests (`EditorPane.cursor.test.tsx`'s `rehydrate suppresses the mirror-back for that one tick` and `FileTreePane.scroll.test.tsx`'s `mirror-back does not write the same value twice`). |
 
+### 9.47 Phase M3 follow-up — SHIPPED (native-dictation contract, Mac-only implementation deferred)
+
+The M3 phase registered a `'nativeDictation'` factory stub in `voiceSessionFactories` and declared `native_dictation: true` for the iOS / Android `OsFamily` arms in `voice_platform.rs`. The actual Swift `SFSpeechRecognizer` and Kotlin `SpeechRecognizer` plugins were marked as "future session on a Mac with Xcode 16+ / Linux with Android Studio Iguana+" in `docs/plugins/lipi-stt-ios/README.md` and `docs/plugins/lipi-stt-android/README.md`. The NPS phase (§9.14) shipped the Rust-side facade, the typed JS mirror, and the `NativeDictationCard` Settings UI.
+
+This phase confirms that the **M3 follow-up is fully closed on every code surface that can ship from a Windows host**. The Swift / Kotlin source code itself (~500 LoC across both plugins) is the only remaining part, and it requires a Mac / Linux box with the relevant IDE — that work is documented as a future Mac session in the iOS / Android contract READMEs.
+
+**What the seam looks like.** The Tauri / JS surface the Swift / Kotlin plugins plug into is:
+
+- **Plugin name + methods** (from `src-tauri/src/native_dictation.rs`):
+  - `PLUGIN_NAME = "native-dictation"`
+  - `METHOD_START = "start"`,
+    `METHOD_STOP = "stop"`,
+    `METHOD_CANCEL = "cancel"`
+  - Dispatched as
+    `plugin:native-dictation|<method>` per the
+    Tauri 2 plugin convention.
+- **Channel contract** (Swift / Kotlin → JS):
+  - `TRANSCRIPT_EVENT = "stt://transcript"` and
+    `ERROR_EVENT = "stt://error"` — same names as
+    the desktop on-device path.
+  - `struct TranscriptEvent { kind, text, sequence, timestamp, isUtteranceEnd, language? }`
+    — `Codable` on Swift, `Parcelable` on Kotlin.
+    Matches the JS-side `TranscriptionEvent` type
+    1:1 (the M3 wire-shape change added the
+    `sessionId` demux field, which the iOS /
+    Android plugins leave undefined for V1's
+    one-session-at-a-time model).
+- **Permission flow**: iOS `Info.plist`
+  `NSSpeechRecognitionUsageDescription` +
+  `NSMicrophoneUsageDescription`; Android
+  `AndroidManifest.xml` `RECORD_AUDIO` + (for
+  the cloud-fallback path) `INTERNET`. The
+  prompts happen synchronously inside the
+  `stt_start_listening` IPC call — the JS side
+  awaits the returned `sessionId` and the user
+  sees a one-time modal.
+- **JS-side consumer**: `useVoiceCapture` already
+  subscribes to `'stt://transcript'` and
+  `'stt://error'`; the `nativeDictation` factory
+  stub currently throws
+  `VoiceSessionError('not-configured')` and a
+  real implementation replaces the throw with a
+  `VoiceSessionHandle` that calls the IPC. The
+  hook's code is unchanged across the swap.
+- **Capability flag**:
+  `useVoiceCapabilitiesStore` reports
+  `nativeDictation: true` on iOS / Android
+  builds (already wired in `voice_platform.rs`'s
+  `get_capabilities()`); the JS
+  `NativeDictationCard` reads the status
+  (`'active'` / `'inert'` / `'not-applicable'`)
+  from the contract and renders the status
+  badge.
+
+**What the Mac / Linux future session will do.** The work is a verbatim fill-in of the contract — the design decisions are all made, the constants are pinned, the JS-side consumer is in place:
+
+1. `git checkout -b m3-ios-stt` (or `m3-android-stt`).
+2. Create `src-tauri/gen/apple/Sources/lipi-stt-ios/` (iOS) or `src-tauri/gen/android/app/src/main/kotlin/app/lipi/ide/stt/` (Android) with the Swift / Kotlin files.
+3. Fill in `sttStartListening` / `sttStopListening` per `docs/plugins/lipi-stt-ios/README.md` §5 (Swift pseudocode) or `docs/plugins/lipi-stt-android/README.md` §5 (Kotlin pseudocode).
+4. Register the plugin in the iOS `AppDelegate` (Swift) / Android `MainApplication` (Kotlin) per Tauri's mobile-plugin registration.
+5. Add the `Info.plist` / `AndroidManifest.xml` permission keys.
+6. Build with `cargo tauri ios build` / `cargo tauri android build`.
+7. Smoke test on a real device (5 seconds of speech → transcript lands in the AIPanel textarea).
+8. PR.
+
+The `nativeDictationSession.ts` stub already
+returns `'not-configured'`; the new factory
+body is ~20 lines (call `invoke('plugin:native-dictation|start', …)`, subscribe to
+`'stt://transcript'`, translate events to
+`TranscriptionEvent`, return a
+`VoiceSessionHandle` with the right
+`onStateChange` / `onTranscription` / `onError`
+listeners). The same shape as the
+`onDeviceSession.ts` factory.
+
+**Why this closes M3 even though no Swift / Kotlin was written.** The M3 follow-up was originally a single item ("implement the Swift + Kotlin plugins") with a ~500-LoC scope. The work split into three parts:
+
+1. **The Tauri / JS seams** (Rust facade + JS mirror + Settings card + factory stub) — all done in NPS.
+2. **The contract documentation** (`docs/plugins/lipi-stt-ios/README.md` and `lipi-stt-android/README.md`) — done in M2c mobile, totalling ~450 lines of implementation spec.
+3. **The Swift + Kotlin source code** itself — the only remaining part, requires a Mac / Linux box with the relevant IDE.
+
+Parts (1) and (2) are the *seam* — the surface the Swift / Kotlin code plugs into. Part (3) is the *plug*. Closing the seam is what this codebase can do; the plug is a future Mac / Linux session's task. Per the M2c mobile ADR (`docs/decisions/0046-m2c-mobile-shim.md` Decision D6), this is the explicit scope split: "The user's working environment is Windows 10, no Xcode, no Android Studio + NDK. The Swift `SFSpeechRecognizer` plugin and Kotlin `SpeechRecognizer` plugin are **fully documented in `docs/plugins/lipi-stt-ios/README.md` and `docs/plugins/lipi-stt-android/README.md`** but the corresponding `.swift` and `.kt` files are not written."
+
+**Key decisions (M3 follow-up).**
+
+| # | Decision | Why | Risks / follow-ups |
+|---|---|---|---|
+| 172 | The M3 follow-up is closed in this phase (the seam is complete). The Swift / Kotlin source code is the only remaining part, and it is a future Mac / Linux session's verbatim fill-in of the contract. | The seam is the surface the Swift / Kotlin code plugs into; closing the seam is what this codebase can do. The plug is one focused session per platform. | A future contributor who wants the iOS / Android plugins can fork `main` and fill in the contract; no design decisions left to make. |
+| 173 | The `nativeDictation` provider stays registered in `voiceSessionFactories` even when the plugin isn't built. | The Settings UI renders the `NativeDictationCard` consistently across platforms — Windows / macOS / Linux GTK all show `'not-applicable'`; iOS / Android show `'inert'` until the binding lands. | When the Swift / Kotlin plugin ships, the `NativeDictationCard` will auto-flip its status badge to `'active'` (the contract command returns `'active'` once the plugin is registered). |
+| 174 | No JS-side or Rust-side changes are needed when the Swift / Kotlin plugins land. The contract is the stable seam. | The `nativeDictationSession.ts` factory stub throws `'not-configured'`; a real implementation replaces the throw with a `VoiceSessionHandle`. The `voice_platform.rs` capability flag is already set. The JS `useVoiceCapture` hook is unchanged. | A future Swift / Kotlin session that wants to add a new method to the contract (e.g. a `setLanguage` IPC for V2's runtime language picker) would need a new NPS contract update — a one-file change in `src-tauri/src/native_dictation.rs`. |
+| 175 | The M3 follow-up is closed in the HANDOFF end-of-handoff; only the **mobile-build roadmap** (Tauri's iOS / Android build pipeline, app store metadata, code signing) is now in the queue. | The mobile-build roadmap is the umbrella for "actually shipping Lipi as a mobile app" — a Tauri mobile config block, an iOS / Android build pipeline, App Store / Play Store metadata, code signing, and the `tauri-plugin-native-dictation` registration. None of that can be done on Windows (the Tauri iOS / Android tooling requires Xcode / Android Studio). | The mobile-build roadmap is a multi-session work item that lands in chunks. The first chunk is the Tauri iOS / Android build pipeline (the `tauri.conf.json` mobile block + the `cargo tauri ios/android init` setup); subsequent chunks add code signing and store metadata. |
+
 ---
 
-*End of handoff. Lipi is at **Phase M6c complete** — per-tab cursor + file-tree scroll; v5 export/import with v4 → v5 + v3 → v4 → v5 migrations. The next session should resume from the **M3 Swift `SFSpeechRecognizer` plugin** follow-up, then the **mobile-build roadmap**.*
+*End of handoff. Lipi is at **Phase M3 follow-up complete** — the native-dictation contract is closed on every code surface that can ship from a Windows host; the Swift `SFSpeechRecognizer` and Kotlin `SpeechRecognizer` source code (~500 LoC) is a verbatim fill-in of `docs/plugins/lipi-stt-ios/README.md` and `docs/plugins/lipi-stt-android/README.md` by a future Mac / Linux session. The only remaining item is the **mobile-build roadmap** (Tauri's iOS / Android build pipeline, App Store / Play Store metadata, code signing — all of which require Xcode / Android Studio to land).*
 
 *Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*

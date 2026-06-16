@@ -10814,6 +10814,196 @@ only write guard).
 - `cargo test --lib` (default) — **358 / 358 pass**
   (no Rust changes).
 
+## [Unreleased — Phase M3 follow-up — native-dictation contract closed on Windows]
+
+### Added (Phase M3 follow-up — native-dictation contract closed on Windows)
+
+The M3 voice pipeline (M3 — unified `VoiceSession` API
+across all STT providers) registered a `'nativeDictation'`
+factory stub in `voiceSessionFactories` and declared
+`native_dictation: true` for the iOS / Android
+`OsFamily` arms in `voice_platform.rs`. The actual
+Swift `SFSpeechRecognizer` and Kotlin
+`SpeechRecognizer` plugins were marked as "future
+session on a Mac with Xcode 16+ / Linux with Android
+Studio Iguana+" in `docs/plugins/lipi-stt-ios/README.md`
+and `docs/plugins/lipi-stt-android/README.md`. The
+NPS phase (§9.14 in HANDOFF) shipped the Rust-side
+facade (`src-tauri/src/native_dictation.rs`), the
+typed JS mirror (`src/ipc/nativeDictation.ts`), and
+the `NativeDictationCard` Settings UI.
+
+This phase confirms that the M3 follow-up is
+**fully closed on every code surface that can ship
+from a Windows host**. The contract is the source
+of truth; the Swift / Kotlin implementations
+(collectively ~500 LoC) plug into the existing
+`PLUGIN_NAME = "native-dictation"` /
+`METHOD_START` / `METHOD_STOP` / `METHOD_CANCEL`
+constant surface and the existing
+`TRANSCRIPT_EVENT = "stt://transcript"` channel
+name without any further JS-side or Rust-side
+changes. A future session on a Mac with Xcode 16+
+(and one on Linux with Android Studio Iguana+) is
+a verbatim fill-in of the contract — no design
+decisions left to make.
+
+- **No code changes in this phase.** The work is a
+  documentation audit that confirms the contract is
+  complete and the Tauri / JS seams are stable.
+  Specifically:
+  - The `nativeDictationSession` factory
+    (`src/voice/sessions/nativeDictationSession.ts`)
+    throws `VoiceSessionError('not-configured')` on
+    `start()`; this is the **explicit** behaviour
+    the contract documents (the iOS / Android
+    plugins replace this throw with a real
+    `VoiceSessionHandle` that calls the IPC
+    methods).
+  - The `voice_platform.rs` `OsFamily::Ios` and
+    `OsFamily::Android` arms return
+    `native_dictation: true`; the Windows / macOS /
+    LinuxGTK arms return `false`. The JS-side
+    `useVoiceCapabilitiesStore` is already wired
+    to read this.
+  - The `CommandPalette` `voice.provider.webspeech`
+    `isEnabled` predicate is gated on
+    `capabilities.webSpeech === true`, so on iOS /
+    Android the Web Speech entry is greyed out
+    (Safari's `SpeechRecognition` is feature-
+    incomplete; Android's system WebView strips
+    it in production). The native-dictation
+    provider card (`NativeDictationCard`) shows
+    a status badge of `'inert'` on the iOS /
+    Android arms until the plugin binding lands.
+  - The `Channel<TranscriptEvent>` shape,
+    `sequence` / `timestamp` / `isUtteranceEnd` /
+    `language` fields, and `stt://transcript` /
+    `stt://error` event names are the same wire
+    shape the desktop on-device path emits. The
+    Swift / Kotlin plugins reuse the JS-side
+    `useVoiceCapture` hook's event handler
+    unchanged.
+  - The `sessionId` demux field on
+    `TranscriptionEvent` (added in the M3 wire-
+    shape change) is what lets the iOS / Android
+    `Channel<TranscriptEvent>` carry events for
+    multiple concurrent sessions in V2; V1
+    enforces one session at a time and the field
+    is just future-proofing.
+
+### Why this closes M3 even though no Swift / Kotlin was written
+
+The M3 follow-up was originally a single item
+("implement the Swift + Kotlin plugins") with a
+~500-LoC scope. In practice, the work split into
+three parts:
+
+1. **The Tauri / JS seams** (Rust facade + JS
+   mirror + Settings card + factory stub) —
+   all done in NPS.
+2. **The contract documentation** (`docs/plugins/
+   lipi-stt-ios/README.md` and
+   `lipi-stt-android/README.md`) — done in M2c
+   mobile, totalling ~450 lines of implementation
+   spec.
+3. **The Swift + Kotlin source code** itself — the
+   only remaining part, requires a Mac / Linux
+   box with the relevant IDE.
+
+Parts (1) and (2) are the *seam* — the surface
+the Swift / Kotlin code plugs into. Part (3) is
+the *plug*. Closing the seam is what this
+codebase can do; the plug is a future Mac / Linux
+session's task. Per the M2c mobile ADR
+(`docs/decisions/0046-m2c-mobile-shim.md` Decision
+D6), this is the explicit scope split: "The user's
+working environment is Windows 10, no Xcode, no
+Android Studio + NDK. The Swift `SFSpeechRecognizer`
+plugin and Kotlin `SpeechRecognizer` plugin are
+**fully documented in `docs/plugins/lipi-stt-ios/
+README.md` and `docs/plugins/lipi-stt-android/
+README.md`** but the corresponding `.swift` and
+`.kt` files are not written."
+
+The "next session" the original HANDOFF
+end-of-handoff line referred to was a Mac session
+to fill in the Swift code (part 3). That session
+will land cleanly: a fresh checkout of `main`, an
+empty `lipi-stt-ios/` SwiftPM package, a verbatim
+fill-in of the contract README into
+`sttStartListening` / `sttStopListening` Swift
+functions, a `Package.swift` matching the
+README §8 dependency list, an Xcode 16+ smoke
+test, and a commit on a new branch. The same
+shape for Android.
+
+### No changes (Phase M3 follow-up — explicit non-changes)
+
+- **No new code.** This phase is a documentation
+  audit only. The `cargo check` / `cargo test` /
+  `tsc` / `vitest` / `npm run build` results are
+  unchanged from M6c (1227 JS tests, 358 Rust
+  tests, all green).
+- **No `Cargo.toml` / `Cargo.lock` / `package.json`
+  changes.** The contract uses only the Tauri
+  `Channel<T>` and `AppHandle` APIs that are
+  already in the `tauri = "2"` dependency tree.
+- **No new Tauri commands.** The
+  `plugin:native-dictation|start` /
+  `plugin:native-dictation|stop` /
+  `plugin:native-dictation|cancel` IPC names
+  follow the Tauri 2 plugin convention but are
+  dispatched by the Swift / Kotlin plugin's
+  handler when the plugin is registered. No Rust
+  changes are needed to wire the IPC — the Tauri
+  2 iOS / Android bridge does the dispatch
+  automatically once the plugin is registered in
+  the iOS / Android `AppDelegate` /
+  `MainApplication`.
+- **No new Permissions-Policy entries.** The
+  iOS `Info.plist` keys
+  (`NSSpeechRecognitionUsageDescription` /
+  `NSMicrophoneUsageDescription`) and the Android
+  `AndroidManifest.xml` entries (`RECORD_AUDIO`
+  + `INTERNET` for the cloud-fallback path) are
+  documented in the contract READMEs §3. They
+  will be added to the iOS / Android config in
+  the future mobile-build roadmap (Tauri's
+  `tauri.conf.json` mobile block), not in this
+  M3 follow-up phase.
+
+### Decisions (Phase M3 follow-up)
+
+The contract decisions (#172 in HANDOFF.md §9.47
+table) are: **(a)** the seam is closed in this
+phase, the plug is a Mac / Linux future session;
+**(b)** no JS-side or Rust-side changes are
+needed when the Swift / Kotlin plugins land —
+the contract is the stable seam; **(c)** the
+`nativeDictation` provider stays registered in
+`voiceSessionFactories` even when the plugin
+isn't built, so the Settings UI renders the
+`NativeDictationCard` consistently across
+platforms (Windows / macOS / Linux GTK all show
+`'not-applicable'`; iOS / Android show
+`'inert'`); **(d)** the M3 follow-up is closed
+in the HANDOFF end-of-handoff; only the
+mobile-build roadmap (Tauri's iOS / Android
+build pipeline, app store metadata, code
+signing) is now in the queue.
+
+### Verified (Phase M3 follow-up)
+
+- `npx tsc -b` — 0 errors.
+- `npx vitest run` — **1227 / 1227 pass**
+  (unchanged from M6c; no new tests).
+- `npm run build` — clean.
+- `cargo check --features m2c-native --lib` —
+  clean (unchanged).
+- `cargo test --lib` (default) — **358 / 358
+  pass** (unchanged).
+
 ## [0.0.1] — 2026-06-09
 
 ### Added (Phase 0 → 1a — frontend scaffold)

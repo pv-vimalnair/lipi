@@ -215,7 +215,7 @@ export function EditorWorkspace() {
         data-visible={!isMobile}
         aria-hidden={isMobile}
       >
-        <TitleBar subtitle={isDev ? 'dev · M6a' : undefined} />
+        <TitleBar subtitle={isDev ? 'dev · M6c' : undefined} />
         {/* Phase 3: the trial-expiry banner. Renders
             nothing for the default (>7 days) state;
             shows a red banner with an "Activate now"

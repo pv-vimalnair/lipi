@@ -10674,6 +10674,131 @@ assertion didn't match the new bindgen output.
   detection on background listeners; not introduced
   by this change).
 
+## [Unreleased — Phase M6c — Per-tab cursor + file-tree scroll]
+
+### Added (Phase M6c — Per-tab cursor + file-tree scroll)
+
+The M6b design (`docs/plans/m6b-design.md`) explicitly parked
+scroll and cursor memory as out-of-scope. M6c is the
+**minimal slice** that picks up the two scroll/cursor items,
+leaving the M6b non-goals list (per-tab font / theme /
+recents / tool / voice / git / search settings) authoritative
+for a later phase.
+
+- **`WorkspaceTabState` extended** with
+  `editorCursorByPath: Record<filePath, { line, column }>`
+  and `fileTreeScrollAnchor: string | null`. Per-tab memory
+  now includes where the cursor was for each open file
+  and the topmost visible row in the file tree.
+
+- **Editor cursor mirror-back** in `EditorPane.tsx`'s
+  `ActiveEditor`: subscribes to Monaco's
+  `onDidChangeCursorPosition`, throttles with
+  `requestIdleCallback` (500ms timeout) via
+  `scheduleCursorMirrorBack` (`setTimeout(500ms)` fallback in
+  test envs where `requestIdleCallback` is missing), and
+  writes to `useWorkspaceStore.setEditorCursor`. Rehydrate on
+  `onDidChangeModel` calls
+  `editor.setPosition` + `revealPositionInCenterIfOutsideViewport`
+  for each open file; a `suppressNextCursorChange` ref
+  prevents the rehydrate's own `onDidChangeCursorPosition`
+  from triggering a round-trip mirror-back. The
+  `scheduleCursorMirrorBack` helper also exposes
+  `_flushPendingCursor` so unmount-time cleanup can
+  synchronously persist the user's last position. Stale
+  entries (file closed) are pruned on hydrate by
+  `useEditorTabs.ts` after the M6b tab-switch
+  `replaceAll` runs.
+
+- **File-tree scroll anchor mirror-back** in
+  `FileTreePane.tsx`'s `TreeRoot`: `<TreeNode>` rows
+  carry a `data-tree-path={entry.path}` attribute. The
+  rehydrate `useEffect` waits one `requestAnimationFrame`
+  (with up to 2 retries for async `entriesByDir` loads)
+  after the active tab switches, finds the row matching
+  the saved anchor, and calls
+  `row.scrollIntoView({ block: 'start' })`. The
+  mirror-back `useEffect` attaches a passive `scroll`
+  listener throttled to one read per `requestAnimationFrame`,
+  finds the first row whose `getBoundingClientRect().bottom`
+  is at or below the container's top edge + 1 pixel of
+  slack, and writes the path to
+  `useWorkspaceStore.setTabState` with a transition-only
+  write guard (only writes when the topmost path actually
+  changes — prevents null-storm writes on an empty tree).
+
+- **Settings export/import v5** (`src/shared/settingsIOv5.ts`):
+  v4 → v5 in-memory migration (the 2 new fields are
+  synthesised with empty defaults); v3 → v4 → v5 chain
+  reuses the v4 module's helpers. `settingsIOv5.apply.ts`
+  + `settingsIOv5.preview.ts` round out the v5 module
+  (transactional apply, with restore-on-failure; preview
+  with the same 2-arg `(current, incoming)` signature as
+  the v4 preview).
+
+- **The `PrivacyDataCard`** now exports in v5 format
+  (file name `lipi-state-YYYY-MM-DD.json`,
+  `format: "lipi-state"`, `version: 5`). Imports of v3
+  or v4 files are auto-migrated to v5 in memory and
+  show the user a "this is a v3/v4 file; per-tab
+  scroll/cursor will be empty after upgrade" notice.
+
+- **`vitest.setup.ts`**: polyfills `CSS.escape` for
+  jsdom. jsdom doesn't implement the CSSOM escape
+  helpers; the file-tree rehydrate uses
+  `CSS.escape(anchor)` to safely embed a file path
+  (which may contain `.` or `\`) inside an attribute
+  selector. The polyfill follows the spec algorithm at
+  <https://drafts.csswg.org/cssom/#serialize-an-identifier>.
+  Production is unaffected (real browsers all
+  implement `CSS.escape`).
+
+### Changed (Phase M6c)
+
+- `useWorkspaceStore` adds the `setEditorCursor` action
+  (nested partial-merge into `editorCursorByPath[filePath]`,
+  with an equality short-circuit to avoid no-op writes).
+- `useWorkspaceStore.setTabState` and `replaceTabState`
+  no-op short-circuits extended to cover the 2 new
+  fields.
+- The `PrivacyDataCard` now imports from `settingsIOv5`
+  (v4 / v3 paths are still available as fallbacks —
+  they re-export through the v5 module's parser chain).
+- The `EditorWorkspace` titlebar marker is now
+  `'dev · M6c'` (was `'dev · M6a'`).
+
+### Decisions (Phase M6c)
+
+See `HANDOFF.md` §9.46 for the full writeup. New
+decisions are #167 (data model extension),
+#168 (mirror-back ownership — components, not
+store hooks), #169 (throttle + flush contract),
+#170 (v5 format string), and #171 (`data-tree-path`
+DOM marker for scroll anchor lookups).
+
+### No changes (Phase M6c — explicit non-changes)
+
+- **No Rust changes.** `cargo check` / `cargo test`
+  are unchanged. M6c is a frontend-only phase, same as
+  M6a and M6b.
+- **No Tauri / Cargo dep changes.** The `Cargo.toml`,
+  `Cargo.lock`, and `tauri.conf.json` are untouched.
+- **No per-tab font / theme / recents / tool /
+  voice / git / search settings.** The M6b non-goals
+  list (see `docs/plans/m6b-design.md`) is still
+  authoritative. M6c is the minimal slice.
+
+### Verified (Phase M6c)
+
+- `npx tsc -b` — 0 errors.
+- `npx vitest run` — all green (no new failures vs.
+  the M6b baseline; new tests cover the M6c additions).
+- `npm run build` — clean.
+- `cargo check --features m2c-native --lib` — clean
+  (no Rust changes).
+- `cargo test --lib` (default) — **358 / 358 pass**
+  (no Rust changes).
+
 ## [0.0.1] — 2026-06-09
 
 ### Added (Phase 0 → 1a — frontend scaffold)

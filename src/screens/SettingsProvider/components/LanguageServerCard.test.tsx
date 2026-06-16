@@ -79,6 +79,8 @@ function addWorkspace(path: string): void {
             selectedPath: null,
             openEditorTabPaths: [],
             activeEditorTabPath: null,
+            editorCursorByPath: {},
+            fileTreeScrollAnchor: null,
           },
         },
       ],

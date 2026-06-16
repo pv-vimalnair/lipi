@@ -147,11 +147,43 @@ export type WorkspaceStatus =
  *   treats a mismatch as "no
  *   active editor tab".
  */
+export interface EditorCursor {
+  /** 1-indexed, matches Monaco's `position.lineNumber`. */
+  line: number;
+  /** 1-indexed, matches Monaco's `position.column`. */
+  column: number;
+}
+
 export interface WorkspaceTabState {
+  // --- M6b fields (unchanged) ---
   expandedDirs: string[];
   selectedPath: string | null;
   openEditorTabPaths: string[];
   activeEditorTabPath: string | null;
+
+  // --- M6c additions ---
+  /**
+   * Per-file cursor positions for the editor tabs in this
+   * workspace tab. Keyed by absolute file path. The file
+   * must be in `openEditorTabPaths` to be relevant; a path
+   * in this map that is NOT in `openEditorTabPaths` is
+   * stale and is pruned on hydrate.
+   *
+   * M6c.
+   */
+  editorCursorByPath: Record<string, EditorCursor>;
+
+  /**
+   * The path of the topmost visible file-tree row when the
+   * user last looked at this tab. `null` if the tree has
+   * never been scrolled, or if the tree is empty. Restored
+   * on tab switch: the file tree scrolls so this path is
+   * the topmost visible row (if the path still exists in
+   * the tree).
+   *
+   * M6c.
+   */
+  fileTreeScrollAnchor: string | null;
 }
 
 /**
@@ -171,6 +203,8 @@ export const EMPTY_TAB_STATE: WorkspaceTabState = {
   selectedPath: null,
   openEditorTabPaths: [],
   activeEditorTabPath: null,
+  editorCursorByPath: {},
+  fileTreeScrollAnchor: null,
 };
 
 /**
@@ -357,6 +391,26 @@ interface WorkspaceState {
    *
    * M6b. */
   replaceTabState: (tabId: string, state: WorkspaceTabState) => void;
+  /**
+   * M6c: write a single file's cursor position into the
+   * active tab's `editorCursorByPath`. The action is a
+   * nested partial-merge (it merges into the
+   * `editorCursorByPath[filePath]` key, not the whole
+   * `editorCursorByPath` object). Has an equality
+   * short-circuit: if the incoming cursor matches the
+   * existing one, the action is a no-op (the live editor
+   * `onDidChangeCursorPosition` handler subscribes after
+   * rehydrate, so rehydrate-induced `setPosition` calls
+   * never reach this action; this short-circuit is
+   * defence-in-depth in case a programmatic set happens
+   * post-subscribe).
+   *
+   * No-op if the tab id is not in the store. */
+  setEditorCursor: (
+    tabId: string,
+    filePath: string,
+    cursor: EditorCursor,
+  ) => void;
   /**
    * Update the transient status
    * (e.g. show a spinner while
@@ -549,6 +603,42 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
                     typeof (rawState as WorkspaceTabState).activeEditorTabPath ===
                       'string'
                       ? (rawState as WorkspaceTabState).activeEditorTabPath
+                      : null,
+                  // M6c: editorCursorByPath is a
+                  // map of {filePath:
+                  // {line, column}}. We
+                  // defensively re-validate
+                  // every entry's shape on
+                  // hydrate — a partial
+                  // entry (e.g. an object
+                  // with `line` but no
+                  // `column`) is dropped.
+                  // A non-object value at
+                  // the top level is
+                  // treated as the
+                  // empty-map default.
+                  editorCursorByPath:
+                    (rawState as WorkspaceTabState).editorCursorByPath &&
+                    typeof (rawState as WorkspaceTabState).editorCursorByPath ===
+                      'object'
+                      ? Object.fromEntries(
+                          Object.entries(
+                            (rawState as WorkspaceTabState)
+                              .editorCursorByPath as Record<string, unknown>,
+                          ).filter(
+                            (entry): entry is [string, EditorCursor] =>
+                              typeof entry[0] === 'string' &&
+                              entry[1] !== null &&
+                              typeof entry[1] === 'object' &&
+                              typeof (entry[1] as EditorCursor).line === 'number' &&
+                              typeof (entry[1] as EditorCursor).column === 'number',
+                          ),
+                        )
+                      : {},
+                  fileTreeScrollAnchor:
+                    typeof (rawState as WorkspaceTabState).fileTreeScrollAnchor ===
+                      'string'
+                      ? (rawState as WorkspaceTabState).fileTreeScrollAnchor
                       : null,
                 }
               : { ...EMPTY_TAB_STATE };
@@ -812,7 +902,9 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       nextState.expandedDirs === prev.state.expandedDirs &&
       nextState.selectedPath === prev.state.selectedPath &&
       nextState.openEditorTabPaths === prev.state.openEditorTabPaths &&
-      nextState.activeEditorTabPath === prev.state.activeEditorTabPath
+      nextState.activeEditorTabPath === prev.state.activeEditorTabPath &&
+      nextState.editorCursorByPath === prev.state.editorCursorByPath &&
+      nextState.fileTreeScrollAnchor === prev.state.fileTreeScrollAnchor
     ) {
       return;
     }
@@ -835,12 +927,51 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       state.expandedDirs === prev.state.expandedDirs &&
       state.selectedPath === prev.state.selectedPath &&
       state.openEditorTabPaths === prev.state.openEditorTabPaths &&
-      state.activeEditorTabPath === prev.state.activeEditorTabPath
+      state.activeEditorTabPath === prev.state.activeEditorTabPath &&
+      state.editorCursorByPath === prev.state.editorCursorByPath &&
+      state.fileTreeScrollAnchor === prev.state.fileTreeScrollAnchor
     ) {
       return;
     }
     const nextWorkspaces = ws.slice();
     nextWorkspaces[idx] = { ...prev, state };
+    set({ workspaces: nextWorkspaces });
+    writeJson(STORAGE_KEY_WORKSPACES_V2, nextWorkspaces);
+  },
+
+  setEditorCursor: (tabId, filePath, cursor) => {
+    const state = get();
+    const idx = state.workspaces.findIndex((w) => w.id === tabId);
+    if (idx === -1) return; // unknown tab — no-op
+    const prev = state.workspaces[idx];
+    const prevCursor = prev.state.editorCursorByPath[filePath];
+    // Equality short-circuit:
+    // skip if the cursor is
+    // already at the target
+    // line/column. This catches
+    // the rehydrate-induced
+    // setPosition chain
+    // (defence-in-depth; the
+    // subscription-attached-
+    // after-rehydrate pattern
+    // is the primary guard).
+    if (
+      prevCursor !== undefined &&
+      prevCursor.line === cursor.line &&
+      prevCursor.column === cursor.column
+    ) {
+      return;
+    }
+    const nextEditorCursorByPath = {
+      ...prev.state.editorCursorByPath,
+      [filePath]: { line: cursor.line, column: cursor.column },
+    };
+    const nextState: WorkspaceTabState = {
+      ...prev.state,
+      editorCursorByPath: nextEditorCursorByPath,
+    };
+    const nextWorkspaces = state.workspaces.slice();
+    nextWorkspaces[idx] = { ...prev, state: nextState };
     set({ workspaces: nextWorkspaces });
     writeJson(STORAGE_KEY_WORKSPACES_V2, nextWorkspaces);
   },

@@ -54,6 +54,8 @@ const {
           selectedPath: 'C:/Users/existing/proj/old/x.ts',
           openEditorTabPaths: ['C:/Users/existing/proj/old/x.ts'],
           activeEditorTabPath: 'C:/Users/existing/proj/old/x.ts',
+          editorCursorByPath: {},
+          fileTreeScrollAnchor: null,
         },
       },
     ],
@@ -135,6 +137,8 @@ function reset(): void {
         selectedPath: 'C:/Users/existing/proj/old/x.ts',
         openEditorTabPaths: ['C:/Users/existing/proj/old/x.ts'],
         activeEditorTabPath: 'C:/Users/existing/proj/old/x.ts',
+        editorCursorByPath: {},
+        fileTreeScrollAnchor: null,
       },
     },
   ];
@@ -176,6 +180,8 @@ describe('applyLipiStateV4', () => {
             selectedPath: 'C:/Users/incoming/proj1/src/index.ts',
             openEditorTabPaths: ['C:/Users/incoming/proj1/src/index.ts'],
             activeEditorTabPath: 'C:/Users/incoming/proj1/src/index.ts',
+            editorCursorByPath: {},
+            fileTreeScrollAnchor: null,
           },
         },
         {
@@ -187,6 +193,8 @@ describe('applyLipiStateV4', () => {
             selectedPath: null,
             openEditorTabPaths: [],
             activeEditorTabPath: null,
+            editorCursorByPath: {},
+            fileTreeScrollAnchor: null,
           },
         },
       ],
@@ -239,6 +247,8 @@ describe('applyLipiStateV4', () => {
               selectedPath: null,
               openEditorTabPaths: [],
               activeEditorTabPath: null,
+              editorCursorByPath: {},
+              fileTreeScrollAnchor: null,
             },
           },
         ],
@@ -260,6 +270,8 @@ describe('applyLipiStateV4', () => {
       selectedPath: null,
       openEditorTabPaths: [],
       activeEditorTabPath: null,
+      editorCursorByPath: {},
+      fileTreeScrollAnchor: null,
     });
     expect(voicePreferencesState.provider).toBe('ondevice');
   });

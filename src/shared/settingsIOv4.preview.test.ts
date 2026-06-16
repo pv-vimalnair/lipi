@@ -31,6 +31,8 @@ function tabWithState(
     selectedPath?: string | null;
     openEditorTabPaths?: string[];
     activeEditorTabPath?: string | null;
+    editorCursorByPath?: Record<string, { line: number; column: number }>;
+    fileTreeScrollAnchor?: string | null;
   } = {},
 ) {
   return {
@@ -42,6 +44,8 @@ function tabWithState(
       selectedPath: state.selectedPath ?? null,
       openEditorTabPaths: state.openEditorTabPaths ?? [],
       activeEditorTabPath: state.activeEditorTabPath ?? null,
+      editorCursorByPath: state.editorCursorByPath ?? {},
+      fileTreeScrollAnchor: state.fileTreeScrollAnchor ?? null,
     },
   };
 }

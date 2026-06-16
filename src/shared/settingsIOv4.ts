@@ -415,6 +415,17 @@ function validateWorkspaceTabState(
     selectedPath: r.selectedPath as string | null,
     openEditorTabPaths: r.openEditorTabPaths as string[],
     activeEditorTabPath: r.activeEditorTabPath as string | null,
+    // M6c: v4-on-disk doesn't have the 2 new
+    // fields. The migration to v5 is in-memory
+    // (the v5 parser / apply synthesises the
+    // empty defaults). The v4 validator
+    // returns a v5-shape `WorkspaceTabState`
+    // so the type matches the rest of the
+    // workspace store; the v5 migration in
+    // `migrateV4DataToV5` is the canonical
+    // place that documents this mapping.
+    editorCursorByPath: {},
+    fileTreeScrollAnchor: null,
   };
 }
 
@@ -626,6 +637,18 @@ export function migrateV3DataToV4(
               selectedPath: null,
               openEditorTabPaths: [] as string[],
               activeEditorTabPath: null,
+              // M6c: empty defaults for the 2
+              // new fields. The v3 → v4
+              // migration produces a v4
+              // `LipiStateV4Data` which the v5
+              // parser / apply then migrates
+              // to v5; in the v4-only path
+              // (e.g. the v4 preview / apply
+              // reading v4 input), the empty
+              // defaults match what the v5
+              // migration would have produced.
+              editorCursorByPath: {},
+              fileTreeScrollAnchor: null,
             },
           },
         ]

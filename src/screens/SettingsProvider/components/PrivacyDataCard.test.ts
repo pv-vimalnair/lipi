@@ -47,6 +47,8 @@ const { workspaceState, voicePreferencesState, toolSettingsState } = vi.hoisted(
           selectedPath: 'C:/Users/dev/proj/src/index.ts' as string | null,
           openEditorTabPaths: ['C:/Users/dev/proj/src/index.ts'],
           activeEditorTabPath: 'C:/Users/dev/proj/src/index.ts' as string | null,
+          editorCursorByPath: {} as Record<string, { line: number; column: number }>,
+          fileTreeScrollAnchor: null as string | null,
         },
       },
     ],
@@ -145,6 +147,8 @@ describe('snapshotStoresForExport', () => {
           selectedPath: 'C:/Users/dev/proj/src/index.ts' as string | null,
           openEditorTabPaths: ['C:/Users/dev/proj/src/index.ts'],
           activeEditorTabPath: 'C:/Users/dev/proj/src/index.ts' as string | null,
+          editorCursorByPath: {} as Record<string, { line: number; column: number }>,
+          fileTreeScrollAnchor: null as string | null,
         },
       },
     ];
@@ -165,6 +169,8 @@ describe('snapshotStoresForExport', () => {
           selectedPath: 'C:/Users/dev/proj/src/index.ts' as string | null,
           openEditorTabPaths: ['C:/Users/dev/proj/src/index.ts'],
           activeEditorTabPath: 'C:/Users/dev/proj/src/index.ts' as string | null,
+          editorCursorByPath: {} as Record<string, { line: number; column: number }>,
+          fileTreeScrollAnchor: null as string | null,
         },
       },
     ];
@@ -185,6 +191,8 @@ describe('snapshotStoresForExport', () => {
       selectedPath: 'C:/Users/dev/proj/src/index.ts',
       openEditorTabPaths: ['C:/Users/dev/proj/src/index.ts'],
       activeEditorTabPath: 'C:/Users/dev/proj/src/index.ts',
+      editorCursorByPath: {},
+      fileTreeScrollAnchor: null,
     });
     // workspace.activeId
     expect(snap.workspace.activeId).toBe('tab-1');
@@ -237,6 +245,8 @@ describe('snapshotStoresForExport', () => {
           selectedPath: null as string | null,
           openEditorTabPaths: [],
           activeEditorTabPath: null as string | null,
+          editorCursorByPath: {} as Record<string, { line: number; column: number }>,
+          fileTreeScrollAnchor: null as string | null,
         },
       },
       {
@@ -248,6 +258,8 @@ describe('snapshotStoresForExport', () => {
           selectedPath: 'C:/Users/dev/proj2/docs/README.md',
           openEditorTabPaths: [],
           activeEditorTabPath: null as string | null,
+          editorCursorByPath: {} as Record<string, { line: number; column: number }>,
+          fileTreeScrollAnchor: null as string | null,
         },
       },
     ];

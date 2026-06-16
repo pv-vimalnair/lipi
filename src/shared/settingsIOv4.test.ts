@@ -46,6 +46,8 @@ function emptyTab(path: string) {
       selectedPath: null,
       openEditorTabPaths: [] as string[],
       activeEditorTabPath: null,
+      editorCursorByPath: {},
+      fileTreeScrollAnchor: null,
     },
   };
 }
@@ -62,6 +64,8 @@ const sampleData: LipiStateV4Data = {
           selectedPath: 'C:/Users/me/proj1/src/index.ts',
           openEditorTabPaths: ['C:/Users/me/proj1/src/index.ts'],
           activeEditorTabPath: 'C:/Users/me/proj1/src/index.ts',
+          editorCursorByPath: {},
+          fileTreeScrollAnchor: null,
         },
       },
       emptyTab('C:/Users/me/proj2'),
@@ -292,6 +296,8 @@ describe('parseLipiStateV4 — v3 → v4 migration', () => {
       selectedPath: null,
       openEditorTabPaths: [],
       activeEditorTabPath: null,
+      editorCursorByPath: {},
+      fileTreeScrollAnchor: null,
     });
     expect(parsed.data.workspace.activeId).toBe(
       parsed.data.workspace.workspaces[0]!.id,
@@ -379,6 +385,8 @@ describe('migrateV3DataToV4 (pure)', () => {
       selectedPath: null,
       openEditorTabPaths: [],
       activeEditorTabPath: null,
+      editorCursorByPath: {},
+      fileTreeScrollAnchor: null,
     });
     expect(v4.workspace.activeId).toBe('fixed-id');
     expect(v4.workspace.recents).toEqual(['C:/x']);

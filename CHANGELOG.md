@@ -1545,6 +1545,188 @@ observable `handleId` change.
   --noEmit` clean; `cargo
   check` clean.
 
+### Added (Phase 7.1.1 / 7.1.2 — JSON / CSS / HTML default-service configuration + worker-routing tests)
+
+Phase 7 (shipped) wired up Monaco's
+language-service Web Workers
+(TypeScript, JSON, CSS, HTML) via
+`getMonacoWorker.ts`, but left the
+**defaults objects** at Monaco's
+hard-coded factory values. That was
+correct for the base editor worker
+but left three real-world
+behaviours broken:
+
+1. **JSON**: Monaco's default treats
+   `//` comments and trailing
+   commas as **errors** (technically
+   right per RFC 8259, but trips up
+   almost every real-world
+   `tsconfig.json` / `package.json` /
+   `.eslintrc.json` users open). The
+   fix is to allow comments and
+   downgrade trailing commas to a
+   warning — VS Code's default for
+   these files is the same.
+
+2. **CSS**: Monaco's lint rules flag
+   `vendorPrefix` and
+   `compatibleVendorPrefixes` as
+   **warnings** by default, producing
+   noise on any real-world
+   stylesheet that uses `-webkit-` /
+   `-moz-` prefixes. `idSelector`
+   and `important` are similarly
+   noisy. The fix is to silence the
+   rules that don't have an
+   objective answer in a normal
+   project.
+
+3. **HTML**: Monaco's HTML defaults
+   are fine — we deliberately do
+   **not** call `setOptions` (see
+   the design decision below).
+
+7.1.2 also pins the worker routing
+itself with a 12-test suite —
+before this slice, the `?worker`
+imports and the label switch in
+`getMonacoWorker.ts` were
+**untested**. The new test
+verifies the right worker class is
+returned for each label, the
+`typescript` / `javascript`
+shared-service behaviour, and the
+fresh-instance-per-call contract.
+
+- **`src/screens/EditorWorkspace/workers/configureLanguageServices.ts`**
+  *(new)* — a `configureLanguageServices()`
+  function that:
+  - Calls
+    `monaco.languages.json.jsonDefaults.setDiagnosticsOptions`
+    with `{ validate: true, allowComments: true, trailingCommas: 'warning', enableSchemaRequest: false, schemas: [] }`.
+  - Calls
+    `monaco.languages.css.cssDefaults.setOptions`
+    with `{ validate: true, lint: { compatibleVendorPrefixes: 'ignore', vendorPrefix: 'ignore', idSelector: 'ignore', important: 'ignore', zeroUnits: 'ignore' } }`.
+  - Module-level
+    `languageServicesConfigured`
+    idempotency guard, matching
+    the `tsServiceConfigured`
+    pattern from `configureTsServiceOnce`.
+- **`src/screens/EditorWorkspace/components/EditorPane/EditorPane.tsx`**
+  — imports
+  `configureLanguageServices` and
+  calls it from `handleMount`
+  alongside the existing
+  `configureTsServiceOnce()`. Both
+  guards are global Monaco state,
+  so configuring on the first
+  mount is enough.
+- **`src/screens/EditorWorkspace/workers/configureLanguageServices.test.ts`**
+  *(new, 3 tests)*:
+  - `first call: configures JSON
+    and CSS defaults with the
+    project conventions` —
+    captures the full options
+    object passed to each
+    setter.
+  - `subsequent calls are no-ops
+    (module-level idempotency
+    guard)` — pins the
+    "configure-once" contract.
+  - `does NOT configure
+    htmlDefaults (HTML format is
+    all-required; defaults match
+    the editor)` — implicit
+    negative test (the mock
+    doesn't even define an
+    `html` namespace; the test
+    pins the "no-throw on
+    subsequent calls" contract).
+- **`src/screens/EditorWorkspace/workers/getMonacoWorker.test.ts`**
+  *(new, 12 tests)*:
+  - `installs
+    MonacoEnvironment.getWorker
+    on the global scope`.
+  - `routes 'typescript' label
+    to the TS worker` and
+    `routes 'javascript' label
+    to the TS worker (shared
+    service)` — the shared
+    service contract.
+  - `routes 'json' label to the
+    JSON worker`.
+  - `it.each css / scss / less
+    → CSS worker` and `it.each
+    html / handlebars / razor
+    → HTML worker` — all
+    sibling-language mappings.
+  - `routes unknown labels to
+    the base editor worker` —
+    verifies the default branch
+    (plaintext, markdown, xml,
+    yaml, empty string, etc.).
+  - `returns a fresh Worker
+    instance on each call (no
+    shared instance)` — pins the
+    per-call `new TsWorker()`.
+- **Test infra note**: the
+  `getMonacoWorker.test.ts` mock
+  re-implements the resolver in a
+  `vi.hoisted(...)` callback. The
+  real module can't be imported in
+  tests because it uses Vite's
+  `?worker` import suffix, which
+  Vitest's import-analysis pipeline
+  can't resolve. The mock mirrors
+  the routing logic exactly; a
+  future divergence between the
+  real module and the mock is the
+  correct failure mode.
+- **Design decisions**:
+  - **D-157**: HTML defaults are
+    *not* configured. Monaco's
+    `HTMLFormatConfiguration` is
+    **all-required** (no partial
+    updates) and the defaults
+    already match the editor's
+    `tabSize: 2` +
+    `insertSpaces: true`. If a
+    future slice needs to pin
+    `wrapAttributes` or similar,
+    it has to enumerate the full
+    config object (10+ required
+    fields). This asymmetry
+    between JSON / CSS
+    (partial `setOptions` /
+    `setDiagnosticsOptions`) and
+    HTML (all-required) is a
+    Monaco API quirk — the
+    `--- HTML ---` block in
+    `configureLanguageServices.ts`
+    documents it for the next
+    agent.
+  - **D-158**: `enableSchemaRequest: false`.
+    Monaco's `enableSchemaRequest`
+    triggers a `fetch()` to the
+    URL in a file's `$schema`
+    field. Lipi is offline-first
+    (no CDN calls), and a
+    network schema fetch on
+    every `.json` file open
+    would be a serious
+    regression. Users who want
+    schema validation can
+    register an explicit schema
+    via the schema store (a
+    follow-up, not this slice).
+- **Test results**: `vitest`
+  1185/1185 pass (was 1170;
+  +15 from this slice — 3
+  configureLanguageServices + 12
+  getMonacoWorker); `tsc --noEmit`
+  clean; `cargo check` clean.
+
 ### Added (Phase 9.7 — LSP live server output panel)
 
 The `LanguageServerCard` settings UI now has a

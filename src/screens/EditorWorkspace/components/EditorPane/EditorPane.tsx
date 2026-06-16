@@ -17,6 +17,7 @@ import { useEditorControllerStore } from '../../state/editorControllerStore';
 import { useInlineEditOverlay } from '../../hooks/useInlineEditOverlay';
 import { useMonacoLspBridge } from '../../hooks/useMonacoLspBridge';
 import { useTsConfigStore } from '../../state/tsConfigStore';
+import { configureLanguageServices } from '../../workers/configureLanguageServices';
 import {
   useWorkspaceStore,
 } from '@/shared/state/workspaceStore';
@@ -332,6 +333,13 @@ function ActiveEditor({
     // and the model swap doesn't need a
     // re-configure.
     configureTsServiceOnce();
+    // Phase 7.1.1: same idempotency pattern
+    // for JSON / CSS / HTML defaults. The
+    // defaults are also global Monaco state,
+    // so configuring them on the first mount
+    // is enough — model swaps don't re-trigger
+    // the configuration.
+    configureLanguageServices();
     applyDiscoveredTsConfig();
   }, [setControllerEditor]);
 

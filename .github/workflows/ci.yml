@@ -148,3 +148,104 @@ jobs:
 
       - name: Run cargo check (all targets)
         run: cd src-tauri && cargo check --all-targets --locked
+
+  # ──────────────────────────────────────────────────
+  # Mobile-build roadmap Phase A (HANDOFF §9.48):
+  # toolchain smoke check. Validates that the iOS
+  # (macOS) and Android (Linux) toolchains are set
+  # up on the GitHub-hosted runners. Runs
+  # `cargo tauri {ios,android} info` which prints
+  # the SDK paths and tool versions; no real build.
+  # A real build requires code signing + a real
+  # device, which is the future Mac / Linux
+  # session's task (see docs/plans/mobile-build-roadmap.md).
+  # ──────────────────────────────────────────────────
+  mobile-toolchain:
+    name: Mobile toolchain check (${{ matrix.os }})
+    needs: [version-guard]
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS has the iOS toolchain (Xcode CLI
+        # tools + iOS SDK); Ubuntu has the Android
+        # toolchain (Android SDK + JDK 17, installed
+        # by the android-actions/setup-android
+        # action).
+        os: [macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.82'
+
+      - name: Install Linux Android deps
+        if: runner.os == 'Linux'
+        run: |
+          # The Tauri Rust deps (libwebkit2gtk,
+          # libgtk-3, etc.) plus JDK 17 (required
+          # by Android Gradle Plugin 8.5+). The
+          # Android SDK + platform-tools are
+          # installed by the action below.
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf \
+            openjdk-17-jdk
+
+      - name: Setup Android SDK
+        if: runner.os == 'Linux'
+        uses: android-actions/setup-android@v3
+        with:
+          java-version: '17'
+          sdk-version: '34'
+          build-tools-version: '34.0.0'
+          platforms: 'android-35'
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Check tauri.conf.json mobile block
+        run: |
+          # Verify the mobile block is present in
+          # tauri.conf.json. Catches "I forgot to
+          # add it" bugs at PR time.
+          node -e "const c = require('./src-tauri/tauri.conf.json'); \
+                   if (!c.bundle.android || !c.bundle.iOS) { \
+                     console.error('Missing bundle.android or bundle.iOS'); \
+                     process.exit(1); \
+                   }"
+
+      - name: Check per-platform config files
+        run: |
+          test -f src-tauri/tauri.android.conf.json || \
+            (echo "Missing tauri.android.conf.json" && exit 1)
+          test -f src-tauri/tauri.ios.conf.json || \
+            (echo "Missing tauri.ios.conf.json" && exit 1)
+
+      - name: Check icon sets
+        run: |
+          test -f src-tauri/icons/lipi-icon-1024.png || \
+            (echo "Missing lipi-icon-1024.png" && exit 1)
+          test -d src-tauri/icons/ios || \
+            (echo "Missing icons/ios/" && exit 1)
+          test -d src-tauri/icons/android || \
+            (echo "Missing icons/android/" && exit 1)
+
+      - name: iOS toolchain smoke check (macOS only)
+        if: runner.os == 'macOS'
+        run: cd src-tauri && cargo tauri ios info
+
+      - name: Android toolchain smoke check (Linux only)
+        if: runner.os == 'Linux'
+        run: cd src-tauri && cargo tauri android info

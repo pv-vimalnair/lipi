@@ -12,6 +12,18 @@ import {
   type FileTreeStatus,
 } from '../../state/fileTreeStore';
 import { useFileTree, useFileTreeWatcher } from '../../hooks/useFileTree';
+// M6c: the file-tree scroll anchor
+// (`fileTreeScrollAnchor`) is read
+// from and written to the
+// workspace store by the
+// `TreeRoot` component (this
+// component owns the scrollable
+// container, so the read/write
+// lives here — not in
+// `useFileTree`, which stays
+// focused on store-level
+// mutations).
+import { useWorkspaceStore } from '../../../../shared/state/workspaceStore';
 import {
   ConfirmDestructiveModal,
   FileRowContextMenu,
@@ -105,6 +117,27 @@ function TreeRoot({ rootPath }: TreeRootProps) {
     useFileTree();
   const loadedOnce = useRef(false);
   const watchHandleRef = useRef<{ id: number; path: string } | null>(null);
+  // M6c: ref to the scrollable
+  // `<ul role="tree">` so the
+  // rehydrate effect can find
+  // the row matching the saved
+  // `fileTreeScrollAnchor` and
+  // call `scrollIntoView`, and
+  // the mirror-back effect can
+  // listen for native scroll
+  // events to read the topmost
+  // visible row.
+  const scrollContainerRef = useRef<HTMLUListElement | null>(null);
+  // M6c: the active workspace
+  // tab id. The rehydrate and
+  // mirror-back effects both
+  // key on this value (tab
+  // switch is the trigger for
+  // rehydrate; the mirror-back
+  // is bound to the
+  // currently-active tab's
+  // per-tab state).
+  const activeTabId = useWorkspaceStore((s) => s.activeId);
   // Subscribe to fs://changed for the
   // lifetime of the tree. The hook
   // debounces per-directory on the JS
@@ -150,6 +183,131 @@ function TreeRoot({ rootPath }: TreeRootProps) {
     };
   }, [ensureLoaded, rootPath, startWatch, stopWatchOnHandle]);
 
+  // M6c: rehydrate the file-tree
+  // scroll anchor on tab switch.
+  // We wait one `requestAnimationFrame`
+  // for the M6b `setExpandedAndSelected`
+  // rehydrate to render the new tab's
+  // tree, then find the row matching
+  // the saved anchor and call
+  // `scrollIntoView({ block: 'start' })`.
+  // `scrollIntoView` is layout-agnostic
+  // (row heights aren't fixed), so we
+  // use it instead of `scrollTo({top})`.
+  //
+  // We retry up to 2 times on subsequent
+  // frames — the file tree's
+  // `entriesByDir` cache is async, so
+  // the row for the anchor might not be
+  // in the DOM on the first frame after
+  // a tab switch. After 2 failed
+  // attempts, we silently bail (the
+  // path is gone; the next mirror-back
+  // will overwrite the stale anchor).
+  //
+  // We do not auto-prune a stale anchor
+  // here (predictable behaviour: read =
+  // read, write = write; no surprise
+  // mutations on read).
+  useEffect(() => {
+    if (!activeTabId) return;
+    const anchor = useWorkspaceStore.getState().workspaces.find(
+      (w) => w.id === activeTabId,
+    )?.state.fileTreeScrollAnchor;
+    if (!anchor) return;
+
+    let attempts = 0;
+    let cancelled = false;
+    const tryScroll = () => {
+      if (cancelled) return;
+      const row = scrollContainerRef.current?.querySelector<HTMLElement>(
+        `[data-tree-path="${CSS.escape(anchor)}"]`,
+      );
+      if (row) {
+        row.scrollIntoView({ block: 'start' });
+        return;
+      }
+      if (attempts < 2) {
+        attempts++;
+        requestAnimationFrame(tryScroll);
+      }
+    };
+    requestAnimationFrame(tryScroll);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTabId]);
+
+  // M6c: mirror-back the topmost
+  // visible row's path on scroll.
+  // Throttled to one read per
+  // `requestAnimationFrame` (the scroll
+  // event fires synchronously per-pixel
+  // during a fast wheel; the rAF
+  // throttling caps us at one read per
+  // frame).
+  //
+  // The transition-only write guard
+  // prevents null-storms on an empty
+  // tree: we only call `setTabState`
+  // when the topmost path changes
+  // (transitions between any two
+  // values, but not the same value
+  // twice in a row). This keeps
+  // mirror-back writes bounded to
+  // actual user-driven scroll changes.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    let rafHandle: number | null = null;
+    const readInitialAnchor = (): string | null => {
+      if (!activeTabId) return null;
+      return (
+        useWorkspaceStore.getState().workspaces.find(
+          (w) => w.id === activeTabId,
+        )?.state.fileTreeScrollAnchor ?? null
+      );
+    };
+    let lastAnchor: string | null = readInitialAnchor();
+
+    const handler = () => {
+      if (rafHandle !== null) return;
+      rafHandle = requestAnimationFrame(() => {
+        rafHandle = null;
+        if (!activeTabId) return;
+        const rows = container.querySelectorAll<HTMLElement>(
+          '[data-tree-path]',
+        );
+        const containerRect = container.getBoundingClientRect();
+        let topmostPath: string | null = null;
+        for (const row of rows) {
+          const rect = row.getBoundingClientRect();
+          // "Topmost visible" = the first
+          // row whose bottom is at or below
+          // the container's top edge + 1
+          // pixel of slack (for sub-pixel
+          // rounding in
+          // `getBoundingClientRect`).
+          if (rect.bottom > containerRect.top + 1) {
+            topmostPath = row.getAttribute('data-tree-path');
+            break;
+          }
+        }
+        // Transition-only write guard.
+        if (topmostPath === lastAnchor) return;
+        lastAnchor = topmostPath;
+        useWorkspaceStore.getState().setTabState(activeTabId, {
+          fileTreeScrollAnchor: topmostPath,
+        });
+      });
+    };
+    container.addEventListener('scroll', handler, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', handler);
+      if (rafHandle !== null) cancelAnimationFrame(rafHandle);
+    };
+  }, [activeTabId]);
+
   if (!entries) {
     return (
       <div className={styles.placeholder}>
@@ -160,6 +318,7 @@ function TreeRoot({ rootPath }: TreeRootProps) {
 
   return (
     <ul
+      ref={scrollContainerRef}
       className={styles.tree}
       role="tree"
       aria-label="Project files"
@@ -445,6 +604,14 @@ function TreeNode({ entry, depth, rootPath }: TreeNodeProps) {
         className={styles.row}
         data-selected={isSelected || undefined}
         data-kind={isDir ? 'dir' : 'file'}
+        // M6c: the file-tree scroll
+        // anchor logic in `TreeRoot`
+        // looks up rows by
+        // `data-tree-path`. Add the
+        // attribute to every row so
+        // the rehydrate and
+        // mirror-back paths work.
+        data-tree-path={entry.path}
         style={{ paddingLeft: `${depth * INDENT_PX + 8}px` }}
         onClick={handleClick}
         onKeyDown={handleKey}

@@ -11004,6 +11004,134 @@ signing) is now in the queue.
 - `cargo test --lib` (default) — **358 / 358
   pass** (unchanged).
 
+## [Unreleased — Phase 8.1 — Inline-edit streaming preview]
+
+### Added (Phase 8.1 — inline-edit streaming preview)
+
+The inline-AI edit overlay previously showed a static
+spinner + "AI is editing…" caption while the model was
+streaming. Phase 8.1 surfaces the in-flight text
+inside the Monaco content widget so the user can
+read what the model is producing in real time, with
+no re-layout churn.
+
+- **`src/screens/EditorWorkspace/state/inlineEditStore.ts`** —
+  new `streamingContent: string` field on the
+  Zustand store; new
+  `appendStreaming(delta: string)` and
+  `setStreamingContent(content: string)` actions.
+  Both cap the accumulated content at
+  `STREAMING_PREVIEW_MAX_CHARS` (16 KiB) to prevent
+  unbounded growth on long streams — the cap trims
+  the head and keeps the most recent tail.
+  `open`, `beginStream`, `accept`, `reject`,
+  `close`, and `resetToIdle` all clear
+  `streamingContent` to `''` to avoid stale text
+  bleeding into the next stream.
+- **`src/screens/EditorWorkspace/components/InlineAi/InlineEditOverlay.tsx`** —
+  `StreamingBody` now renders the accumulated
+  text in a `<pre data-testid="inline-edit-streaming-preview">`
+  block under the spinner + caption. A new
+  `useEffect` mirrors `aiStore` message content
+  into `inlineEditStore.streamingContent` so the
+  overlay re-renders on each streamed delta.
+- **`src/screens/EditorWorkspace/components/InlineAi/InlineEditOverlay.module.css`** —
+  new `.streamingPreview` rule with
+  `max-height: 30vh; overflow-y: auto` (fixed box
+  height — content scrolls internally instead of
+  pushing the editor), dashed border, reduced
+  opacity, monospace font, and a blinking
+  `::after` caret (`▍` glyph) animated via
+  `@keyframes inlineEditCaretBlink`.
+- **`src/screens/EditorWorkspace/state/inlineEditStore.test.ts`** —
+  9 new unit tests covering: initial
+  `streamingContent === ''`; reset on
+  `open`/`beginStream`; `appendStreaming` appends +
+  caps at `STREAMING_PREVIEW_MAX_CHARS`;
+  `setStreamingContent` replaces + caps;
+  `accept`/`reject`/`close`/`resetToIdle` all
+  clear the field. The
+  "clear on accept/reject/close/resetToIdle" test
+  was also fixed to seed a `SAMPLE_SELECTION` +
+  minimal editor mock so `accept()` does not bail
+  out early on a `null` selection.
+
+### Decisions (Phase 8.1)
+
+See `HANDOFF.md §9.49` for the full writeup.
+
+- **D-186** — Streamed content is mirrored from
+  `aiStore` → `inlineEditStore` (single source of
+  truth: `aiStore`).
+- **D-187** — Hard cap at 16 KiB; trim head, keep
+  tail. This is a preview, not a transcript.
+- **D-188** — Fixed `max-height: 30vh; overflow-y: auto`
+  prevents editor layout shift on long streams.
+- **D-189** — Blinking caret is a single
+  `::after` pseudo-element (no JS animation, no
+  per-delta re-render churn beyond the text
+  itself).
+
+### Verified (Phase 8.1)
+
+- `npx tsc -b` — 0 errors.
+- `npx vitest run` — 1236 / 1236 pass
+  (+9 from new `streamingContent` tests).
+- `npm run build` — clean.
+
+## [Unreleased — Phase 9.36 — LSP event-stream upgrade — CLOSED]
+
+### Closed (Phase 9.36 — LSP event-stream upgrade)
+
+The Phase 9.36 work was started then explicitly
+closed per project-lead direction. The plan was
+to replace the 1 ms polling loop in
+`lspStdioRead` with an event-driven
+`lsp://stdout` Tauri event subscription on the
+Rust → JS boundary, keeping the catch-up read as
+a fallback. The partial work (an
+`LSP_STDOUT_EVENT` constant,
+`LspStdoutPayload` struct, and an updated
+`spawn_reader` that emits the event) was
+reverted from `src-tauri/src/stdio.rs` after
+the close call — `git checkout -- src-tauri/src/stdio.rs`
+brought the file back to its M6c state.
+
+### No changes (Phase 9.36 — explicit)
+
+- **No Rust code changes** — `src-tauri/src/stdio.rs`
+  is byte-identical to the M6c state.
+- **No JS code changes** — `src/ipc/lsp.ts` and
+  `src/screens/EditorWorkspace/state/lspClientStore.ts`
+  still use the polling `lspStdioRead` path.
+- **No new tests** — the 8 new tests planned
+  for the event-stream path were not written.
+
+### Re-deferred (Phase 9.36 — future session)
+
+The full Phase 9.36 implementation is re-deferred
+to a future session (it is a code-side, Windows-
+doable item, so it remains on the pending list).
+When reopened, the implementation order is:
+
+1. Add `lsp://stdout` event emission to
+   `spawn_reader` in `src-tauri/src/stdio.rs`
+   (already drafted — see the reverted diff in
+   this session's git log if available).
+2. Update `run_stdio` to pass `app_handle` into
+   `spawn_reader`.
+3. Add `LSP_STDOUT_EVENT` constant +
+   `onLspStdout(cb)` subscription in
+   `src/ipc/lsp.ts`.
+4. Refactor `lspClientStore` to subscribe to
+   `onLspStdout` and drop the 1 ms
+   `_scheduleReaderTick` polling loop, retaining
+   `lspStdioRead` only as a catch-up read on
+   resume.
+5. Add Rust unit tests (event payload format,
+   buffer cap behaviour) + JS tests (subscription
+   lifecycle, ordering of catch-up vs live chunks).
+
 ## [Unreleased — Phase mobile-build roadmap — Phase A (Windows-doable seam)]
 
 ### Added (Phase mobile-build roadmap — Phase A)

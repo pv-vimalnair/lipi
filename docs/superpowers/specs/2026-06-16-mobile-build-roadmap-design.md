@@ -27,7 +27,7 @@ This phase also adds `tauri-plugin-stronghold` as the Android-side keychain (the
 |---|------|------|---------|
 | 1 | `tauri.conf.json` mobile block (`bundle.android` + `bundle.iOS`) | config | Tauri reads these on `cargo tauri android/ios build`. The blocks are inert on the desktop build. |
 | 2 | `tauri.android.conf.json` + `tauri.ios.conf.json` per-platform override files | config | Tauri 2's per-platform config mechanism. Holds platform-specific icon paths, code signing identities, and the iOS / Android `Info.plist` / `AndroidManifest.xml` keys. |
-| 3 | The `tauri-plugin-stronghold` Cargo dep + the per-platform secrets-backend pick | Rust | `keyring` 3.x doesn't support Android; Stronghold is the Tauri ecosystem's standard answer. The `secrets` module picks the backend at startup based on `osFamily`. |
+| 3 | The `tauri-plugin-stronghold` Cargo dep + the per-platform secrets-backend pick (in `secrets.rs`) | Rust | `keyring` 3.x doesn't support Android; Stronghold is the Tauri ecosystem's standard answer. The `secrets` module picks the backend at startup based on `osFamily`. The actual `secrets_stronghold.rs` facade (the `get` / `set` functions) + the plugin init in `lib.rs` (the `Builder::new(password-hash)` call) are deferred to the future Mac / Linux session — they need a real Android password-flow design, which is project-lead-only. |
 | 4 | The app icon set (`icons/ios/...` + `icons/android/...` + the source 1024×1024 PNG) | assets | Tauri requires platform-specific icon sets. The `cargo tauri icon` CLI generates them from a single source PNG; it runs on any platform. |
 | 5 | `docs/store-metadata/app-store.md` + `docs/store-metadata/google-play.md` | docs | Store-metadata templates. The project lead fills in the placeholders before submitting. |
 | 6 | CI additions to `.github/workflows/ci.yml` (mobile matrix entries) and `.github/workflows/release.yml` (commented-out `release-ios` + `release-android` jobs) | CI | The macos-latest + ubuntu-latest GitHub-hosted runners have the iOS / Android toolchains. The CI jobs are added as `cargo tauri {ios,android} info` smoke checks (no real build). |
@@ -222,15 +222,16 @@ The desktop + iOS paths use the `Keyring` variant (unchanged from 5a). The Andro
 
 ## Error handling
 
-The new `Stronghold` backend needs an error-mapping layer. Stronghold's `StrongholdError` enum has 6 variants; we map them to the existing `SecretsError` enum (`EntryNotFound`, `AccessDenied`, `PlatformError`, `Unknown`):
+The new `Stronghold` backend needs an error-mapping layer. Stronghold's `StrongholdError` enum has 6 variants; we map them to the existing `SecretError` enum (which has 3 public variants: `InvalidInput`, `KeychainUnavailable`, `Platform`). We deliberately do NOT add new variants to `SecretError` — that would be a breaking change to the JS-side `SecretErrorPayload` tagged union (`src/ipc/secrets.ts`). Instead, the new dispatch collapses Stronghold's variants into the 3 existing ones:
 
 | Stronghold variant | Maps to | Why |
 |---|---|---|
-| `ClientNotFound` / `VaultNotFound` / `RecordNotFound` | `EntryNotFound` | The API key for this provider isn't stored. |
-| `AccessDenied` / `EncryptionFail` | `AccessDenied` | The OS-level credential store rejected the read. |
-| Everything else | `PlatformError` | Catch-all for "something went wrong"; the user-facing message is generic. |
+| `ClientNotFound` / `VaultNotFound` / `RecordNotFound` | `Platform { detail: "no entry" }` | The API key for this provider isn't stored. Same shape as the existing `keyring::Error::NoEntry` → `Platform { detail: "no entry" }` mapping. The JS-side `secretsGetApiKey` already returns `null` for the "no entry" case (the Rust function maps `Platform` → `null` before serialising). |
+| `AccessDenied` | `KeychainUnavailable { detail: "access denied" }` | The OS-level credential store rejected the read. |
+| `EncryptionFail` | `KeychainUnavailable { detail: "encryption failure" }` | The credential store's encryption layer rejected the read. |
+| Everything else | `Platform { detail: <stronghold::Error display> }` | Catch-all for "something went wrong"; the user-facing message is generic. |
 
-The JS-side `secretsGetApiKey` already handles `EntryNotFound` by returning `null` (so the UI can show the "Set up your API key" callout). The `AccessDenied` and `PlatformError` paths surface a user-facing error toast.
+The JS-side `secretsGetApiKey` already handles `Platform { detail: "no entry" }` by returning `null` (so the UI can show the "Set up your API key" callout — this is the desktop `keyring` path's existing behaviour; the new `Stronghold` path inherits it). The `KeychainUnavailable` and `Platform` paths surface a user-facing error toast via the existing `SecretError` handling.
 
 ## Testing
 

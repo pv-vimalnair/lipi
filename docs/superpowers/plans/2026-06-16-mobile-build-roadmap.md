@@ -268,10 +268,12 @@ git commit -m "feat(tauri): mobile-build roadmap Phase A — tauri.conf.json mob
 
 **Files:**
 - Modify: `src-tauri/Cargo.toml` (add the optional dep + `mobile` feature)
-- Modify: `src-tauri/src/secrets.rs` (add `pick_secrets_backend()` + dispatch)
-- Create: `src-tauri/src/secrets_stronghold.rs` (Stronghold facade)
-- Modify: `src-tauri/src/lib.rs` (wire the plugin)
-- Modify: `src-tauri/src/secrets.test.rs` (5 new tests)
+- Modify: `src-tauri/src/secrets.rs` (add `pick_secrets_backend()` + `map_stronghold_error()` + 5 new tests)
+
+**Out of scope (deferred to future Mac / Linux session):**
+- The actual `secrets_stronghold.rs` facade (the `get` / `set` functions that wrap the Stronghold `Client::store` API). The future session needs to design the Android password flow (the `Builder::new(password-hash)` callback) which is project-lead-only.
+- The plugin init in `lib.rs` (the `.plugin(tauri_plugin_stronghold::Builder::new(...).build())` call). Same reason.
+- Phase A ships the **dispatch + error mapping** — the parts that can be tested on Windows. The actual facade + plugin init land when a real Android build is in flight.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -322,33 +324,52 @@ fn pick_secrets_backend_returns_keyring_for_other() {
 #[test]
 fn stronghold_error_maps_to_secrets_error_correctly() {
     use stronghold_stronghold::StrongholdError;
-    use SecretsError as S;
+    use SecretError as S;
 
-    // Map each Stronghold variant to the expected SecretsError.
-    let cases: &[(StrongholdError, SecretsError)] = &[
-        // `ClientNotFound` -> `EntryNotFound` (no such API key).
-        (StrongholdError::ClientNotFound, S::EntryNotFound),
-        // `VaultNotFound` -> `EntryNotFound`.
-        (StrongholdError::VaultNotFound("v".into()), S::EntryNotFound),
-        // `RecordNotFound` -> `EntryNotFound`.
-        (StrongholdError::RecordNotFound("r".into()), S::EntryNotFound),
-        // `AccessDenied` -> `AccessDenied`.
-        (StrongholdError::AccessDenied, S::AccessDenied),
-        // `EncryptionFail` -> `AccessDenied` (the credential
-        // store rejected the read).
-        (
-            StrongholdError::EncryptionFail("e".into()),
-            S::AccessDenied,
-        ),
-    ];
+    // We deliberately reuse the existing 3-variant
+    // `SecretError` enum (the JS-side `SecretErrorPayload`
+    // mirrors these exact 3 variants). Adding new variants
+    // would be a breaking change to the public IPC contract.
+    // The map collapses Stronghold's 6 variants into the 3
+    // existing ones.
 
-    for (input, expected) in cases {
-        assert_eq!(
-            map_stronghold_error(input.clone()),
-            *expected,
-            "Stronghold variant {input:?} should map to {expected:?}"
-        );
-    }
+    // `ClientNotFound` -> `Platform { detail: "no entry" }`
+    // (same shape as the existing `keyring::Error::NoEntry`
+    // mapping; the JS-side `secretsGetApiKey` returns `null`
+    // for this case).
+    let result = map_stronghold_error(StrongholdError::ClientNotFound);
+    assert!(
+        matches!(result, S::Platform { ref detail } if detail == "no entry"),
+        "ClientNotFound should map to Platform {{ detail: \"no entry\" }}, got {result:?}"
+    );
+
+    // `VaultNotFound` -> `Platform { detail: "no entry" }`.
+    let result = map_stronghold_error(StrongholdError::VaultNotFound("v".into()));
+    assert!(
+        matches!(result, S::Platform { ref detail } if detail == "no entry"),
+        "VaultNotFound should map to Platform {{ detail: \"no entry\" }}, got {result:?}"
+    );
+
+    // `RecordNotFound` -> `Platform { detail: "no entry" }`.
+    let result = map_stronghold_error(StrongholdError::RecordNotFound("r".into()));
+    assert!(
+        matches!(result, S::Platform { ref detail } if detail == "no entry"),
+        "RecordNotFound should map to Platform {{ detail: \"no entry\" }}, got {result:?}"
+    );
+
+    // `AccessDenied` -> `KeychainUnavailable { detail: "access denied" }`.
+    let result = map_stronghold_error(StrongholdError::AccessDenied);
+    assert!(
+        matches!(result, S::KeychainUnavailable { ref detail } if detail == "access denied"),
+        "AccessDenied should map to KeychainUnavailable {{ detail: \"access denied\" }}, got {result:?}"
+    );
+
+    // `EncryptionFail` -> `KeychainUnavailable { detail: "encryption failure" }`.
+    let result = map_stronghold_error(StrongholdError::EncryptionFail("e".into()));
+    assert!(
+        matches!(result, S::KeychainUnavailable { ref detail } if detail == "encryption failure"),
+        "EncryptionFail should map to KeychainUnavailable {{ detail: \"encryption failure\" }}, got {result:?}"
+    );
 }
 
 #[test]

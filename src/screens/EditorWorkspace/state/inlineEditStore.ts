@@ -63,6 +63,19 @@ export type InlineEditStatus =
   | 'error'; // ai://error arrived; showing an error banner
 
 /**
+ * Phase 8.1 — the size cap on the streaming preview
+ * in the overlay. Mirrors `.proposal` (`max-height: 30vh`).
+ * The preview scrolls inside the body (the body's
+ * `overflow-y: auto` handles it) so a long rewrite
+ * doesn't grow the content widget unbounded and force
+ * Monaco to re-position it on every chunk. 30vh is the
+ * same cap the sealed `done` view uses, so the user's
+ * eye sees a stable preview surface as the response
+ * accumulates.
+ */
+export const STREAMING_PREVIEW_MAX_CHARS = 8 * 1024;
+
+/**
  * The surface `accept()` needs to call on the live
  * editor. We type the editor's API minimally here
  * (and in `editorControllerStore`) so the store
@@ -112,6 +125,28 @@ interface InlineEditState {
    */
   proposal: string | null;
   /**
+   * Phase 8.1 — the accumulating AI response text
+   * during `streaming`. Mirrors the aiStore
+   * `messages[streamingMessageId].content` but
+   * cached on this store so the overlay doesn't
+   * have to re-derive it on every render and so
+   * the streaming preview can render a stable
+   * snapshot if the aiStore's `messages` array
+   * gets mutated by a concurrent operation
+   * (e.g. a follow-up chat turn appends a new
+   * message at the same time the streaming
+   * chunk arrives). Cleared on `accept` /
+   * `reject` / `close` / `open`.
+   *
+   * Capped at `STREAMING_PREVIEW_MAX_CHARS`
+   * (8 KiB) so a runaway stream can't OOM the
+   * store. The cap matches the .proposal
+   * `max-height: 30vh` render cap, which is
+   * much less than 8 KiB of text in practice
+   * (8 KiB ≈ 2k lines of monospace at 14px).
+   */
+  streamingContent: string;
+  /**
    * The most recent error. Set by `fail()` from
    * the aiStore's `requestStatus` (kind=error)
    * transition. Rendered by the overlay's error
@@ -128,8 +163,35 @@ interface InlineEditState {
   setInstruction: (instruction: string) => void;
   /** Mark the request as submitted and remember
    *  which assistant message we expect to see
-   *  stream in. */
+   *  stream in. Resets `streamingContent` to the
+   *  empty string so a fresh stream starts clean
+   *  (the chunk-by-chunk accumulation happens
+   *  via `appendStreaming` / `setStreamingContent`). */
   beginStream: (streamingMessageId: string) => void;
+  /**
+   * Phase 8.1 — append a single chunk to
+   * `streamingContent`. Called by the
+   * `InlineEditOverlay` on every
+   * `onAiChunk` for the `streamingMessageId`
+   * (the chunk comes from the aiStore
+   * `messages[streamingMessageId].content`).
+   * Caps the accumulated text at
+   * `STREAMING_PREVIEW_MAX_CHARS` to prevent
+   * OOM on a runaway stream.
+   */
+  appendStreaming: (delta: string) => void;
+  /**
+   * Phase 8.1 — set the entire `streamingContent`
+   * at once. Useful as a "snapshot" path when
+   * the overlay re-mounts mid-stream (e.g. the
+   * overlay was dismissed and re-opened, or a
+   * tab switch re-mounted the component). The
+   * `InlineEditOverlay` re-syncs on mount by
+   * reading the current aiStore message and
+   * calling this once with the full content
+   * (rather than re-applying every chunk).
+   */
+  setStreamingContent: (content: string) => void;
   /** Mark the request as completed; the overlay
    *  switches to its result view (Accept /
    *  Reject). `proposal` is the AI's sealed
@@ -224,6 +286,7 @@ export const useInlineEditStore = create<InlineEditState>((set, get) => ({
   streamingMessageId: null,
   status: 'idle',
   proposal: null,
+  streamingContent: '',
   error: null,
 
   open: (selection) => {
@@ -233,6 +296,7 @@ export const useInlineEditStore = create<InlineEditState>((set, get) => ({
       streamingMessageId: null,
       status: 'idle',
       proposal: null,
+      streamingContent: '',
       error: null,
     });
   },
@@ -240,9 +304,54 @@ export const useInlineEditStore = create<InlineEditState>((set, get) => ({
   setInstruction: (instruction) => set({ instruction }),
 
   beginStream: (streamingMessageId) =>
-    set({ streamingMessageId, status: 'streaming', error: null }),
+    set({
+      streamingMessageId,
+      status: 'streaming',
+      streamingContent: '',
+      error: null,
+    }),
+
+  appendStreaming: (delta) => {
+    if (!delta) return;
+    set((s) => {
+      // Cap the accumulated text so a runaway
+      // stream can't OOM the store. We drop the
+      // oldest bytes (the same "newest wins"
+      // policy as the Rust stderr ring buffer)
+      // — the streaming preview is for visual
+      // feedback, not for capturing the full
+      // response. The full response lives in the
+      // aiStore's `messages[streamingMessageId].content`
+      // (which has no cap), and `sealProposal`
+      // copies that into `proposal` on completion.
+      let next = s.streamingContent + delta;
+      if (next.length > STREAMING_PREVIEW_MAX_CHARS) {
+        next = next.slice(next.length - STREAMING_PREVIEW_MAX_CHARS);
+      }
+      return { streamingContent: next };
+    });
+  },
+
+  setStreamingContent: (content) => {
+    // Snapshot path: re-sync the streaming
+    // preview with the aiStore's current
+    // `messages[streamingMessageId].content`.
+    // Used on overlay re-mount + after a
+    // tab-switch restore. Caps the same way
+    // as `appendStreaming`.
+    const next =
+      content.length > STREAMING_PREVIEW_MAX_CHARS
+        ? content.slice(content.length - STREAMING_PREVIEW_MAX_CHARS)
+        : content;
+    set({ streamingContent: next });
+  },
 
   sealProposal: (proposal) =>
+    // `streamingContent` is left untouched on
+    // `done` — the done view reads from
+    // `proposal`, the streaming preview is
+    // hidden. The next `open` / `beginStream`
+    // resets it.
     set({ status: 'done', proposal }),
 
   fail: (kind, message) =>
@@ -251,7 +360,12 @@ export const useInlineEditStore = create<InlineEditState>((set, get) => ({
   resetToIdle: () =>
     set((s) =>
       s.status === 'error'
-        ? { status: 'idle', streamingMessageId: null, error: null }
+        ? {
+            status: 'idle',
+            streamingMessageId: null,
+            streamingContent: '',
+            error: null,
+          }
         : s,
     ),
 
@@ -265,6 +379,7 @@ export const useInlineEditStore = create<InlineEditState>((set, get) => ({
       streamingMessageId: null,
       status: 'idle',
       proposal: null,
+      streamingContent: '',
       error: null,
     });
   },
@@ -276,6 +391,7 @@ export const useInlineEditStore = create<InlineEditState>((set, get) => ({
       streamingMessageId: null,
       status: 'idle',
       proposal: null,
+      streamingContent: '',
       error: null,
     });
   },
@@ -287,6 +403,7 @@ export const useInlineEditStore = create<InlineEditState>((set, get) => ({
       streamingMessageId: null,
       status: 'idle',
       proposal: null,
+      streamingContent: '',
       error: null,
     });
   },

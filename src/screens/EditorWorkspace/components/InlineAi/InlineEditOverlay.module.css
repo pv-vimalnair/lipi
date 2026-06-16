@@ -192,6 +192,79 @@
   line-height: var(--line-height-normal);
 }
 
+/* Phase 8.1 — the live streaming preview.
+ *
+ * Mirrors `.proposal` (the sealed done view) so
+ * the user's eye sees a stable preview surface
+ * as the response accumulates — same monospace
+ * font, same border treatment, same word-break /
+ * white-space rules. The key difference is the
+ * "still streaming" affordances: the text colour
+ * is a hair dimmer (the same alpha we'd use for
+ * a placeholder), the border is dashed to
+ * suggest "this isn't final", and a small
+ * caret block is appended via a `::after`
+ * pseudo-element.
+ *
+ * `max-height` is the same `30vh` the `.proposal`
+ * uses, so a long stream doesn't grow the
+ * Monaco content widget unbounded. The body
+ * wrapper's `overflow-y: auto` scrolls the
+ * preview inside the overlay when the cap is
+ * hit. */
+.streamingPreview {
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--color-bg-base);
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-family-mono, ui-monospace, "Cascadia Code", monospace);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-secondary);
+  /* Phase 8.1 — opacity drops the contrast a
+   * hair so the user reads it as "preview,
+   * not final". Matches the .errorHint
+   * secondary colour used elsewhere. */
+  opacity: 0.85;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 30vh;
+  overflow-y: auto;
+  /* Phase 8.1 — `position: relative` so the
+   * `::after` caret is positioned against this
+   * element. The caret is a single block char
+   * that animates (CSS `caret-blink`) to suggest
+   * "the AI is still typing". */
+  position: relative;
+  /* `caret-color: transparent` suppresses the
+   * real text caret on this `<pre>` (we never
+   * focus it, but a parent `:focus-within` could
+   * still paint one in some browsers). */
+  caret-color: transparent;
+}
+
+.streamingPreview::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--color-info, var(--color-accent, #4a9eff));
+  /* The caret "blinks" via opacity, not the
+   * browser's caret-blink (which we just
+   * suppressed). 1s cycle = roughly the same
+   * cadence as a real terminal caret. */
+  animation: inlineEditCaretBlink 1s steps(1) infinite;
+}
+
+@keyframes inlineEditCaretBlink {
+  0%, 50% {
+    opacity: 1;
+  }
+  50.01%, 100% {
+    opacity: 0;
+  }
+}
+
 /* --- Done body --------------------------------------------------- */
 
 .afterLabel {

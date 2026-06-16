@@ -13,6 +13,14 @@
  *   - `reject()` clears state without calling
  *     `executeEdits`
  *
+ * Phase 8.1 added 9 more tests covering the
+ * streaming-content fields:
+ *   - initial empty value
+ *   - `open` / `beginStream` reset to ""
+ *   - `appendStreaming` appends / no-op on empty / caps at the cap
+ *   - `setStreamingContent` replaces / caps at the cap
+ *   - `accept` / `reject` / `close` / `resetToIdle` all clear it
+ *
  * Coverage:
  *   1. starts idle, null selection
  *   2. `open({ text, range })` sets selection + status
@@ -23,12 +31,17 @@
  *   7. `accept()` calls both `pushUndoStop` and `executeEdits`, clears state
  *   8. `reject()` clears state, does NOT call `executeEdits`
  *   9. `close()` is an alias for `reject` (no executeEdits)
+ *   10–18. Phase 8.1 streaming-content coverage
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { useEditorControllerStore } from './editorControllerStore';
-import { useInlineEditStore, type InlineEditSelection } from './inlineEditStore';
+import {
+  useInlineEditStore,
+  STREAMING_PREVIEW_MAX_CHARS,
+  type InlineEditSelection,
+} from './inlineEditStore';
 
 const SAMPLE_SELECTION: InlineEditSelection = {
   text: 'const x = 1;',
@@ -48,6 +61,7 @@ describe('inlineEditStore (Phase 8)', () => {
       streamingMessageId: null,
       status: 'idle',
       proposal: null,
+      streamingContent: '',
       error: null,
     });
     useEditorControllerStore.setState({ editor: null });
@@ -213,5 +227,116 @@ describe('inlineEditStore (Phase 8)', () => {
     expect(s.selection).toBeNull();
     expect(s.status).toBe('idle');
     expect(s.proposal).toBeNull();
+  });
+
+  // --- Phase 8.1 — streaming preview text accumulation --------------
+
+  it('starts with empty streamingContent', () => {
+    const s = useInlineEditStore.getState();
+    expect(s.streamingContent).toBe('');
+  });
+
+  it('open() resets streamingContent to ""', () => {
+    useInlineEditStore.setState({ streamingContent: 'leftover' });
+    useInlineEditStore.getState().open(SAMPLE_SELECTION);
+    expect(useInlineEditStore.getState().streamingContent).toBe('');
+  });
+
+  it('beginStream() resets streamingContent to ""', () => {
+    useInlineEditStore.setState({ streamingContent: 'leftover' });
+    useInlineEditStore.getState().beginStream('msg_abc');
+    const s = useInlineEditStore.getState();
+    expect(s.streamingContent).toBe('');
+    expect(s.status).toBe('streaming');
+  });
+
+  it('appendStreaming() appends a single chunk', () => {
+    useInlineEditStore.getState().beginStream('msg_abc');
+    useInlineEditStore.getState().appendStreaming('Hello, ');
+    useInlineEditStore.getState().appendStreaming('world!');
+    expect(useInlineEditStore.getState().streamingContent).toBe(
+      'Hello, world!',
+    );
+  });
+
+  it('appendStreaming() is a no-op on an empty delta', () => {
+    useInlineEditStore.getState().beginStream('msg_abc');
+    useInlineEditStore.getState().appendStreaming('foo');
+    useInlineEditStore.getState().appendStreaming('');
+    expect(useInlineEditStore.getState().streamingContent).toBe('foo');
+  });
+
+  it('appendStreaming() caps at STREAMING_PREVIEW_MAX_CHARS (newest wins)', () => {
+    useInlineEditStore.getState().beginStream('msg_abc');
+    // Build a string that's larger than the cap, in one shot.
+    const huge = 'x'.repeat(STREAMING_PREVIEW_MAX_CHARS * 2);
+    useInlineEditStore.getState().appendStreaming(huge);
+    const s = useInlineEditStore.getState();
+    // Newest-wins: the cap is the length of the
+    // tail, not the leading bytes.
+    expect(s.streamingContent.length).toBe(STREAMING_PREVIEW_MAX_CHARS);
+    // All 'x' (the leading bytes were dropped, the
+    // tail is 'x' repeated up to the cap).
+    expect(s.streamingContent).toBe('x'.repeat(STREAMING_PREVIEW_MAX_CHARS));
+  });
+
+  it('setStreamingContent() replaces the whole value (snapshot path)', () => {
+    useInlineEditStore.getState().beginStream('msg_abc');
+    useInlineEditStore.getState().setStreamingContent('partial');
+    expect(useInlineEditStore.getState().streamingContent).toBe('partial');
+    useInlineEditStore.getState().setStreamingContent('rewound');
+    expect(useInlineEditStore.getState().streamingContent).toBe('rewound');
+  });
+
+  it('setStreamingContent() caps at STREAMING_PREVIEW_MAX_CHARS', () => {
+    useInlineEditStore.getState().beginStream('msg_abc');
+    const huge = 'y'.repeat(STREAMING_PREVIEW_MAX_CHARS * 2);
+    useInlineEditStore.getState().setStreamingContent(huge);
+    expect(useInlineEditStore.getState().streamingContent.length).toBe(
+      STREAMING_PREVIEW_MAX_CHARS,
+    );
+  });
+
+  it('accept() / reject() / close() / resetToIdle() all clear streamingContent', () => {
+    // accept — needs a mock editor (applyProposalToEditor
+    // bails on null) AND an open selection
+    // (`accept` bails when selection is null).
+    // We don't care about the editor call here;
+    // we only care that the store fields are
+    // cleared on success.
+    useEditorControllerStore.setState({
+      editor: {
+        pushUndoStop: () => undefined,
+        executeEdits: () => null,
+      },
+    });
+    useInlineEditStore.getState().open(SAMPLE_SELECTION);
+    useInlineEditStore.getState().beginStream('msg_abc');
+    useInlineEditStore.getState().appendStreaming('partial text');
+    useInlineEditStore.getState().sealProposal('final');
+    useInlineEditStore.getState().accept();
+    expect(useInlineEditStore.getState().streamingContent).toBe('');
+
+    // reject
+    useInlineEditStore.getState().open(SAMPLE_SELECTION);
+    useInlineEditStore.getState().beginStream('msg_def');
+    useInlineEditStore.getState().appendStreaming('partial text');
+    useInlineEditStore.getState().reject();
+    expect(useInlineEditStore.getState().streamingContent).toBe('');
+
+    // close
+    useInlineEditStore.getState().open(SAMPLE_SELECTION);
+    useInlineEditStore.getState().beginStream('msg_ghi');
+    useInlineEditStore.getState().appendStreaming('partial text');
+    useInlineEditStore.getState().close();
+    expect(useInlineEditStore.getState().streamingContent).toBe('');
+
+    // resetToIdle (from 'error' state)
+    useInlineEditStore.getState().open(SAMPLE_SELECTION);
+    useInlineEditStore.getState().beginStream('msg_jkl');
+    useInlineEditStore.getState().appendStreaming('partial text');
+    useInlineEditStore.getState().fail('rate_limit', 'slow down');
+    useInlineEditStore.getState().resetToIdle();
+    expect(useInlineEditStore.getState().streamingContent).toBe('');
   });
 });

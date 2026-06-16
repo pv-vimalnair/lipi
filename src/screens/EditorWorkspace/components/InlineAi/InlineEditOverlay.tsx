@@ -109,6 +109,14 @@ export function InlineEditOverlay(_props: InlineEditOverlayProps) {
   const streamingMessageId = useInlineEditStore(
     (s) => s.streamingMessageId,
   );
+  // Phase 8.1 — the streaming preview text. The
+  // overlay reads it instead of (or in addition
+  // to) the spinner so the user sees the AI's
+  // response accumulate. Capped + sliced by the
+  // store's `appendStreaming` / `setStreamingContent`.
+  const streamingContent = useInlineEditStore(
+    (s) => s.streamingContent,
+  );
 
   const setInstruction = useInlineEditStore(
     (s) => s.setInstruction,
@@ -123,6 +131,13 @@ export function InlineEditOverlay(_props: InlineEditOverlayProps) {
   );
   const accept = useInlineEditStore((s) => s.accept);
   const reject = useInlineEditStore((s) => s.reject);
+  // Phase 8.1 — streaming-content mutators.
+  const appendStreaming = useInlineEditStore(
+    (s) => s.appendStreaming,
+  );
+  const setStreamingContent = useInlineEditStore(
+    (s) => s.setStreamingContent,
+  );
 
   const sendEdit = useAiStore((s) => s.sendEdit);
   const messages = useAiStore((s) => s.messages);
@@ -166,6 +181,70 @@ export function InlineEditOverlay(_props: InlineEditOverlayProps) {
       sealProposal(target.content);
     }
   }, [messages, sealProposal, status, streamingMessageId]);
+
+  // --- Phase 8.1 — streaming-content sync ---------------------------
+  //
+  // The `InlineEditOverlay` mirrors the streaming
+  // message's `content` into the `inlineEditStore`
+  // as `streamingContent`. The store is the
+  // authoritative source for the preview so the
+  // overlay's render is independent of how the
+  // aiStore's `messages` array mutates (a
+  // concurrent chat turn appending a new message
+  // shouldn't thrash the preview).
+  //
+  // We sync on every render where the
+  // `streamingMessageId` matches a message with
+  // a *different* `content` than our cached
+  // `streamingContent`. The comparison is
+  // length-only (a chatty message can have
+  // thousands of identical-prefix chunks; the
+  // diff is always "append a delta at the
+  // tail"). For a long stream this is O(1)
+  // per render — no string comparison of the
+  // full content.
+  //
+  // The "snapshot" path (setStreamingContent on
+  // re-mount) handles the case where the
+  // overlay was unmounted while a stream was
+  // in flight and re-mounted later. We only
+  // snapshot when the cached value is empty +
+  // the message has content + the status is
+  // 'streaming' — a fresh `open` already
+  // resets the store to '', so the snapshot
+  // is only needed for the "resumed stream"
+  // case.
+  useEffect(() => {
+    if (status !== 'streaming') return;
+    if (!streamingMessageId) return;
+    const target = messages.find(
+      (m) => m.id === streamingMessageId,
+    );
+    if (!target) return;
+    if (target.streaming) {
+      // Live tail — append only the new bytes
+      // (the delta from the last seen length).
+      const seen = streamingContent.length;
+      if (target.content.length > seen) {
+        appendStreaming(target.content.slice(seen));
+      } else if (target.content.length < seen) {
+        // Shouldn't happen in practice (the
+        // aiStore only ever appends, never
+        // rewinds), but if it does, re-sync
+        // the whole thing so the preview
+        // matches what the user is about to
+        // see.
+        setStreamingContent(target.content);
+      }
+    }
+  }, [
+    appendStreaming,
+    messages,
+    setStreamingContent,
+    status,
+    streamingContent.length,
+    streamingMessageId,
+  ]);
 
   // Watch the aiStore's `requestStatus` — if it
   // flips to `error` while we're streaming, the
@@ -304,7 +383,9 @@ export function InlineEditOverlay(_props: InlineEditOverlayProps) {
         />
       )}
 
-      {status === 'streaming' && <StreamingBody />}
+      {status === 'streaming' && (
+        <StreamingBody content={streamingContent} />
+      )}
 
       {status === 'done' && (
         <DoneBody
@@ -390,19 +471,45 @@ function IdleBody({
 
 // --- Streaming body ----------------------------------------------------
 
+interface StreamingBodyProps {
+  /**
+   * Phase 8.1 — the accumulating AI response
+   * text. Mirrors the `inlineEditStore.streamingContent`
+   * field. Empty when the response hasn't started
+   * accumulating yet (the aiStore's message was
+   * just created with `content: ''`). The
+   * `StreamingBody` renders the empty case as
+   * "spinner + 'AI is editing…'" (same as
+   * pre-8.1), then transitions to "spinner + the
+   * live text" as soon as the first chunk arrives.
+   */
+  content: string;
+}
+
 /**
- * The "AI is editing…" view. We render a spinner
- * (a CSS animation on the `streamingDot` class) +
- * a status label. The text in the body is read
- * from the streaming message in the aiStore, but
- * per the Phase 8 plan the user explicitly chose
- * to wait for the full response before showing
- * the diff — so during `streaming` we ONLY show
- * the spinner, not the partial text. (The
- * aiStore's `messages` array is the canonical
- * place where the text accumulates.)
+ * Phase 8 — the "AI is editing…" view, extended
+ * by 8.1 to render the streaming text.
+ *
+ * The view is two pieces:
+ *   1. A header strip (spinner + "AI is editing…")
+ *      so the user always sees the "still working"
+ *      signal even when the text is empty.
+ *   2. A `<pre>` of the live `content` (the
+ *      aiStore message's `content` field, mirrored
+ *      to the inlineEditStore as `streamingContent`).
+ *      Empty on the first frame after submit;
+ *      fills in chunk-by-chunk as `onAiChunk`
+ *      fires.
+ *
+ * The pre is capped at `STREAMING_PREVIEW_MAX_CHARS`
+ * (8 KiB) by the store and renders inside a
+ * `max-height: 30vh` overflow:auto block so a
+ * long stream doesn't grow the Monaco content
+ * widget unbounded (which would force Monaco to
+ * re-position the widget on every chunk — see the
+ * §9.32 follow-up rationale in HANDOFF).
  */
-function StreamingBody() {
+function StreamingBody({ content }: StreamingBodyProps) {
   return (
     <div className={styles.body} aria-busy="true">
       <div className={styles.streaming}>
@@ -414,6 +521,15 @@ function StreamingBody() {
           AI is editing…
         </span>
       </div>
+      {content.length > 0 && (
+        <pre
+          className={styles.streamingPreview}
+          aria-label="AI response in progress"
+          data-testid="inline-edit-streaming-preview"
+        >
+          {content}
+        </pre>
+      )}
     </div>
   );
 }

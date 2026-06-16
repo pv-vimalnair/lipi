@@ -1730,3 +1730,67 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+// ────────────────────────────────────────────────────────
+// Mobile-build roadmap Phase A: tauri_config tests.
+//
+// These are guard-rails against "I forgot to add the
+// mobile block" bugs at PR time. The exact values are
+// pinned in HANDOFF §9.48 (Decision #185) and the
+// contract READMEs (docs/plugins/lipi-stt-{ios,android}/
+// README.md). Catches typos + accidental JSON drift
+// before a future Mac / Linux session tries to build.
+// ────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tauri_config {
+    use std::fs;
+
+    const TAURI_CONF: &str = "tauri.conf.json";
+    const TAURI_ANDROID_CONF: &str = "tauri.android.conf.json";
+    const TAURI_IOS_CONF: &str = "tauri.ios.conf.json";
+
+    #[test]
+    fn tauri_conf_json_mobile_block_parses() {
+        let raw = fs::read_to_string(TAURI_CONF)
+            .expect("tauri.conf.json must be readable (run from src-tauri/ dir)");
+        let v: serde_json::Value = serde_json::from_str(&raw)
+            .expect("tauri.conf.json must be valid JSON");
+
+        // The mobile block is the source of truth for
+        // the platform floors. These exact values are
+        // pinned in HANDOFF §9.48 (Decision #185) and
+        // the contract READMEs
+        // (docs/plugins/lipi-stt-{ios,android}/README.md).
+        let android = v
+            .pointer("/bundle/android")
+            .expect("bundle.android must be present in tauri.conf.json");
+        assert_eq!(
+            android.get("minSdkVersion").and_then(|v| v.as_u64()),
+            Some(24),
+            "bundle.android.minSdkVersion must be 24 (Android 7.0)"
+        );
+
+        let ios = v
+            .pointer("/bundle/iOS")
+            .expect("bundle.iOS must be present in tauri.conf.json");
+        assert_eq!(
+            ios.get("minimumSystemVersion").and_then(|v| v.as_str()),
+            Some("17.0"),
+            "bundle.iOS.minimumSystemVersion must be \"17.0\" (iOS 17)"
+        );
+    }
+
+    #[test]
+    fn per_platform_conf_files_parse() {
+        // Both files must be present and parse as valid
+        // JSON. The exact schema is enforced by the Tauri
+        // CLI on `cargo tauri {ios,android} build`; here
+        // we just check they exist + parse.
+        for path in [TAURI_ANDROID_CONF, TAURI_IOS_CONF] {
+            let raw = fs::read_to_string(path)
+                .unwrap_or_else(|_| panic!("{path} must exist"));
+            let _: serde_json::Value = serde_json::from_str(&raw)
+                .unwrap_or_else(|e| panic!("{path} must be valid JSON: {e}"));
+        }
+    }
+}

@@ -21,6 +21,10 @@ import { configureLanguageServices } from '../../workers/configureLanguageServic
 import {
   useWorkspaceStore,
 } from '@/shared/state/workspaceStore';
+import {
+  _flushPendingCursor,
+  scheduleCursorMirrorBack,
+} from './scheduleCursorMirrorBack';
 import styles from './EditorPane.module.css';
 
 // Phase 7: module-level guard for the one-time
@@ -267,6 +271,15 @@ function ActiveEditor({
 }: ActiveEditorProps) {
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const suppressNextChange = useRef(false);
+  // M6c: suppress the next onDidChangeCursorPosition
+  // when we programmatically setPosition during the
+  // rehydrate. Without this, the rehydrate itself
+  // would round-trip through the store via the
+  // mirror-back subscription.
+  const suppressNextCursorChange = useRef(false);
+  // M6c: the active tab id (for the mirror-back's
+  // `tabId` key).
+  const activeTabId = useWorkspaceStore((s) => s.activeId);
   // 5b-5: write the live editor to the screen-level
   // controller store so the CmdKModal (and any
   // future cross-pane feature) can read the current
@@ -391,9 +404,102 @@ function ActiveEditor({
         editor.focus();
         setPendingReveal(null);
       }
+
+      // M6c: restore the saved cursor position on
+      // model mount. We check the store's
+      // `editorCursorByPath` for the active tab. D-145
+      // keeps the editor mounted across tab switches,
+      // so the rehydrate is only needed once per model
+      // (when the model is first attached).
+      if (activeTabId && currentPath) {
+        const tab = useWorkspaceStore
+          .getState()
+          .workspaces.find((w) => w.id === activeTabId);
+        const tabState = tab?.state;
+        if (tabState) {
+          // Match the model URI's path against the
+          // tab's openEditorTabPaths (the same value
+          // the `<Editor>` component uses to construct
+          // the model URI). We match by suffix to
+          // handle the Windows drive-letter case
+          // (mirrors the pendingReveal branch above).
+          const matchingPath = tabState.openEditorTabPaths.find(
+            (p) => currentPath === p || currentPath.endsWith(p),
+          );
+          if (matchingPath) {
+            const cursor = tabState.editorCursorByPath[matchingPath];
+            if (cursor) {
+              const position = {
+                lineNumber: cursor.line,
+                column: cursor.column,
+              };
+              // Only setPosition if the current
+              // position differs from the saved one.
+              // This prevents the "user opened the
+              // file, the saved cursor is at line 1,
+              // the editor's default is also line 1"
+              // loop where setPosition would fire
+              // onDidChangeCursorPosition, which would
+              // schedule a mirror-back, which would
+              // short-circuit on the equality check.
+              const current = editor.getPosition();
+              if (
+                current?.lineNumber !== position.lineNumber ||
+                current?.column !== position.column
+              ) {
+                // Suppress the onDidChangeCursorPosition
+                // that's about to fire — Monaco's
+                // setPosition doesn't fire onChange, but
+                // onDidChangeCursorPosition does, and
+                // we don't want that to schedule a
+                // mirror-back that round-trips through
+                // the store.
+                suppressNextCursorChange.current = true;
+                editor.setPosition(position);
+                editor.revealPositionInCenterIfOutsideViewport(position);
+              }
+            }
+          }
+        }
+      }
     });
     return () => subscription.dispose();
-  }, [setPendingReveal]);
+  }, [setPendingReveal, activeTabId]);
+
+  // M6c: mirror the cursor position back to the
+  // active tab's `editorCursorByPath`. Subscribed
+  // in a separate effect from the model-swap one
+  // (different events). The
+  // `scheduleCursorMirrorBack` helper throttles
+  // per (tabId, filePath) and flushes
+  // synchronously on dispose (so a cursor move
+  // just before a tab close is never lost).
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const subscription = editor.onDidChangeCursorPosition((e) => {
+      if (suppressNextCursorChange.current) {
+        suppressNextCursorChange.current = false;
+        return;
+      }
+      if (!activeTabId) return;
+      scheduleCursorMirrorBack(activeTabId, path, {
+        line: e.position.lineNumber,
+        column: e.position.column,
+      });
+    });
+    return () => {
+      subscription.dispose();
+      // Flush any pending cursor write for this
+      // (tabId, path) before the subscription is
+      // gone. The throttled map is keyed by
+      // `tabId + '\0' + filePath`, so we look it
+      // up and flush synchronously.
+      if (activeTabId) {
+        _flushPendingCursor(activeTabId, path);
+      }
+    };
+  }, [activeTabId, path]);
 
   // Phase 7: re-apply the discovered `compilerOptions`
   // whenever the `tsConfigStore` updates — that covers

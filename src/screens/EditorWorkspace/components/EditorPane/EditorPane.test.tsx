@@ -173,7 +173,23 @@ const fakeMonacoEditor = {
   getValue: () => '',
   setValue: () => undefined,
   onDidChangeModel: () => ({ dispose: () => undefined }),
+  // M6c: the cursor mirror-back
+  // subscription uses
+  // `onDidChangeCursorPosition`. The
+  // pre-M6c mock didn't include it;
+  // the existing test doesn't fire
+  // cursor events, but the editor
+  // must still expose the method so
+  // the `ActiveEditor` effect's
+  // `editor.onDidChangeCursorPosition(...)`
+  // call doesn't throw.
+  onDidChangeCursorPosition: () => ({ dispose: () => undefined }),
+  // M6c: cursor rehydrate uses
+  // `getPosition` + `setPosition` +
+  // `revealPositionInCenterIfOutsideViewport`.
+  getPosition: () => null,
   revealLineInCenter: () => undefined,
+  revealPositionInCenterIfOutsideViewport: () => undefined,
   setPosition: () => undefined,
   focus: () => undefined,
 };

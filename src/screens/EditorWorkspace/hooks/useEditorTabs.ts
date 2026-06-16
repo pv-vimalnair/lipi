@@ -256,6 +256,29 @@ export function useEditorTabs(): UseEditorTabs {
         activePath && paths.includes(activePath) ? activePath : paths[0] ?? null;
       replaceAll(paths, tabsMap, resolvedActive);
 
+      // M6c: prune stale `editorCursorByPath` entries
+      // (files that are in the cursor map but not in
+      // `openEditorTabPaths`). Hydrate-time prune is
+      // preferred over per-close-action coordination:
+      // one place, simple, accepts a few transient
+      // stale entries per tab.
+      const validPaths = new Set(paths);
+      const currentCursorMap = tab.state.editorCursorByPath;
+      const nextCursorByPath: Record<string, { line: number; column: number }> = {};
+      let prunedAny = false;
+      for (const [p, c] of Object.entries(currentCursorMap)) {
+        if (validPaths.has(p)) {
+          nextCursorByPath[p] = c;
+        } else {
+          prunedAny = true;
+        }
+      }
+      if (prunedAny) {
+        useWorkspaceStore.getState().setTabState(activeTabId, {
+          editorCursorByPath: nextCursorByPath,
+        });
+      }
+
       // Re-read each file
       // from disk. Failures
       // (file deleted

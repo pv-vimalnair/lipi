@@ -48,6 +48,39 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// --- Tauri IPC mocks -----------------------------------------------------
+//
+// The hook's `setupOverlay` (imported below) calls
+// `createRoot(domNode).render(<InlineEditOverlay ... />)`,
+// which transitively imports `aiStore.ts`. The
+// `aiStore` has a module-level `setupSubscriptions()`
+// that registers `ai://chunk` / `ai://done` /
+// `ai://error` listeners via Tauri's `listen()`.
+// In the test environment the Tauri runtime isn't
+// present, so the un-mocked `listen()` call rejects
+// with "Cannot read properties of undefined (reading
+// 'transformCallback')" and Vitest reports it as
+// "Unhandled Rejection" — a false-positive that
+// confuses `npx vitest run` output but doesn't
+// actually break any of our 4 tests.
+//
+// We mock both `@tauri-apps/api/core` (the `invoke`
+// surface) and `@tauri-apps/api/event` (the `listen`
+// surface) at the module boundary. The `listen`
+// mock returns a resolved Promise to a no-op
+// unlisten function so the subscription setup
+// completes without throwing. Vitest hoists
+// `vi.mock(...)` above the `import` statements, so
+// the mock factory must be self-contained (no
+// references to top-level `const` bindings).
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+}));
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(() => Promise.resolve(() => {})),
+}));
+
 import { useInlineEditStore } from '../state/inlineEditStore';
 import { setupOverlay } from './useInlineEditOverlay';
 

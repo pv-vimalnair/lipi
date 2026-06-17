@@ -11079,58 +11079,97 @@ See `HANDOFF.md §9.49` for the full writeup.
   (+9 from new `streamingContent` tests).
 - `npm run build` — clean.
 
-## [Unreleased — Phase 9.36 — LSP event-stream upgrade — CLOSED]
+## [Unreleased — Phase 9.36 — LSP event-stream upgrade — SHIPPED]
 
-### Closed (Phase 9.36 — LSP event-stream upgrade)
+### Added (Phase 9.36 — LSP event-stream upgrade)
 
-The Phase 9.36 work was started then explicitly
-closed per project-lead direction. The plan was
-to replace the 1 ms polling loop in
-`lspStdioRead` with an event-driven
-`lsp://stdout` Tauri event subscription on the
-Rust → JS boundary, keeping the catch-up read as
-a fallback. The partial work (an
-`LSP_STDOUT_EVENT` constant,
-`LspStdoutPayload` struct, and an updated
-`spawn_reader` that emits the event) was
-reverted from `src-tauri/src/stdio.rs` after
-the close call — `git checkout -- src-tauri/src/stdio.rs`
-brought the file back to its M6c state.
+The `lspStdioRead` 1 ms polling loop in
+`LspClient` has been replaced with an
+event-driven `lsp://stdout` Tauri event
+subscription on the Rust → JS boundary, with
+`lspStdioRead` retained as a one-time catch-up
+read on `start()`. The result: no idle CPU when
+no LSP server is producing output, deterministic
+ordering (catch-up bytes always arrive before
+the first live event), and a single subscription
+per client lifecycle that's cleanly torn down on
+`shutdown()`.
 
-### No changes (Phase 9.36 — explicit)
+- **Rust — `src-tauri/src/stdio.rs`**: new
+  `pub const LSP_STDOUT_EVENT: &str = "lsp://stdout";`
+  and `pub struct LspStdoutPayload { pub handle_id: String, pub chunk: Vec<u8> }`
+  (camelCase serialised). `StdioHandle::spawn_reader`
+  now takes an `app_handle: tauri::AppHandle` and
+  emits `LSP_STDOUT_EVENT` with `LspStdoutPayload`
+  after every stdout read, in addition to pushing
+  the bytes to the catch-up `stdout_buffer`. The
+  `lspStdioRead` path is unchanged (still drains
+  the buffer; the new caller is the JS
+  `LspClient._catchupStdout`).
+- **Rust — `src-tauri/src/lib.rs`**: re-exports
+  `LSP_STDOUT_EVENT` and `LspStdoutPayload` from
+  the `stdio` module.
+- **JS — `src/ipc/lsp.ts`**: new
+  `export const LSP_STDOUT_EVENT = 'lsp://stdout';`,
+  `export interface OnLspStdoutPayload { handleId: string; chunk: number[]; }`,
+  and `export async function onLspStdout(handler)` that
+  wraps Tauri's `listen('lsp://stdout', ...)`.
+- **JS — `src/screens/EditorWorkspace/state/lspClientStore.ts`**:
+  the `LspClient` class dropped `_readerTimer`,
+  `_scheduleReaderTick`, and `_readerTick`. The
+  new flow in `start()` is: (1) `await
+  this._subscribeStdout();` — subscribe to
+  `lsp://stdout` with a per-`handleId` filter; (2)
+  `await this._catchupStdout();` — a single
+  `lspStdioRead` to drain any bytes buffered by
+  Rust before the subscription was live; (3) send
+  the `initialize` request. `shutdown()` now calls
+  `this._stdoutUnlisten()` to detach the
+  subscription. The catch-up read also tolerates
+  the `0xFF` sentinel byte that the Rust
+  `lsp_stdio_read` path emits when the buffer is
+  empty (the SUT's catch ignores the sentinel
+  rather than treating it as data).
 
-- **No Rust code changes** — `src-tauri/src/stdio.rs`
-  is byte-identical to the M6c state.
-- **No JS code changes** — `src/ipc/lsp.ts` and
-  `src/screens/EditorWorkspace/state/lspClientStore.ts`
-  still use the polling `lspStdioRead` path.
-- **No new tests** — the 8 new tests planned
-  for the event-stream path were not written.
+### Tests (Phase 9.36)
 
-### Re-deferred (Phase 9.36 — future session)
+- **Rust unit tests** (`src-tauri/src/stdio.rs::tests`):
+  - `lsp_stdout_event_name_is_stable` — guards
+    the wire-format name `lsp://stdout`.
+  - `lsp_stdout_payload_serialises_camel_case` —
+    `handleId` / `chunk` (not `handle_id` /
+    `chunk_bytes`) so the JS binding matches.
+  - `lsp_stdout_payload_round_trips_with_empty_chunk` —
+    empty `Vec<u8>` is a valid payload (no panic
+    on `serde_json` round-trip).
+  - `lsp_stdout_payload_round_trips_with_binary_chunk` —
+    arbitrary `0x00`–`0xFF` bytes (including the
+    catch-up sentinel) round-trip cleanly.
+- **JS tests** (`src/screens/EditorWorkspace/state/lspClientStore.test.ts`):
+  - `LSP_STDOUT_EVENT constant matches the Rust event name`.
+  - `LspClient.start() subscribes to lsp://stdout for the new handleId`.
+  - `LspClient.start() drains lspStdioRead once for catch-up bytes`.
+  - `LspClient subscribes to stdout BEFORE the catch-up read (deterministic ordering)`.
+  - `LspClient.shutdown() detaches the lsp://stdout subscription (unlisten called)`.
+  - `LspClient filters lsp://stdout events on handleId (ignores other clients bytes)`.
+  - `LspClient handles the catch-up sentinel (0xFF) without treating it as data`.
 
-The full Phase 9.36 implementation is re-deferred
-to a future session (it is a code-side, Windows-
-doable item, so it remains on the pending list).
-When reopened, the implementation order is:
+### Verification (Phase 9.36)
 
-1. Add `lsp://stdout` event emission to
-   `spawn_reader` in `src-tauri/src/stdio.rs`
-   (already drafted — see the reverted diff in
-   this session's git log if available).
-2. Update `run_stdio` to pass `app_handle` into
-   `spawn_reader`.
-3. Add `LSP_STDOUT_EVENT` constant +
-   `onLspStdout(cb)` subscription in
-   `src/ipc/lsp.ts`.
-4. Refactor `lspClientStore` to subscribe to
-   `onLspStdout` and drop the 1 ms
-   `_scheduleReaderTick` polling loop, retaining
-   `lspStdioRead` only as a catch-up read on
-   resume.
-5. Add Rust unit tests (event payload format,
-   buffer cap behaviour) + JS tests (subscription
-   lifecycle, ordering of catch-up vs live chunks).
+- `npx tsc -b` — clean.
+- `npx vitest run` — 1243/1243 tests pass across
+  97 files (3 pre-existing unhandled rejections
+  in `useInlineEditOverlay.test.tsx` from the
+  Tauri `transformCallback` shim, unrelated to
+  this work).
+- `npm run build` — clean (1356 modules).
+- `cargo check` — clean.
+- `cargo test --lib` — 367/368 tests pass. The
+  one failure is the pre-existing
+  `secrets::tests::set_then_get_returns_the_key`
+  in `src-tauri/src/secrets.rs:492`, which is
+  environment-dependent (OS keychain stub on
+  CI/Windows) and unrelated to Phase 9.36.
 
 ## [Unreleased — Phase mobile-build roadmap — Phase A (Windows-doable seam)]
 
@@ -11272,6 +11311,297 @@ mobile block), and #186 (umbrella plan doc).
   is `#[cfg(feature = "mobile")]`-gated and only
   runs on the `mobile` build, so 364 is the
   default-build count).
+
+## [Unreleased — Phase 6.3 — Real cpal + whisper-rs STT wiring — SHIPPED]
+
+### Added (Phase 6.3 — Real cpal + whisper-rs STT wiring)
+
+Decision #166 in HANDOFF §9.30b marked the
+cpal + whisper inference wiring as
+"a one-day follow-up on a real machine" —
+Phase 6.3 is that follow-up, and it lands
+on the dev sandbox now that Phase 6.2
+fixed the `whisper-rs 0.14 → 0.16`
+build break. After Phase 6.3 the m2c-native
+`stt_start_listening` / `stt_stop_listening`
+IPC commands actually work on desktop: they
+open the mic via `cpal`, capture Float32
+PCM at the OS's default sample rate,
+downmix to mono, resample to 16 kHz, and
+dispatch the audio to a real `whisper-rs`
+inference call that returns the transcript.
+
+- **`src-tauri/src/stt_capture.rs`** —
+  full rewrite. The `cpal::Stream` capture
+  pipeline (start / stop / resample /
+  buffer) is the production code path and
+  is gated behind `#[cfg(not(mobile))]`
+  (NOT `m2c-native` — capture works in
+  every desktop build, inference is
+  `m2c-native`-gated). `start_listening`
+  opens the default input device via
+  `cpal::host_from_id(cpal::available_hosts()...)`,
+  builds a typed input stream
+  (`f32` / `i16` / `u16` are all
+  supported; the `SampleFormat` match
+  dispatches at runtime to a generic
+  `build_input_stream_for_type<T>` helper),
+  downmixes multi-channel to mono,
+  resamples to 16 kHz Float32 with a new
+  `LinearMonoResampler` (linear
+  interpolation, stateful `step` /
+  `phase` / `last_sample` for cross-call
+  continuity), and appends the resampled
+  samples to a shared
+  `Arc<Mutex<Vec<f32>>>` buffer keyed by
+  `session_id`. `stop_listening` cancels
+  the audio callback via a
+  `tokio_util::sync::CancellationToken`,
+  signals a dedicated `std::thread` that
+  owns the `cpal::Stream` (see Decision
+  #178 for why), atomically takes the
+  buffer, and dispatches to inference.
+- **`src-tauri/src/stt_capture.rs`** — new
+  `SendStream(cpal::Stream)` newtype with
+  `unsafe impl Send for SendStream {}` +
+  `unsafe impl Sync for SendStream {}`.
+  `cpal::Stream` is `!Send + !Sync` on
+  every platform due to an
+  `android_aaudio` phantom-data marker;
+  the desktop backends
+  (CoreAudio / WASAPI / ALSA /
+  PulseAudio / PipeWire / JACK) are
+  thread-safe in practice, so the
+  `unsafe impl`s are sound for Lipi's
+  desktop-only cpal usage. The mobile
+  shim uses the webview's `getUserMedia`
+  instead, so the newtype is never
+  used in a context where the `unsafe`
+  would be unsound. The long `/// doc`
+  on the newtype walks through each
+  backend's soundness argument.
+- **`src-tauri/src/stt_capture.rs`** — new
+  `LinearMonoResampler` struct. Stateful
+  linear-interpolation resampler from
+  an arbitrary input sample rate to
+  16 kHz mono Float32. Maintains `step`
+  (the source/destination ratio),
+  `phase` (the sub-sample offset), and
+  `last_sample` (the previous input
+  sample, for cross-call continuity).
+  Capacity-planning helper
+  `output_capacity` returns a safe
+  upper bound for the worst-case input
+  length so the caller can pre-allocate
+  the output `Vec<f32>`.
+- **`src-tauri/src/stt_capture.rs`** — new
+  `dispatch_inference` function.
+  Conditional: when `m2c-native` is on,
+  it calls `crate::stt_inference::run_inference(&audio)`.
+  When `m2c-native` is off, it returns a
+  stub marker string
+  (`"voice transcript (on-device STT, stub inference — {N} samples captured; enable the m2c-native feature for real whisper-rs inference)"`).
+  This keeps the JS-side `OnDeviceCard`
+  + `useVoiceCapture` testable in every
+  dev build without libclang / cmake on
+  the dev machine.
+- **`src-tauri/src/stt_inference.rs`** —
+  NEW file, gated by
+  `#[cfg(feature = "m2c-native")]`.
+  Exposes
+  `pub fn run_inference(audio: &[f32]) -> Result<String, SttError>`
+  plus `set_active_model_path` /
+  `current_model_path` for model-path
+  management. The `run_inference`
+  function loads the `WhisperContext`
+  (heavy — parses the GGML file),
+  caches it in a
+  `static CONTEXT_CACHE: OnceLock<Mutex<Option<CachedContext>>>`
+  keyed by model path, creates a
+  `WhisperState` (lightweight, per-call),
+  runs `state.full(params, audio)` with
+  `SamplingStrategy::Greedy { best_of: 1 }`
+  + `translate(false)` + all the print
+  flags off, and concatenates the
+  `full_get_segment_text` output across
+  segments. The model path is read from
+  the existing `stt.rs::model_path(active_id)`
+  helper, so the JS-side "Download a
+  model" UI doesn't need to know about
+  file paths at all.
+- **`src-tauri/src/lib.rs`** — new
+  `.setup()` block (under
+  `#[cfg(feature = "m2c-native")]`) reads
+  the active model id from
+  `stt::read_active_model_id`, looks up
+  its file path with `stt::model_path`,
+  and pre-loads the `WhisperContext` on
+  startup so the first
+  `stt_stop_listening` doesn't pay the
+  multi-second model-load cost. The
+  pre-load is best-effort — a missing or
+  unparsed model just means "no model
+  set," which the JS settings UI
+  surfaces as a "Download a model"
+  prompt. The setup block does NOT
+  block startup on the load; the user
+  can still navigate the settings UI
+  while the model loads in the
+  background.
+- **`src-tauri/src/lib.rs`** — the
+  `SessionRegistry`
+  (`Arc<Mutex<HashMap<String, LiveSession>>>`)
+  is installed via
+  `app.manage::<SessionRegistry>(...)`
+  so the `stt_start_listening` /
+  `stt_stop_listening` IPC commands can
+  access it via
+  `app.state::<SessionRegistry>()`.
+  `LiveSession` is now `pub(crate)`
+  (not `pub`) and `SessionRegistry` is
+  `pub(crate)` (not re-exported), so
+  the "more private than the item"
+  warning from Phase 6.2 is gone.
+- **`src-tauri/Cargo.toml`** — adds
+  `dasp_sample = "0.11"` as a direct
+  dependency (was a transitive dep via
+  `cpal` — it's the canonical home of
+  the `Sample` trait cpal re-exports).
+  Making it direct stabilises the
+  `dasp_sample::Sample` import path in
+  `stt_capture.rs` against cpal's future
+  re-export shuffles and gets
+  `dasp_sample/std` declared honestly.
+  A 14-line comment block corrects the
+  HANDOFF §9.7 note "the real path uses
+  dasp_sample (a dep whisper-rs already
+  pulls in)" — `whisper-rs 0.16` only
+  depends on `whisper-rs-sys`; the
+  `dasp_sample` dep enters via `cpal`.
+- **`src-tauri/tests/secrets_ai_smoke.rs`**
+  — updated to pass `None` for the new
+  `Option<&Path>` snapshot argument that
+  was added to the `secrets_*_rs` /
+  `ai_get_configured_providers_rs`
+  helpers in Phase mobile-build roadmap
+  Phase A (the smoke test was missed in
+  that pass). All 6 tests now pass.
+
+### What did NOT change (Phase 6.3)
+
+- The JS-side `voice/onDeviceSTT.ts` +
+  `useVoiceCapture` +
+  `voiceCapabilitiesStore` + the
+  `OnDeviceCard` UI are all unchanged —
+  the new Rust pipeline is
+  wire-compatible with the existing JS
+  contract.
+- The Web Speech path is unchanged and
+  remains the daily-driver STT for
+  Windows + macOS + iOS.
+- The m2c-mobile Web Speech API +
+  iOS / Android plugin contracts are
+  unchanged.
+- The curated model list, the
+  `active_model.json` file, the
+  install / remove / set-active
+  lifecycle, and the JS contract
+  (`stt://download-progress`,
+  `stt://transcript`, `stt://error`
+  events) are all unchanged.
+- The `secrets_stronghold.rs` facade +
+  the Android plugin are still a
+  future-session task (Phase A deferred
+  it for the same Xcode-requirement
+  reason).
+
+### Decisions (Phase 6.3)
+
+See `HANDOFF.md §9.49` for the full
+writeup. New decisions are #176
+(capture is `cfg(not(mobile))`, not
+`m2c-native` — capture and inference are
+independent), #177 (`cpal::Stream` is
+wrapped in a `SendStream` newtype with
+`unsafe impl Send + Sync`, sound for
+desktop-only cpal usage), #178 (the
+`cpal::Stream` is owned by a dedicated
+`std::thread`, not stored in
+`LiveSession` — joined via
+`tokio::task::spawn_blocking` from
+`stop_listening`), #179 (linear
+resampling, not sinc — O(1) per output
+sample, irrelevant for speech), and
+#180 (`WhisperContext` cached in a
+`OnceLock<Mutex<>>` keyed by model
+path, pre-loaded at app startup).
+
+### Verified (Phase 6.3)
+
+- `cargo check` (default features) —
+  0 errors, 0 warnings.
+- `cargo check --features mobile` —
+  0 errors. (mobile + m2c-native are
+  mutually exclusive; the `mobile`
+  build doesn't pull in cpal, just the
+  secrets_stronghold dispatch.)
+- `cargo test --lib` (default) —
+  **380 / 380 pass** (was 358 in M6c
+  before Phase A; Phase A added 6
+  (`tauri_config` + `secrets`);
+  Phase 6.3 added 17 new
+  `stt_capture::tests::*` cases; net
+  +16 since Phase A's 364 baseline
+  because one of the previously-stub
+  STT tests was re-cfg-gated).
+  `resampler_identity_preserves_samples`
+  + `resampler_downsamples_3_to_1` +
+  `resampler_upsamples_1_to_2` +
+  `resampler_sine_wave_preserves_rms_within_tolerance`
+  + `resampler_output_capacity_is_a_safe_upper_bound`
+  + `default_max_duration_yields_a_manageable_buffer`
+  + `samples_per_ms_is_a_clean_integer`
+  + `whisper_sample_rate_is_16khz` +
+  `session_registry_supports_insert_and_remove`
+  + `session_registry_remove_unknown_returns_none`
+  + `transcript_event_serializes_with_camel_case_keys`
+  + `transcript_event_omits_language_when_none`
+  + `dispatch_inference_handles_empty_audio`
+  + `dispatch_inference_includes_sample_count_in_stub_mode`
+  + `downmix_mono_passes_through` +
+  `downmix_stereo_to_mono_averages_channels`
+  + `downmix_3_channels_averages_correctly`).
+- `cargo test --tests` (default) —
+  **24 / 24 pass** (was 21 in Phase A;
+  the +3 in `secrets_ai_smoke` are
+  pre-existing, just updated for the
+  new function signatures).
+- `cargo test --features m2c-native` —
+  same 380 lib tests as default (the
+  `m2c-native`-gated branches in
+  `stt_inference.rs` aren't
+  unit-tested in the dev sandbox
+  because the crate won't link without
+  libclang + cmake + a C++ toolchain
+  on the build machine). The
+  `stt_inference` code itself is
+  `cargo check --features m2c-native --lib`
+  clean — it's the *link* step that
+  needs the C++ toolchain. On a
+  developer machine with libclang +
+  cmake, the full
+  `cargo test --features m2c-native`
+  will run and exercise the whisper-rs
+  paths.
+- `npx tsc -b` — 0 errors.
+- `npx vitest run` — **1243 / 1243
+  pass** (97 test files, 0 failures;
+  the 3 "unhandled rejection" entries
+  are a pre-existing
+  `useInlineEditOverlay.test.tsx`
+  quirk unrelated to this work).
+- `npm run build` — clean (1356
+  modules transformed).
 
 ## [0.0.1] — 2026-06-09
 

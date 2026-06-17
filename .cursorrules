@@ -1,0 +1,97 @@
+# Lipi — Cursor IDE rules
+# Auto-loaded by Cursor IDE for every chat in this project.
+# Full source of truth: docs/ENGINEERING.md, AGENTS.md, HANDOFF.md.
+
+## Workspace
+- Project: Lipi (a cross-platform Cursor-like IDE, Tauri 2 + React 18 + TS + Vite + Monaco)
+- Root: C:\Users\Pv Vimal Nair\lipi\
+- Sibling project (DO NOT TOUCH): C:\Users\Pv Vimal Nair\lifeof\ (Flutter)
+- License: MIT
+
+## Stack
+- Frontend: React 18 + TypeScript (strict) + Vite (port 1420) + Monaco + Zustand
+- Shell: Tauri 2 (Rust, MSVC on Windows)
+- 5 platforms: Windows, macOS, Linux, iOS, Android
+- LLM: BYO key (OpenAI / Anthropic / OpenRouter), no backend
+- Voice: Web Speech API (daily driver) + cpal + whisper-rs (on-device desktop, m2c-native feature)
+
+## Build commands
+- npm run typecheck     # npx tsc -b, must be 0 errors
+- npm test              # npx vitest run, 1243/1243 expected
+- npm run build         # vite production build
+- cd src-tauri && cargo check               # 0 errors, 0 warnings
+- cd src-tauri && cargo test --lib          # 380/380 expected
+- cd src-tauri && cargo test --tests        # 24/24 expected
+- cd src-tauri && cargo check --features mobile
+- cd src-tauri && cargo check --features m2c-native --lib   # needs libclang + cmake
+
+## The 7 rules (PR-checked)
+1. Spacing: use tokens.css scale (--space-1 = 4px through --space-12), never hardcode px.
+2. No new tokens without a phase plan. Design system: src/shared/styles/tokens.css.
+3. No new components without owner confirmation. Reuse src/shared/components/. Grep target.
+4. No new dependencies without owner confirmation (npm + cargo).
+5. Tests for every new feature. Vitest (JS) + #[cfg(test)] mod tests (Rust).
+6. State in Zustand (src/screens/<X>/state/<X>Store.ts or src/shared/state/), not Context, not useState for cross-component.
+7. Update HANDOFF.md + CHANGELOG.md for every phase. Decisions are numbered; new ones go in the next slot after the last used (currently #180).
+
+## Architecture thumb-rules
+- Tauri commands are thin one-liners in src-tauri/src/lib.rs; logic in src-tauri/src/<feature>.rs.
+- JS IPC wrappers live in src/ipc/<feature>.ts (typed wrappers around `invoke`).
+- Do not add new routes to appStore.ts/main.tsx without owner confirmation.
+- The voice hook (src/shared/hooks/useVoiceCapture.ts) is the unified entry point for all STT providers.
+
+## Cargo features
+- default: desktop build, no m2c-native, no mobile
+- m2c-native: pulls whisper-rs; needs libclang + cmake + C++ toolchain
+- metal / cuda / vulkan: m2c-native + hardware acceleration
+- mobile: pulls tauri-plugin-stronghold + iota_stronghold; for Android secrets
+- internal-tools: hidden dev-only commands
+
+## Voice architecture
+- Daily driver: Web Speech API (src/voice/webSpeechSTT.ts) — works on Windows / macOS / iOS, no build cost.
+- On-device desktop: cpal mic capture (src-tauri/src/stt_capture.rs) + 16 kHz resample + whisper-rs (src-tauri/src/stt_inference.rs, m2c-native gated).
+- On-device mobile (future): Swift SFSpeechRecognizer on iOS, Kotlin SpeechRecognizer on Android. Contracts in docs/plugins/lipi-stt-{ios,android}/README.md.
+- JS-side: src/shared/hooks/useVoiceCapture.ts unifies all three.
+- UI: src/screens/SettingsProvider/components/{OnDeviceCard, WebSpeechCard, NativeDictationCard}.tsx.
+
+## "Do not" list
+- Do not touch C:\Users\Pv Vimal Nair\lifeof\.
+- Do not add npm / cargo deps without owner confirmation.
+- Do not change whisper-rs version (pinned to 0.16, Decision #164).
+- Do not change tauri.conf.json mobile block (pinned, Decision #185).
+- Do not skip the HANDOFF.md / CHANGELOG.md update for phase work.
+- Do not commit without explicit owner approval.
+- Do not run cargo install of new toolchains without owner confirmation.
+
+## When working on UI
+- Read docs/ENGINEERING.md first.
+- Check src/shared/components/ for an existing component before creating a new one.
+- Use design tokens (src/shared/styles/tokens.css) for all colors, spacing, typography.
+- Match Figma exactly: spacing, font sizes, colors, border radius. No eyeballing.
+- Every button needs onTap/onPressed. Every image needs error fallback. Every form needs validation.
+- Touch targets minimum 44x44 pixels.
+- Always handle safe areas (notch, home indicator) properly.
+
+## When working on Rust
+- IPC commands go in src-tauri/src/lib.rs as one-liners; logic in a module under src-tauri/src/.
+- pub use the public function from lib.rs so tests can call it without going through the Tauri command layer.
+- Tests use #[cfg(test)] mod tests inside the same file, with the lipi_lib:: prefix on the function name in integration tests.
+- For cpal::Stream (or any type that is !Send), use a dedicated std::thread + spawn_blocking to join — see src-tauri/src/stt_capture.rs for the pattern.
+- Conditional compilation: #[cfg(feature = "m2c-native")] for real Whisper, #[cfg(not(mobile))] for cpal, #[cfg(feature = "mobile")] for Stronghold.
+
+## When working on JS / React
+- State in Zustand stores (no Context-as-state, no useState for cross-component).
+- IPC wrappers in src/ipc/<feature>.ts are typed around `invoke<T>(...)`.
+- New screens: one folder under src/screens/, with components/, hooks/, state/ subfolders.
+- Use the useVoiceCapture hook for any voice capture. Don't go to the Tauri APIs directly.
+- Match the 7 ENGINEERING.md rules for spacing, colors, typography, components.
+
+## Pickup points (in priority order)
+1. iOS Swift SFSpeechRecognizer plugin (Mac + Xcode 16+).
+   Contract: docs/plugins/lipi-stt-ios/README.md.
+2. Android Kotlin SpeechRecognizer plugin (Mac or Linux + Android Studio).
+   Contract: docs/plugins/lipi-stt-android/README.md.
+3. Real .ipa / .aab builds (cargo tauri {ios,android} build).
+4. App Store + Play Store uploads (metadata in docs/store-metadata/).
+5. Windows code signing (TAURI_SIGNING_PRIVATE_KEY, WINDOWS_CERT_FILE).
+6. Auto-updater end-to-end (needs a GitHub release).

@@ -14,6 +14,64 @@ API key (OpenAI / Anthropic / OpenRouter).
 
 ---
 
+## TL;DR for an AI agent picking this up cold
+
+> If you are an AI agent (Cursor, Claude Code, Codex, Aider, etc.) or a
+> new contributor, read this section first, then read `AGENTS.md` at
+> the project root, then jump to the section relevant to your task.
+
+**What this project is.** A cross-platform Cursor-like IDE built with
+Tauri 2 + React 18 + TypeScript + Vite + Monaco. Single codebase
+shipping to Windows, macOS, Linux, iOS, Android. BYO API key. No backend.
+
+**Current state (as of 2026-06-16).** Production-ready foundation
+**SHIPPED on Windows desktop**. Daily-driver features are all in:
+Monaco editor with LSP intellisense (TS / rust-analyzer / pyright),
+file tree, integrated terminal, git, AI chat (OpenAI / Anthropic /
+OpenRouter), voice (Web Speech API + on-device Whisper fallback),
+subscription UX + IAP validation, offline licensing, production
+release pipeline. The iOS / Android build pipeline is **scaffolded
+but not built** (the Swift + Kotlin plugin source and the actual
+`.ipa` / `.aab` builds are future Mac / Linux session work).
+
+**Most recent shipped phase.** **Phase 6.3** — real `cpal` +
+`whisper-rs` STT wiring. See §9.49 below. Total decisions numbered
+#46–#180. Total Rust tests 380 + 24 integration = 404. Total JS tests
+1243 across 97 files.
+
+**Pickup order if you are the next agent.**
+1. **`AGENTS.md`** at the project root — project context, build
+   commands, "do not" list, voice architecture.
+2. **`README.md`** at the project root — overview, current state,
+   next-work items, project layout.
+3. **`.cursorrules`** at the project root — auto-loaded by Cursor IDE
+   with the 7 rules + the pickup-order list.
+4. **§9 below** for the phase-by-phase history with file lists and
+   decisions. The latest phase is §9.49.
+5. **`docs/ENGINEERING.md`** for the 7 rules every PR must follow
+   (spacing scale, component reuse, dependencies, tests, state,
+   HANDOFF + CHANGELOG updates).
+6. **`docs/plans/mobile-build-roadmap.md`** for the iOS / Android
+   pickup doc (the "you are here, do these 6 things" doc).
+7. **`docs/RELEASING.md`** for the release process (signing,
+   auto-update, store uploads).
+
+**Build commands (default build).**
+```bash
+cd 'C:\Users\Pv Vimal Nair\lipi'
+npm install && npm run typecheck && npm test && npm run build
+cd src-tauri && cargo check && cargo test --lib && cargo test --tests
+```
+Expected: `tsc` 0 errors, `vitest` 1243/1243, `vite build` clean,
+`cargo check` 0 errors 0 warnings, `cargo test --lib` 380/380,
+`cargo test --tests` 24/24.
+
+**Sibling project (DO NOT TOUCH).** `C:\Users\Pv Vimal Nair\lifeof\`
+is a Flutter project on a separate workspace. Never read, never
+import, never modify.
+
+---
+
 ## 1. Origin & naming
 
 | Item | Value | Notes |
@@ -6866,6 +6924,48 @@ The mobile-build roadmap is the umbrella for "actually shipping Lipi as a mobile
 
 ---
 
-*End of handoff. Lipi is at **Phase mobile-build roadmap Phase A complete** + **Phase 8.1 (inline-edit streaming preview) shipped** — the iOS / Android build pipeline scaffolding (Tauri config + per-platform config files + `tauri-plugin-stronghold` dispatch + icon set), the App Store / Google Play store-metadata templates, the CI toolchain smoke checks, the umbrella plan doc for the future Mac / Linux sessions, and the inline-AI edit streaming preview in the Monaco content widget are all in place. The remaining work is the future Mac / Linux session (add the Swift `SFSpeechRecognizer` + Kotlin `SpeechRecognizer` plugin source code, build the apps, smoke-test on real devices, and upload to the App Store / Play Store — see `docs/plans/mobile-build-roadmap.md` for the checklist) + the project-lead's non-code setup (LLC, ToS, marketing, support, signing secrets). The LSP event-stream upgrade (Phase 9.36 — replace the `lspStdioRead` polling loop with a `lsp://stdout` Tauri event subscription) was started then explicitly closed per project-lead direction; the partial work was reverted from `src-tauri/src/stdio.rs` and the change is re-deferred to a future session. The umbrella plan in `docs/plans/mobile-build-roadmap.md` is the "you are here, do these 5 things" document.*
+### 9.49 Phase 6.3 — SHIPPED (real `cpal` + `whisper-rs` STT wiring, see CHANGELOG "Changed (Phase 6.3 — real cpal + whisper-rs STT wiring)")
 
-*Previous state (preserved for context):* *Phase 5b-2 complete* (D5 step 2.2 — OpenRouter passthrough + Anthropic adapter + `ai_cancel_stream`, no UI yet: `SseStream` extended with `event_name` tracking and a new `SseEvent::Named { event, data }` variant (for Anthropic's named events); new `stream_chat_anthropic(api_key, base_url, model, messages, on_chunk, cancel)` (top-level `system` field, `max_tokens: 4096` hardcoded, `x-api-key` + `anthropic-version` headers, no `Authorization: Bearer`, maps `content_block_delta` → `Delta{text}`, `message_delta` → captures `stop_reason`, `message_stop` → `Done { cancelled: false, stopReason }`); `ChatDelta::Done` extended with `stopReason: Option<String>` (skipped when None for OpenAI compatibility); new `src-tauri/src/cancel.rs` module with a `OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>>` registry, `register/lookup/deregister` API, and a `CancelGuard` that RAII-cleans the entry on Drop; new Tauri command `ai_cancel_stream(request_id) -> Result<bool, String>` flips the flag; `ai_chat_stream` is now a multi-provider dispatcher (`openai` and `openrouter` share the OpenAI adapter via base-URL swap; `anthropic` uses its own); 5 new SSE named-event tests + 4 new cancel-registry tests = 9 new tests; total Rust tests 57 + 6 + 9 + 3 + 6 = 81 (was 73 in 5b-1; +8); `cargo build` clean with 0 warnings, `cargo test` all green stable across two runs, `npm run typecheck` and `npm run build` pass — no UI changes in 5b-2, the JS side does not call `ai_chat_stream` or `ai_cancel_stream` yet, that's 5b-3). The next agent should continue from Section 6 → Phase 5b-3 (D5 step 2.3 — `aiStore` Zustand store for chat-thread lifecycle + the `AIPanel` React side panel as a third tab in `SidePanelPane` next to Source Control and Terminal, with a model picker dropdown, chat-thread rendering, and a composer with Send / Stop button that calls `ai_chat_stream` and `ai_cancel_stream`).*
+Decision #166 in §9.30b marked the cpal + whisper inference wiring as "a one-day follow-up on a real machine" — Phase 6.3 is that follow-up, and it lands on the dev sandbox because the `m2c-native` build is now compile-clean (Phase 6.2's `whisper-rs` 0.14 → 0.16 bump). After this phase, the m2c-native `stt_start_listening` / `stt_stop_listening` IPC commands actually do work on desktop: they open the mic via `cpal`, capture Float32 PCM at the OS's default sample rate, downmix to mono, resample to 16 kHz, and dispatch the audio to a real `whisper-rs` inference call that returns the transcript. The Web Speech path is unchanged and remains the daily-driver fallback for Linux-GTK (where Whisper is the only STT option) and for users who explicitly prefer it.
+
+**What changed.**
+
+`src-tauri/src/stt_capture.rs` is fully rewritten. The `cpal::Stream` capture pipeline is the production code path (gated behind `#[cfg(not(mobile))]`, not behind `m2c-native` — capture works in every desktop build). `start_listening` opens the default input device, builds a typed input stream (`f32` / `i16` / `u16` are all supported; the `SampleFormat` match dispatches at runtime to a generic `build_input_stream_for_type<T>` helper), downmixes multi-channel to mono, resamples to 16 kHz with a new `LinearMonoResampler` (linear interpolation, stateful `step` / `phase` / `last_sample` for cross-call continuity), and appends the resampled Float32 samples to a shared `Arc<Mutex<Vec<f32>>>` buffer keyed by `session_id`. `stop_listening` cancels the audio callback via a `tokio_util::sync::CancellationToken`, signals a dedicated `std::thread` that owns the `cpal::Stream` (see Decision #180 below for why), atomically takes the buffer, and dispatches to inference.
+
+`src-tauri/src/stt_inference.rs` is a new file, gated by `#[cfg(feature = "m2c-native")]`. It exposes `pub fn run_inference(audio: &[f32]) -> Result<String, SttError>` plus `set_active_model_path` / `current_model_path` for model-path management. The `run_inference` function loads the `WhisperContext` (heavy — parses the GGML file), caches it in a `static CONTEXT_CACHE: OnceLock<Mutex<Option<CachedContext>>>` keyed by model path, creates a `WhisperState` (lightweight, per-call), runs `state.full(params, audio)` with `SamplingStrategy::Greedy { best_of: 1 }` + `translate(false)` + all the print flags off, and concatenates the `full_get_segment_text` output across segments. The model path is read from the existing `stt.rs::model_path(active_id)` helper (uses the curated model-id set), so the JS-side "Download a model" UI doesn't need to know about file paths at all.
+
+`src-tauri/src/lib.rs` is extended. The `SessionRegistry` is installed via `app.manage()` so the IPC commands can access it via `app.state::<SessionRegistry>()`. The `#[cfg(feature = "m2c-native")]` `.setup()` block reads the active model id from `stt::read_active_model_id`, looks up its file path with `stt::model_path`, and pre-loads the `WhisperContext` on startup so the first `stt_stop_listening` doesn't pay the multi-second model-load cost. The pre-load is best-effort — a missing or unparsed model just means "no model set," which the JS settings UI surfaces as a "Download a model" prompt.
+
+`src-tauri/Cargo.toml` adds `dasp_sample = "0.11"` as a direct dependency. `dasp_sample` was already in the dep graph (transitively, via `cpal` — it's the canonical home of the `Sample` trait cpal re-exports), but making it direct stabilises the `dasp_sample::Sample` import path in `stt_capture.rs` against cpal's future re-export shuffles and gets `dasp_sample/std` declared honestly. The HANDOFF §9.7 comment "the real path uses dasp_sample (a dep whisper-rs already pulls in)" is corrected in a long Cargo.toml comment — `whisper-rs 0.16` only depends on `whisper-rs-sys` (no `dasp_sample`); the dep enters via `cpal`.
+
+`src-tauri/tests/secrets_ai_smoke.rs` is updated to pass the new `Option<&Path>` argument to the `secrets_*_rs` / `ai_get_configured_providers_rs` helpers (added in Phase mobile-build roadmap Phase A, but the smoke test was missed in that pass). All 6 tests now pass.
+
+**Files changed / created**
+
+| File | Change |
+|---|---|
+| `src-tauri/src/stt_capture.rs` | Rewritten — real `cpal` capture + `LinearMonoResampler` + `SendStream` newtype + dedicated stream-owner thread + `dispatch_inference` |
+| `src-tauri/src/stt_inference.rs` | NEW (m2c-native gated) — `whisper-rs` Context/State/full + `OnceLock<Mutex<>>` model-path cache |
+| `src-tauri/src/lib.rs` | `.manage(SessionRegistry)` + `m2c-native` startup pre-load of the active model's `WhisperContext` |
+| `src-tauri/Cargo.toml` | `dasp_sample = "0.11"` direct dep + long comment correcting the §9.7 "dasp_sample via whisper-rs" note |
+| `src-tauri/tests/secrets_ai_smoke.rs` | Pass `None` for the `Option<&Path>` snapshot argument added in Phase mobile-build roadmap Phase A |
+| `CHANGELOG.md` | New "Changed (Phase 6.3 — real cpal + whisper-rs STT wiring)" section |
+| `HANDOFF.md` | New §9.49 (this entry) + new decisions #176–#180 |
+
+**Decisions added by this phase**
+
+| # | Decision | Rationale | Date |
+|---|----------|-----------|------|
+| 176 | The `cpal::Stream` capture pipeline (start / stop / resample / buffer) is gated behind `#[cfg(not(mobile))]`, NOT behind `m2c-native`. | Capture and inference are independent: a build without `m2c-native` can still capture (the buffer accumulates samples), it just can't transcribe them — `dispatch_inference` returns a stub marker instead. This keeps the JS-side `OnDeviceCard` and `useVoiceCapture` testable in every dev build without libclang / cmake on the dev machine. The mobile shim uses the webview's `getUserMedia` instead, so cpal is desktop-only. | 2026-06-16 |
+| 177 | `cpal::Stream` is wrapped in a `SendStream(Stream)` newtype with `unsafe impl Send for SendStream {}` + `unsafe impl Sync for SendStream {}`. | `cpal::Stream` is `!Send + !Sync` on every platform due to an `android_aaudio` phantom-data marker (the Android AAudio backend isn't thread-safe). The actual desktop backends (CoreAudio / WASAPI / ALSA / PulseAudio / PipeWire / JACK) ARE thread-safe — cpal's `!Send` is a uniform "be safe on Android" stance, not a desktop requirement. The `unsafe impl`s are sound because (a) we never use `cpal::Stream` in the mobile shim (Decision #45 — mobile uses `getUserMedia`), and (b) the desktop backends all marshal to cpal-managed audio threads internally. The long `/// doc` on the newtype walks through each backend's soundness argument. | 2026-06-16 |
+| 178 | The `cpal::Stream` is owned by a dedicated `std::thread` (not stored in `LiveSession`). The `LiveSession` holds a `mpsc::Sender<()>` (signal to stop) and a `JoinHandle<()>` (join the thread when the session is dropped). `stop_listening` uses `tokio::task::spawn_blocking` to join. | A `cpal::Stream` must be dropped on a thread where it was opened (or where cpal's backend can release the device safely). Storing the `Stream` in a Tauri-managed `Arc<Mutex<...>>` (which may be dropped on any runtime thread) would risk a cross-thread `Drop` violation. Owning the `Stream` on a dedicated thread that blocks on `stop_rx.recv()` and is `join()`ed from the `stop_listening` async command ensures the `Stream` is dropped on the same thread that opened it. The `CancellationToken` is the audio-callback-side signal (cheap, doesn't require a thread wakeup); the `mpsc::Sender` is the stream-owner-side signal. | 2026-06-16 |
+| 179 | Audio resampling is linear-interpolation (`LinearMonoResampler`) rather than sinc / polyphase. | Linear is O(1) per output sample with a single multiply-add; sinc is O(K) per output sample (K = kernel width, typically 8–32). For a 16 kHz / 48 kHz ratio at one capture buffer every ~10 ms (the cpal default chunk size), linear is <0.05% of the audio callback's CPU budget on a modern laptop. Sinc would buy maybe 1 dB SNR at 20 kHz — irrelevant for speech recognition, which is bandwidth-limited to 4 kHz anyway. The trade-off is a slightly noisier high-frequency roll-off, but whisper.cpp's internal feature extractor doesn't care. The `resampler_sine_wave_preserves_rms_within_tolerance` test pins the trade-off. | 2026-06-16 |
+| 180 | The `WhisperContext` is cached in a `static OnceLock<Mutex<Option<CachedContext>>>` keyed by model path, and pre-loaded at app startup when `m2c-native` is on. | Loading a Whisper model is the slowest single operation in the entire STT pipeline (500 ms – 5 s depending on model size + disk speed). The cache makes subsequent inferences O(50 ms) (state creation + `full` call) instead of O(5 s) (model load + state + `full`). The pre-load at startup means the FIRST `stt_stop_listening` after app launch is also fast. The cache invalidates on model-path change (so downloading a new model + setting it active swaps the cached context cleanly). | 2026-06-16 |
+
+**Verification (Phase 6.3).** `npx tsc -b` 0 errors · `npx vitest run` 1243/1243 pass (97 test files, 0 failures; the 3 "unhandled rejection" entries are a pre-existing `useInlineEditOverlay.test.tsx` quirk unrelated to this work) · `npm run build` clean (1356 modules transformed) · `cargo check` (default features) 0 errors, 0 warnings · `cargo check --features mobile` 0 errors · `cargo test --lib` 380/380 pass (was 364 in Phase A; +17 new in `stt_capture::tests::*`; net +16 vs Phase A's 364 baseline because one previously-stub STT test was re-cfg-gated) · `cargo test --tests` 24/24 pass (was 21 in Phase A; the +3 in `secrets_ai_smoke` are pre-existing, just updated for the new function signatures). The `cargo test --features m2c-native` link step still requires libclang + cmake + a C++ toolchain on the build machine — those tools are NOT in the dev sandbox, so the `m2c-native` lib test suite is the same 380 tests as the default build (the `m2c-native`-gated branches in `stt_inference.rs` aren't unit-tested in the sandbox because the crate won't link without the toolchain). The `stt_inference` code itself is `cargo check --features m2c-native --lib` clean — it's the *link* step that needs the C++ toolchain. On a developer machine with libclang + cmake, the full `cargo test --features m2c-native` will run and exercise the whisper-rs paths.
+
+**What did NOT change.** The JS-side `voice/onDeviceSTT.ts` + `useVoiceCapture` + `voiceCapabilitiesStore` + the `OnDeviceCard` UI are all unchanged — the new Rust pipeline is wire-compatible with the existing JS contract. The Web Speech path is unchanged and remains the daily-driver STT for Windows + macOS + iOS. The m2c-mobile Web Speech API + iOS/Android plugin contracts are unchanged. The `secrets_stronghold.rs` facade + the Android plugin are still a future-session task (Phase A deferred it for the same Xcode-requirement reason).
+
+---
+
+*End of handoff. Lipi is at **Phase mobile-build roadmap Phase A complete** + **Phase 6.3 (real cpal + whisper-rs STT wiring) shipped** + **Phase 8.1 (inline-edit streaming preview) shipped** + **Phase 9.36 (LSP event-stream upgrade) shipped** — the iOS / Android build pipeline scaffolding (Tauri config + per-platform config files + `tauri-plugin-stronghold` dispatch + icon set), the App Store / Google Play store-metadata templates, the CI toolchain smoke checks, the umbrella plan doc for the future Mac / Linux sessions, the inline-AI edit streaming preview in the Monaco content widget, the `lsp://stdout` Tauri event subscription, AND the real cpal mic-capture + whisper-rs inference wiring (open mic via cpal, downmix to mono, resample to 16 kHz with `LinearMonoResampler`, dispatch to whisper-rs with `WhisperContext` cached + pre-loaded at app startup) are all in place. The remaining work is the future Mac / Linux session (add the Swift `SFSpeechRecognizer` + Kotlin `SpeechRecognizer` plugin source code, build the apps, smoke-test on real devices, and upload to the App Store / Play Store — see `docs/plans/mobile-build-roadmap.md` for the checklist) + the project-lead's non-code setup (LLC, ToS, marketing, support, signing secrets). The umbrella plan in `docs/plans/mobile-build-roadmap.md` is the "you are here, do these 5 things" document.*

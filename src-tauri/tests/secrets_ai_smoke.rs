@@ -22,19 +22,60 @@
 //! tests), so it gets its own crate and runs the lib
 //! functions directly.
 
-use std::sync::Once;
+use std::sync::Mutex as StdMutex;
 
 use keyring::mock::MockCredentialBuilder;
 use lipi_lib::{ai_list_providers_rs, secrets_delete_rs, secrets_set_rs};
 
-static INSTALL_MOCK: Once = Once::new();
+/// Serialises the tests in this binary. The mock
+/// keychain is process-global, and `cargo test`
+/// runs the 6 tests here in parallel by default.
+/// Two tests using the same provider id (e.g.
+/// `"openai"`) race on the same keychain entry —
+/// a parallel test's `secrets_delete_rs` can wipe
+/// the just-set key between this test's `set` and
+/// the subsequent assertion.
+///
+/// `std::sync::Mutex` rather than `tokio::sync::Mutex`
+/// because the test body is pure synchronous Rust
+/// (no `.await`s). The `unwrap_or_else(|e| e.into_inner())`
+/// pattern is the standard "recover from poisoning"
+/// trick — a test panicking shouldn't poison the
+/// lock for the rest of the run.
+static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
 fn install_mock() {
-    INSTALL_MOCK.call_once(|| {
-        let _ = keyring::set_default_credential_builder(Box::new(
-            MockCredentialBuilder {},
-        ));
-    });
+    // Reset the default credential builder on EVERY
+    // call, not just the first. The keyring crate
+    // stores the builder as a process-global, and
+    // `cargo test` runs the tests in this file in
+    // parallel by default (multiple test threads).
+    //
+    // The earlier `static INSTALL_MOCK: Once` guard
+    // caused the test `ai_get_configured_providers_includes_any_provider_with_a_key`
+    // to be flaky: if a sibling test in the same
+    // binary had already triggered the once-guard
+    // (or, more commonly, if a real-OS keychain
+    // builder was installed by a different test
+    // binary sharing the process), the
+    // MockCredentialBuilder install was skipped, the
+    // real keychain was used, and the assertion
+    // "configured list contains `openai` after
+    // `secrets_set_rs('openai', ...)`" would either
+    // race with a parallel test's writes or fail
+    // because the real keychain entry for the
+    // fake provider id didn't exist.
+    //
+    // Calling `set_default_credential_builder` on
+    // every test invocation is cheap (it's a
+    // `RwLock` write + a few atomics) and makes
+    // the test order-independent. The actual
+    // parallel-race fix is the `TEST_LOCK` above
+    // (this `install_mock` is necessary but not
+    // sufficient on its own).
+    let _ = keyring::set_default_credential_builder(Box::new(
+        MockCredentialBuilder {},
+    ));
 }
 
 #[test]
@@ -109,6 +150,7 @@ fn default_model_is_in_available_models_for_every_provider() {
 
 #[test]
 fn secrets_round_trip_through_public_functions() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     install_mock();
     // Use a unique provider per test.
     let provider = "openai";
@@ -162,12 +204,19 @@ fn secret_error_wire_shape_is_camel_case_with_kind_tag() {
 
 #[test]
 fn ai_get_configured_providers_includes_any_provider_with_a_key() {
+    let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     install_mock();
     // The mock keychain is process-global; we cannot
     // assert the exact set (other tests may have
     // configured providers in parallel). Instead,
     // set a unique key, then verify the result
-    // contains at least that provider.
+    // contains at least that provider. The
+    // `TEST_LOCK` at the top serialises us against
+    // `secrets_round_trip_through_public_functions`
+    // (which also writes to `"openai"`) so the
+    // keychain entry can't be wiped between our
+    // `set` and the subsequent `configured.contains(...)`
+    // check by a parallel test.
     let provider = "openai";
     lipi_lib::secrets_set_rs(provider, "sk-test-5a", None).unwrap();
     let configured: Vec<String> = lipi_lib::ai_get_configured_providers_rs(None)

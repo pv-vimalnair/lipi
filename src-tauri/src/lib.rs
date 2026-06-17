@@ -72,6 +72,21 @@ pub use secrets::{delete_api_key as secrets_delete_rs, get_api_key as secrets_ge
 #[cfg(feature = "mobile")]
 mod secrets_stronghold;
 
+// D-186 follow-up: the Android Keystore → Stronghold
+// snapshot key bridge. The Kotlin side
+// (`docs/plugins/lipi-stronghold-key-bridge/StrongholdKeyBridge.kt`)
+// is a contract; the Rust side is a stub that returns
+// the documented "not yet wired" error. The future
+// Mac/Linux session implements the actual JNI invocation
+// in `secrets_stronghold_key_bridge::load_key_from_keystore_android`.
+// Module is `pub(crate)` (not re-exported) because it's
+// called only from `secrets_stronghold::keyprovider()`
+// once the future session swaps that helper to use the
+// bridge. Re-exporting it on the public lib API would
+// leak the bridge contract prematurely.
+#[cfg(feature = "mobile")]
+pub(crate) mod secrets_stronghold_key_bridge;
+
 // Phase 2: offline-license signing + verification (the
 // first step of the "Lipi to Paid Public Launch" roadmap —
 // see HANDOFF §6 "Next:" and §9.24). The licensing module

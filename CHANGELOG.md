@@ -6,6 +6,74 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (StrongholdKeyBridge contract + Rust stub — D-186 follow-up)
+
+Phase A of the mobile-build roadmap shipped the
+`secrets_stronghold.rs` facade with a v1 placeholder
+encryption key (per Phase A's "What does NOT ship"
+note). [Decision #186](#decisions-stronghold-password-flow--android-keystore-derivation)
+picked Android Keystore derivation as the v1
+password-flow. This entry ships the **contract** and
+the **Rust stub** for that design — the future Mac /
+Linux session wires the actual JNI invocation.
+
+- **`docs/plugins/lipi-stronghold-key-bridge/README.md`** —
+  the contract. ~260 lines, 10 sections
+  (goal, targets, gradle module structure, permission
+  flow, the Kotlin class, the Rust JNI binding, testing,
+  migration from v1 placeholder, open questions,
+  references). Mirrors the `lipi-stt-android` plugin
+  README pattern.
+- **`docs/plugins/lipi-stronghold-key-bridge/StrongholdKeyBridge.kt`** —
+  the actual Kotlin source skeleton. ~180 lines.
+  `package lipi.stronghold`, `external fun loadKey(): ByteArray`
+  JNI entry point, `init { System.loadLibrary("lipi_stronghold_key_bridge") }`,
+  `loadKeyImpl()` body (Keystore lookup + key gen +
+  AES/GCM/NoPadding encrypt), `getOrCreateKey()` helper.
+  The future session copies this file into
+  `android/app/src/main/kotlin/lipi/stronghold/` and
+  starts filling in the gradle wiring.
+- **`src-tauri/src/secrets_stronghold_key_bridge.rs`** —
+  the Rust stub. `#[cfg(feature = "mobile")]` gated,
+  one public function
+  `load_key_from_keystore() -> Result<Zeroizing<Vec<u8>>, SecretError>`.
+  On `target_os = "android"`, returns
+  `SecretError::Platform` with a "JNI not yet wired
+  (D-186 follow-up)" message. On other targets, returns
+  a "not supported on this target" error. The function
+  body has a 25-line pseudo-code TODO showing the exact
+  JNI call sequence the future session needs to wire.
+- **`src-tauri/src/lib.rs`** — registers the new module
+  as `pub(crate) mod secrets_stronghold_key_bridge;`
+  (not re-exported, because it's only called internally
+  by `secrets_stronghold::keyprovider()` once the future
+  session swaps that helper).
+- **3 new unit tests** in
+  `secrets_stronghold_key_bridge::tests` — pin the
+  contract: the stub returns
+  `SecretError::Platform` with the documented message,
+  the expected return length is 60 bytes (12 IV + 32
+  plaintext + 16 GCM tag), the class name + JNI
+  signature match the Kotlin source. A refactor on
+  either side breaks the test loudly.
+
+**What did NOT change.** `src-tauri/src/secrets_stronghold.rs`
+— the `PLACEHOLDER_KEY` constant is still in use, the
+`keyprovider()` helper still reads from it. The future
+Mac / Linux session is responsible for the one-function
+swap (documented in the contract README §8 + the D-186
+design doc §"Implementation plan"). Until that swap,
+the Android build keeps using the v1 placeholder.
+
+**Verification (this entry).** `cargo check --lib`
+0 errors, 0 warnings · `cargo check --features mobile --lib`
+0 errors, 0 warnings · `cargo test --lib --features mobile`
+383/383 pass (was 380 in §9.49; +3 new) · `npx tsc -b`
+clean · `npx vitest run` 1243/1243 pass (no JS change).
+
+**HANDOFF ref.** `HANDOFF.md §9.51` (this entry) +
+the updated "End of handoff" paragraph.
+
 ### Decisions (Stronghold password-flow — Android Keystore derivation)
 
 The `secrets_stronghold.rs` facade shipped in

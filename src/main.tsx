@@ -1,8 +1,25 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { EditorWorkspace } from '@/screens/EditorWorkspace';
-import { SettingsProvider } from '@/screens/SettingsProvider';
+// Settings is a self-contained screen that the user
+// opens on demand (via the titlebar gear, the Welcome
+// header, or a deep link). It's not needed for the
+// initial editor render — code-split it via `React.lazy`
+// so its ~8 KB of component code (provider cards, voice
+// cards, language-server card, privacy card, custom tool
+// editor, plus their CSS modules) only ships when the
+// user actually opens Settings. The License screen
+// already imports `humanizeInvalidReason` / `statusLine`
+// from `@/screens/SettingsProvider/components/LicenseCard`
+// directly, so LicenseCard stays in the eager bundle
+// regardless — only the rest of SettingsProvider is
+// deferred.
+const SettingsProvider = lazy(() =>
+  import('@/screens/SettingsProvider').then((m) => ({
+    default: m.SettingsProvider,
+  })),
+);
 import { Welcome } from '@/screens/Welcome';
 import { License } from '@/screens/License/License';
 import { useAppStore } from '@/shared/state/appStore';
@@ -102,7 +119,26 @@ function ScreenRoot() {
     // back button that
     // returns to 'welcome'
     // or 'editor'.
-    return <SettingsProvider />;
+    // Wrapped in <Suspense>
+    // because SettingsProvider
+    // is loaded via React.lazy
+    // (code-split out of the
+    // initial bundle — see the
+    // import at the top of this
+    // file). The fallback is
+    // the same `appBoot`
+    // placeholder used during
+    // the workspace hydration
+    // window, so the user
+    // sees no flash when
+    // opening Settings.
+    return (
+      <Suspense
+        fallback={<div className="appBoot" aria-hidden="true" />}
+      >
+        <SettingsProvider />
+      </Suspense>
+    );
   }
 
   if (activeScreen === 'license') {

@@ -25,12 +25,17 @@
  * ## Why polling (`lspStdioRead` is a Tauri command, not
  *   an event)
  *
- * LSP `typescript-language-server` is a low-throughput
- * protocol (one `didChange` → one `publishDiagnostics`).
- * Polling `lspStdioRead` at ~1ms granularity is more than
- * enough and avoids the long-lived-event-subscription
- * memory-leak risk. See HANDOFF §9.33 for the full
- * design.
+ * Pre-Phase 9.36 — the JS `LspClient` polled
+ * `lspStdioRead` at ~1ms granularity. Phase 9.36 —
+ * the Rust reader now emits a `lsp://stdout`
+ * Tauri event with each chunk. The `LspClient`
+ * subscribes via `onLspStdout` and processes
+ * chunks as they arrive, dropping the polling
+ * loop. `lspStdioRead` is retained as a
+ * *catch-up* path — called once on subscription
+ * to drain bytes the child wrote before the JS
+ * side was listening. See HANDOFF §9.36 for the
+ * full design.
  */
 
 import { invoke } from '@tauri-apps/api/core';
@@ -520,4 +525,95 @@ export async function lspStdioReadStderrLog(
     maxBytes,
   });
   return new Uint8Array(bytes);
+}
+
+// --- Phase 9.36 — stdout event-stream upgrade ---
+
+/**
+ * `lsp://stdout` event name. Phase 9.36 — emitted by
+ * the Rust `StdioHandle::spawn_reader` task whenever
+ * new bytes arrive on the child's stdout. The JS
+ * `LspClient` subscribes via `onLspStdout` and pushes
+ * the bytes into its framing buffer (LSP
+ * `Content-Length: N\r\n\r\n<body>` headers + JSON-RPC
+ * bodies), replacing the 1ms polling loop that called
+ * `lspStdioRead`. The `lspStdioRead` command is
+ * retained as a *catch-up* path — called once on
+ * subscription to drain bytes the child wrote before
+ * the JS side was listening — but is not called in
+ * the hot path thereafter.
+ *
+ * Pinning the event name as a constant guards
+ * against typos on the Rust side (`LSP_STDOUT_EVENT`
+ * in `src-tauri/src/stdio.rs`); the Rust test
+ * `lsp_stdout_event_name_is_stable` asserts both
+ * sides agree.
+ */
+export const LSP_STDOUT_EVENT = 'lsp://stdout';
+
+/**
+ * Payload of the `lsp://stdout` event. Mirrors
+ * `LspStdoutPayload` in `src-tauri/src/stdio.rs`.
+ *
+ * `chunk` is the *raw* bytes the child wrote to
+ * stdout since the last event (NOT a UTF-8 lossy
+ * string — the LSP wire format is byte-exact: the
+ * receiver must see the same byte sequence the
+ * child wrote for `Content-Length` framing to
+ * work). The store wraps the `number[]` in a
+ * `Uint8Array` via `new Uint8Array(chunk)` and
+ * appends it to the framing buffer.
+ *
+ * `handleId` is the same opaque 32-char hex string
+ * returned by `lspRunStdio`. The store matches on
+ * it to look up the workspace (the `clients` map
+ * is keyed by `workspaceRoot`, not `handleId`, so
+ * a small `handleToWorkspaceKey` reverse map is
+ * needed — see `lspClientStore.ts`).
+ *
+ * Phase 9.36 — this is the hot path. The Rust
+ * side emits one event per stdout read (every
+ * 1-50ms in normal LSP traffic). The listener
+ * should be fast: the store does a single
+ * `set` to update the per-workspace framing
+ * buffer; no parsing or expensive computation
+ * happens here.
+ */
+export interface OnLspStdoutPayload {
+  handleId: string;
+  chunk: number[];
+}
+
+/**
+ * Subscribe to `lsp://stdout` events. Returns an
+ * `UnlistenFn` that the caller should invoke in
+ * a cleanup effect (or `useEffect` return value)
+ * to detach the listener.
+ *
+ * Phase 9.36 — the store calls this exactly once
+ * per `LspClient` instance (idempotent via a
+ * `stdoutUnlisten` closure ref) and keeps the
+ * unlisten alive for the lifetime of the client.
+ * The Rust side fires the event on every stdout
+ * read — many events per second for a chatty
+ * server — so the listener should be fast. The
+ * store's handler does a single `set` to append
+ * the bytes to the framing buffer; no parsing
+ * or expensive computation happens here.
+ *
+ * The polling `lspStdioRead` command is
+ * deprecated for the hot path but retained as
+ * a one-shot catch-up read on subscription
+ * (drain bytes the child wrote before the JS
+ * side was listening). The `LspClient.start()`
+ * flow uses both: subscribe first, then call
+ * `lspStdioRead` once to drain any buffered
+ * bytes, then enter the event-only hot path.
+ */
+export async function onLspStdout(
+  handler: (payload: OnLspStdoutPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<OnLspStdoutPayload>(LSP_STDOUT_EVENT, (e) =>
+    handler(e.payload),
+  );
 }

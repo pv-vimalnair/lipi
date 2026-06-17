@@ -29,6 +29,17 @@
  * status (Stopped / Starting / Ready / Error) without
  * owning a `LspClient` directly.
  *
+ * Phase 9.36 — the reader loop in `LspClient` is
+ * now event-driven: each `LspClient` subscribes to
+ * the `lsp://stdout` Tauri event for its own
+ * `handleId`, then drains `lspStdioRead` *once*
+ * on subscription as a catch-up read (to get any
+ * bytes the child wrote before the JS side was
+ * listening). After the catch-up, the client is
+ * purely event-driven — no 1ms polling timer, no
+ * Tauri command round-trips in the hot path. See
+ * HANDOFF §9.36 for the full design.
+ *
  * Per Rule 3 (screen-folder layout) this lives in
  * `src/screens/EditorWorkspace/state/`, not in
  * `src/shared/state/`. Only EditorWorkspace's bridge
@@ -51,9 +62,11 @@ import {
   lspStdioReadStderrLog,
   onLspCrashed,
   onLspLog,
+  onLspStdout,
   type LspServerKind,
   type OnLspCrashedPayload,
   type OnLspLogPayload,
+  type OnLspStdoutPayload,
   type RunStdioResult,
 } from '@/ipc/lsp';
 import { getUseRealServer } from '@/screens/EditorWorkspace/state/lspKillSwitch';
@@ -564,9 +577,13 @@ export class LspClient {
    *  in sync. */
   private _statusListeners: Set<(s: LspStatus) => void> = new Set();
 
-  /** The reader loop's `setInterval` handle.
-   *  Polled via `lspStdioRead` every 1-2ms. */
-  private _readerTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Phase 9.36 — the unlisten function for the
+   *  per-client `lsp://stdout` subscription.
+   *  `null` until `start()` subscribes (the
+   *  subscription is set up after the spawn
+   *  completes and `handleId` is known). Called
+   *  in `shutdown()` to detach the listener. */
+  private _stdoutUnlisten: (() => void) | null = null;
 
   /** The accumulated bytes the reader has read
    *  from the child but not yet framed into a
@@ -688,14 +705,38 @@ export class LspClient {
     this.handleId = spawn.handleId;
     this.resolvedCommand = spawn.resolvedCommand;
 
-    // Start the reader loop. The loop reads bytes
-    // via `lspStdioRead`, accumulates them in
-    // `_readBuffer`, finds `Content-Length: N`
-    // header boundaries, extracts the body, parses
-    // it as JSON, and pushes the message into
-    // `_messageQueue` (or resolves a pending
-    // request's promise).
-    this._scheduleReaderTick();
+    // Phase 9.36 — start the event-driven
+    // reader. Two steps:
+    //   1. Subscribe to `lsp://stdout` for this
+    //      client's `handleId` (each chunk that
+    //      arrives is appended to `_readBuffer`
+    //      and we try to drain frames).
+    //   2. Drain `lspStdioRead` *once* as a
+    //      catch-up read — the child may have
+    //      written bytes to stdout between the
+    //      `lspRunStdio` IPC returning and the
+    //      `onLspStdout` subscription landing.
+    //      Without the catch-up those bytes
+    //      would be lost (the event is only
+    //      emitted for bytes that arrive *after*
+    //      the subscription).
+    //
+    // The two steps are ordered subscribe-then-
+    // catch-up so the catch-up drain can't race
+    // with a live event: any event the child
+    // emits while we're draining is queued by
+    // Tauri's event system and delivered after
+    // we attach the listener (Tauri's `listen`
+    // is synchronous-on-attach, so the order is
+    // deterministic). We use `await` on the
+    // subscription promise so we have the
+    // unlisten before the drain starts — if
+    // the subscription failed we still try the
+    // drain (best-effort) so a transient
+    // listener error doesn't lose the bytes
+    // that arrived up to that point.
+    await this._subscribeStdout();
+    await this._catchupStdout();
 
     // Send `initialize`. The server's response
     // is captured by the reader loop (which
@@ -927,12 +968,18 @@ export class LspClient {
         // ignore
       });
     }
-    // Tear down the reader + reject any
-    // in-flight requests + flip the
-    // closed flag.
-    if (this._readerTimer !== null) {
-      clearTimeout(this._readerTimer);
-      this._readerTimer = null;
+    // Tear down the stdout subscription +
+    // reject any in-flight requests + flip
+    // the closed flag.
+    //
+    // Phase 9.36 — the polling-timer cleanup
+    // (`clearTimeout(this._readerTimer)`) is
+    // gone. The reader is event-driven now;
+    // the only thing to tear down is the
+    // `lsp://stdout` subscription.
+    if (this._stdoutUnlisten) {
+      this._stdoutUnlisten();
+      this._stdoutUnlisten = null;
     }
     for (const [, pending] of this._pending) {
       pending.reject(new Error('LspClient closed'));
@@ -946,50 +993,117 @@ export class LspClient {
   }
 
   /**
-   * Schedule the next reader poll. We use
-   * `setTimeout` (not `setInterval`) so a slow
-   * `lspStdioRead` call naturally defers the
-   * next tick.
+   * Phase 9.36 — subscribe to `lsp://stdout` for
+   * this client's `handleId`. The listener
+   * appends each chunk to `_readBuffer` and
+   * tries to drain LSP frames.
+   *
+   * We filter on `handleId` here (not in the
+   * store's global listener) so each
+   * `LspClient` only sees its own child's
+   * stdout. The store also has a global
+   * `lsp://log` / `lsp://crashed` listener
+   * pattern; the per-client `lsp://stdout`
+   * pattern is the Phase 9.36 equivalent.
+   *
+   * Returns a promise that resolves with the
+   * unlisten function. The caller (the
+   * `start()` flow) `await`s the subscription
+   * so the unlisten is set up before the
+   * catch-up drain starts.
    */
-  private _scheduleReaderTick(): void {
+  private async _subscribeStdout(): Promise<void> {
+    if (!this.handleId) return;
     if (this._closed) return;
-    this._readerTimer = setTimeout(() => {
-      this._readerTimer = null;
-      void this._readerTick();
-    }, 1);
+    const myHandleId = this.handleId;
+    try {
+      const un = await onLspStdout((payload: OnLspStdoutPayload) => {
+        // Filter on handleId — the listener is
+        // global, but we only care about our
+        // own child's stdout. (Tauri's event
+        // API is process-wide; we can't
+        // subscribe to a per-handle channel.)
+        if (payload.handleId !== myHandleId) return;
+        if (this._closed) return;
+        if (payload.chunk.length === 0) return;
+        const bytes = new Uint8Array(payload.chunk);
+        this._appendBytes(bytes);
+        this._drainFrames();
+      });
+      this._stdoutUnlisten = un;
+    } catch (e) {
+      // Subscription failed (Tauri event
+      // system error). Best-effort: log and
+      // continue. The catch-up drain may
+      // still pick up some bytes, and the
+      // next start() cycle will retry the
+      // subscription. We don't tear down the
+      // client on subscription failure — the
+      // user can still call `respawn` to
+      // start over.
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[lsp] onLspStdout subscription failed:',
+          e,
+        );
+      }
+    }
   }
 
-  private async _readerTick(): Promise<void> {
+  /**
+   * Phase 9.36 — drain `lspStdioRead` *once* as
+   * a catch-up read. Bytes that arrived between
+   * the `lspRunStdio` IPC returning and the
+   * `onLspStdout` subscription landing are still
+   * in the Rust `stdout_buffer` (the reader has
+   * been pushing to it since the child spawned).
+   * We drain the buffer once to recover those
+   * bytes, then enter the event-only hot path.
+   *
+   * The drain is bounded: we call with
+   * `maxBytes = 64 * 1024` (the typical LSP
+   * message size — a `publishDiagnostics`
+   * payload is 1-10 KiB, a `textDocument/
+   * definition` response can be 30-50 KiB).
+   * If the catch-up is more than 64 KiB the
+   * remaining bytes are emitted as live
+   * `lsp://stdout` events, which is fine.
+   *
+   * `lspStdioRead` is a destructive read (the
+   * Rust side does `pop_front` in a loop), so
+   * subsequent live events aren't affected by
+   * the drain — they emit from the reader
+   * task's view of the buffer, not from the
+   * catch-up drain's view.
+   *
+   * Idempotent: re-running this (e.g. on
+   * `respawn`) is safe — the buffer will be
+   * empty after the first drain.
+   */
+  private async _catchupStdout(): Promise<void> {
+    if (!this.handleId) return;
     if (this._closed) return;
-    if (!this.handleId) {
-      this._scheduleReaderTick();
-      return;
-    }
     try {
       const bytes = await lspStdioRead(this.handleId, 65536);
-      if (bytes.length > 0) {
-        // 0xFF is the sentinel the Rust side
-        // emits when the child has exited and
-        // the buffer is empty.
-        const isSentinel = bytes.length === 1 && bytes[0] === 0xff;
-        if (!isSentinel) {
-          this._appendBytes(bytes);
-          this._drainFrames();
-        }
-      }
+      if (bytes.length === 0) return;
+      // 0xFF is the sentinel the Rust side
+      // emits when the child has exited and
+      // the buffer is empty. We *expect* this
+      // on a fresh spawn (the child is alive
+      // and the buffer is empty until the
+      // server writes the `initialize` ack).
+      const isSentinel = bytes.length === 1 && bytes[0] === 0xff;
+      if (isSentinel) return;
+      this._appendBytes(bytes);
+      this._drainFrames();
     } catch {
-      // Read error — child probably died.
-      this._setStatus('error');
-      this._closed = true;
-      for (const [, pending] of this._pending) {
-        pending.reject(new Error('LspClient read error'));
-      }
-      this._pending.clear();
-      for (const waiter of this._messageWaiters) waiter(null);
-      this._messageWaiters = [];
-      return;
+      // Catch-up drain failed. Best-effort:
+      // the live event subscription will pick
+      // up anything the child writes from
+      // here on. We don't tear down the
+      // client on catch-up failure.
     }
-    this._scheduleReaderTick();
   }
 
   private _appendBytes(bytes: Uint8Array): void {

@@ -23,6 +23,23 @@ vi.mock('@/ipc/lsp', () => ({
     installHint: 'npm install -g typescript-language-server',
     version: '4.3.3',
   })),
+  // Phase 9.36 — the store's
+  // `LspClient._subscribeStdout` calls
+  // `onLspStdout` during `start()`. The
+  // settings card tests don't drive LSP
+  // servers, so a no-op unlisten is
+  // enough. The `_catchupStdout` call
+  // to `lspStdioRead` is also safe (the
+  // mock returns `undefined` which the
+  // SUT's catch handles).
+  onLspStdout: vi.fn(async () => () => undefined),
+  // Phase 9.36 — the SUT calls
+  // `lspStdioRead` once during
+  // `_catchupStdout`. The settings card
+  // tests don't exercise the LSP hot
+  // path, so returning an empty buffer
+  // is fine.
+  lspStdioRead: vi.fn(async () => new Uint8Array(0)),
 }));
 
 import { lspCheckAvailable } from '@/ipc/lsp';
@@ -350,8 +367,8 @@ describe('LanguageServerCard', () => {
     addWorkspace('/workspace/a');
     setLspStatus('/workspace/a', 'ready');
     // Plant fake clients for two kinds.
-    const tsClient = { dispose: vi.fn() } as unknown as { dispose: () => void };
-    const pyrightClient = { dispose: vi.fn() } as unknown as { dispose: () => void };
+    const tsClient = { dispose: vi.fn(), shutdown: vi.fn() } as unknown as { dispose: () => void };
+    const pyrightClient = { dispose: vi.fn(), shutdown: vi.fn() } as unknown as { dispose: () => void };
     act(() => {
       useLspClientStore.setState((s) => {
         const next = new Map(s.clients);

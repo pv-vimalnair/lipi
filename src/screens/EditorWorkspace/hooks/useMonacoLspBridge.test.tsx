@@ -83,6 +83,27 @@ vi.mock('monaco-editor', () => {
 // imports. `vi.mock` is hoisted, so this is fine.
 vi.mock('@/ipc/lsp', () => {
   const writes: Uint8Array[] = [];
+  // Phase 9.36 — per-handle stdout handler
+  // registry. The SUT's `LspClient` calls
+  // `onLspStdout` once during `start()` and
+  // filters on `handleId` internally. The
+  // mock stores the handler per-handle so
+  // the `lspStdioWrite` mock can fire the
+  // event-driven path (in addition to
+  // queuing bytes for the catch-up drain).
+  // This mirrors the `lspClientStore.test.ts`
+  // pattern but is keyed by handleId
+  // because the bridge test runs multiple
+  // concurrent clients in some tests.
+  const stdoutHandlersByHandle: Map<
+    string,
+    Set<(p: { handleId: string; chunk: number[] }) => void>
+  > = new Map();
+  // Expose the registry for the test
+  // suite's `beforeEach` to clear it
+  // between tests. Mirrors the `writes`
+  // pattern below.
+  (globalThis as { __lspStdoutHandlers?: typeof stdoutHandlersByHandle }).__lspStdoutHandlers = stdoutHandlersByHandle;
   return {
     writes,
     lspRunStdio: vi.fn(async () => ({
@@ -190,8 +211,38 @@ vi.mock('@/ipc/lsp', () => {
               (globalThis as {
                 __lspQByHandle?: Map<string, Uint8Array[]>;
               }).__lspQByHandle = qm;
+              // Phase 9.36 — also fire the
+              // event-driven path so the
+              // SUT's `lsp://stdout`
+              // subscription receives the
+              // response. The SUT's
+              // `LspClient._subscribeStdout`
+              // filters on `handleId`
+              // internally; firing with the
+              // correct handleId is the
+              // equivalent of the Rust
+              // `app_handle.emit(LSP_STDOUT_EVENT)`
+              // call. We push to BOTH the
+              // catch-up queue (for
+              // `_catchupStdout`) AND the
+              // event (for the hot path) so
+              // the same test fixtures work
+              // regardless of which path the
+              // SUT uses. Fire every active
+              // wildcard handler — each
+              // LspClient filters on its
+              // own `handleId` internally.
+              const handlers = stdoutHandlersByHandle.get('*');
+              if (handlers) {
+                for (const handler of handlers) {
+                  handler({
+                    handleId: h,
+                    chunk: Array.from(out),
+                  });
+                }
+              }
             }
-          } catch {
+          } catch (_e) {
             /* ignore */
           }
         }
@@ -217,6 +268,47 @@ vi.mock('@/ipc/lsp', () => {
     // simulate log events, so a no-op
     // unlisten is enough.
     onLspLog: vi.fn(async () => () => undefined),
+    // Phase 9.36 — same for `onLspStdout`.
+    // Each LspClient subscribes once during
+    // `start()`. The SUT's handler filters
+    // on `handleId` internally, so the mock
+    // uses a wildcard handler (fires for
+    // every handleId; the SUT's own filter
+    // does the actual per-handle filtering).
+    // The unlisten is a no-op.
+    onLspStdout: vi.fn(
+      (handler: (p: { handleId: string; chunk: number[] }) => void) => {
+        // Register under a wildcard key
+        // so `lspStdioWrite` can fire it
+        // for any handleId. The SUT's
+        // handler closure filters on its
+        // own `myHandleId`, so cross-talk
+        // between clients is prevented by
+        // the production code, not the
+        // mock. Multiple LspClients can be
+        // alive in the same test (e.g. the
+        // bridge spawns one per kind), so
+        // the wildcard key holds a Set of
+        // handlers — every active LspClient
+        // gets its handler fired.
+        let set = stdoutHandlersByHandle.get('*');
+        if (!set) {
+          set = new Set();
+          stdoutHandlersByHandle.set('*', set);
+        }
+        set.add(handler);
+        const un = (): void => {
+          const s = stdoutHandlersByHandle.get('*');
+          if (s) {
+            s.delete(handler);
+            if (s.size === 0) {
+              stdoutHandlersByHandle.delete('*');
+            }
+          }
+        };
+        return Promise.resolve(un);
+      },
+    ),
     // Phase 9.7 — the replay-drain the
     // store calls once per handleId.
     // Empty by default in bridge tests.
@@ -540,6 +632,22 @@ beforeEach(() => {
   // Reset module state.
   (globalThis as { __lspQByHandle?: Map<string, Uint8Array[]> }).__lspQByHandle = new Map();
   (globalThis as { __lspQ?: Uint8Array[] }).__lspQ = [];
+  // Phase 9.36 — clear the stdout handler
+  // registry so previous-test listeners
+  // don't leak into the next test. The
+  // mock's `onLspStdout` registers a
+  // wildcard handler; if a test doesn't
+  // explicitly unlisten, the handler
+  // stays in the map and the next test's
+  // `lspStdioWrite` mock would fire it.
+  (
+    globalThis as {
+      __lspStdoutHandlers?: Map<
+        string,
+        Set<(p: { handleId: string; chunk: number[] }) => void>
+      >;
+    }
+  ).__lspStdoutHandlers?.clear();
   fakeModel = makeFakeModel(
     'file:///workspace/a/index.ts',
     'typescript',

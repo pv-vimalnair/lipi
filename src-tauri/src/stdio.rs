@@ -23,15 +23,18 @@
 //!
 //! ## Why polling and not Tauri events for stdout
 //!
-//! LSP `typescript-language-server` is a low-throughput
-//! protocol (a single `didChange` is one inbound
-//! `publishDiagnostics`); polling `lsp_stdio_read` at ~1ms
-//! granularity is more than enough and avoids the
-//! long-lived-event-subscription memory-leak risk. A Tauri
-//! command round-trip is ~0.5-1ms; the polling adds ~1-2ms
-//! of latency, which is invisible at LSP timescales (a real
-//! `textDocument/definition` takes 50-200ms on a full `tsc`
-//! program). See HANDOFF §9.33 for the full design.
+//! Pre-Phase 9.36 the JS `LspClient` polled
+//! `lsp_stdio_read` at ~1ms granularity. Phase
+//! 9.36 — the reader now also *emits* a
+//! `lsp://stdout` Tauri event with each chunk.
+//! The JS `LspClient` subscribes to the event
+//! and processes chunks as they arrive, dropping
+//! the 1ms polling loop. The `lsp_stdio_read`
+//! command is retained as a *catch-up* path
+//! (used once on subscription to drain bytes
+//! the child wrote before the JS side was
+//! listening). See HANDOFF §9.36 for the full
+//! design.
 //!
 //! ## Why a process-wide `Arc<Mutex<HashMap<HandleId, …>>>`
 //!
@@ -117,6 +120,26 @@ pub const LSP_CRASHED_EVENT: &str = "lsp://crashed";
 /// update both sides + the Rust test that pins it.
 pub const LSP_LOG_EVENT: &str = "lsp://log";
 
+/// `lsp://stdout` event name. Phase 9.36 —
+/// emitted by the stdout reader task whenever
+/// new bytes arrive on the child's stdout. The
+/// JS `LspClient` subscribes via `onLspStdout` and
+/// pushes the bytes into its framing buffer
+/// (LSP `Content-Length` headers + JSON-RPC
+/// bodies), replacing the 1ms polling loop that
+/// called `lsp_stdio_read`. The `lsp_stdio_read`
+/// command is retained as a *catch-up* path —
+/// called once on subscription to drain bytes
+/// the child wrote before the JS side was
+/// listening — but is not called in the hot path
+/// thereafter.
+///
+/// Re-exported from `lib.rs` and matched on the
+/// JS side as `LSP_STDOUT_EVENT` constant in
+/// `src/ipc/lsp.ts`. If you change this string,
+/// update both sides + the Rust test that pins it.
+pub const LSP_STDOUT_EVENT: &str = "lsp://stdout";
+
 /// Payload shape of the `lsp://crashed` event. Lives
 /// in Rust so we can write a `serde` round-trip test
 /// that pins the wire format (camelCase, fields the
@@ -164,6 +187,50 @@ pub struct LspLogPayload {
     /// shouldn't happen — the reader loops on
     /// `Ok(0)` as EOF, not as a normal event).
     pub chunk: String,
+}
+
+/// Payload shape of the `lsp://stdout` event.
+/// Phase 9.36 — one event per stdout read with
+/// at least one byte. The `chunk` is the *raw*
+/// bytes the child wrote (LSP framing =
+/// `Content-Length: N\r\n\r\n<body>` in UTF-8).
+/// We send bytes (not a lossy UTF-8 string)
+/// because the LSP spec is byte-exact —
+/// `Content-Length` and the JSON body must match
+/// at the byte level for the receiver to frame
+/// the message. The JS side wraps the bytes in a
+/// `Uint8Array` via `new Uint8Array(chunk)` and
+/// appends them to its framing buffer.
+///
+/// The `handleId` is the same opaque 32-char hex
+/// string returned by `lsp_run_stdio`. The JS
+/// `LspClient` matches on it to find the
+/// right per-workspace message queue (the
+/// store's `handleToWorkspaceKey` reverse map
+/// is the lookup table — see
+/// `lspClientStore.ts`).
+///
+/// Why a separate struct (not just reusing
+/// `LspLogPayload` with a different field
+/// shape): the two events have different
+/// delivery patterns (log = many small pushes
+/// on stderr, stdout = bursty pushes on
+/// stdout) and different consumers (log →
+/// `lspOutputByWorkspace`, stdout → LSP frame
+/// parser). A distinct type keeps the wire
+/// format explicit and the Rust tests can pin
+/// each shape independently. The `chunk` is
+/// `Vec<u8>` here (not `String`) because the
+/// LSP wire format is byte-exact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LspStdoutPayload {
+    pub handle_id: String,
+    /// Raw bytes the child wrote to stdout since
+    /// the last event. The JS side appends them
+    /// verbatim to its framing buffer (no UTF-8
+    /// lossy decode — LSP framing is byte-exact).
+    pub chunk: Vec<u8>,
 }
 
 /// Push `bytes` into a stderr ring buffer, dropping
@@ -380,10 +447,19 @@ impl StdioHandle {
     /// Spawn the reader task. Lives for the lifetime of
     /// the process; on EOF or child exit, flips `exited`
     /// and exits.
+    ///
+    /// Phase 9.36 — also takes an `AppHandle` and
+    /// emits a `lsp://stdout` event with each
+    /// chunk. The `stdout_buffer` is retained for
+    /// the `lsp_stdio_read` catch-up path (called
+    /// once on JS subscription to drain bytes
+    /// the child wrote before the JS side was
+    /// listening).
     fn spawn_reader(
         mut stdout: ChildStdout,
         stdout_buffer: Arc<Mutex<VecDeque<u8>>>,
         exited: Arc<Mutex<bool>>,
+        app_handle: tauri::AppHandle,
         handle_id: String,
     ) {
         async_runtime::spawn(async move {
@@ -397,15 +473,52 @@ impl StdioHandle {
                         break;
                     }
                     Ok(n) => {
-                        let mut q = stdout_buffer.lock().expect("buffer poisoned");
-                        // Cap the buffer at 8 MiB so a
-                        // chatty server can't OOM us.
-                        const MAX_BUFFER: usize = 8 * 1024 * 1024;
-                        for byte in &buf[..n] {
-                            if q.len() >= MAX_BUFFER {
-                                q.pop_front();
+                        // 1. Push the bytes into the
+                        // catch-up buffer (Phase 9.36
+                        // — still used for the
+                        // one-time drain on JS
+                        // subscription).
+                        {
+                            let mut q =
+                                stdout_buffer.lock().expect("buffer poisoned");
+                            // Cap the buffer at 8 MiB
+                            // so a chatty server can't
+                            // OOM us.
+                            const MAX_BUFFER: usize = 8 * 1024 * 1024;
+                            for byte in &buf[..n] {
+                                if q.len() >= MAX_BUFFER {
+                                    q.pop_front();
+                                }
+                                q.push_back(*byte);
                             }
-                            q.push_back(*byte);
+                        }
+                        // 2. Emit the bytes to the JS
+                        // side via `lsp://stdout`
+                        // (Phase 9.36). We emit
+                        // unconditionally on every
+                        // read with at least one
+                        // byte — the JS side is the
+                        // LSP frame parser and is
+                        // responsible for
+                        // `Content-Length` framing.
+                        // We send raw bytes (not a
+                        // UTF-8 lossy string) because
+                        // the LSP wire format is
+                        // byte-exact: the receiver
+                        // must see the same byte
+                        // sequence the child wrote.
+                        let payload = LspStdoutPayload {
+                            handle_id: handle_id.clone(),
+                            chunk: buf[..n].to_vec(),
+                        };
+                        if let Err(e) =
+                            app_handle.emit(LSP_STDOUT_EVENT, &payload)
+                        {
+                            if std::env::var("LIPI_LSP_DEBUG").is_ok() {
+                                eprintln!(
+                                    "[lsp] failed to emit {LSP_STDOUT_EVENT}: {e}"
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -649,6 +762,7 @@ pub async fn run_stdio(
         stdout,
         stdout_buffer.clone(),
         exited.clone(),
+        app.clone(),
         handle_id.clone(),
     );
     StdioHandle::spawn_stderr_reader(
@@ -1507,6 +1621,84 @@ mod tests {
         let parsed: LspCrashedPayload =
             serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, payload);
+    }
+
+    // --- Phase 9.36 — stdout event-stream upgrade ---
+
+    #[test]
+    fn lsp_stdout_event_name_is_stable() {
+        // The JS side listens for this exact string.
+        // If we change it, the listener goes silent
+        // and the LSP framing loop never gets any
+        // bytes — the renderer would hang on
+        // `initialize` (no `initialize` response
+        // means the JSON-RPC handshake never
+        // completes).
+        assert_eq!(LSP_STDOUT_EVENT, "lsp://stdout");
+    }
+
+    #[test]
+    fn lsp_stdout_payload_serialises_camel_case() {
+        // The JS side's `OnLspStdoutPayload`
+        // interface reads `handleId` and `chunk`.
+        // `chunk` is `number[]` on the JS side
+        // (the IPC layer marshals the Rust
+        // `Vec<u8>` to a JSON array of numbers).
+        // If we rename a Rust field without
+        // updating the `rename_all` attr, the
+        // listener goes silent.
+        let payload = LspStdoutPayload {
+            handle_id: "lsp_abc".to_string(),
+            chunk: vec![0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74], // "Content"
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"handleId\":\"lsp_abc\""));
+        // The chunk is serialised as a JSON array
+        // of numbers (not a base64 string), so the
+        // JS side can wrap it in a `Uint8Array`
+        // directly via `new Uint8Array(chunk)`.
+        assert!(json.contains("\"chunk\":[67,111,110,116,101,110,116]"));
+    }
+
+    #[test]
+    fn lsp_stdout_payload_round_trips_with_empty_chunk() {
+        // An empty chunk is a degenerate case
+        // (the reader only emits on `Ok(n)` with
+        // `n > 0`), but the JS side should tolerate
+        // it if it ever does fire.
+        let payload = LspStdoutPayload {
+            handle_id: "lsp_silent".to_string(),
+            chunk: Vec::new(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let parsed: LspStdoutPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, payload);
+    }
+
+    #[test]
+    fn lsp_stdout_payload_round_trips_with_binary_chunk() {
+        // The LSP wire format is byte-exact: the
+        // JSON-RPC body and the
+        // `Content-Length: N\r\n\r\n` header must
+        // match at the byte level for the receiver
+        // to frame the message. We can't lossy-
+        // decode (the Rust `lsp://log` payload
+        // does, but that's UTF-8 stderr text — the
+        // `lsp://stdout` payload is binary). This
+        // test pins the binary round-trip: any
+        // byte from 0x00 to 0xFF must survive a
+        // serialise → deserialise cycle.
+        let payload = LspStdoutPayload {
+            handle_id: "lsp_binary".to_string(),
+            chunk: (0u8..=255).collect(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let parsed: LspStdoutPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, payload);
+        assert_eq!(parsed.chunk.len(), 256);
+        for (i, b) in parsed.chunk.iter().enumerate() {
+            assert_eq!(*b, i as u8);
+        }
     }
 
     // --- Phase 9.7 — stderr log ring buffer + event ---

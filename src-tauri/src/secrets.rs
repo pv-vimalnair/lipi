@@ -63,7 +63,15 @@ use serde::{Deserialize, Serialize};
 /// the future will *not* migrate existing user keys —
 /// they'll need to be re-entered. This is a feature, not
 /// a bug: the old keys belong to the old app.
-const SERVICE: &str = "app.lipi.ide";
+pub(crate) const SERVICE: &str = "app.lipi.ide";
+
+/// Max length of a provider id (matches the
+/// `validate_provider` upper bound).
+pub(crate) const MAX_PROVIDER_LEN: usize = 64;
+
+/// Max length of an API key (matches the
+/// `validate_key` upper bound).
+pub(crate) const MAX_KEY_LEN: usize = 512;
 
 /// Error type for the secrets module. Serialised to
 /// camelCase JSON for the frontend (`secretError` /
@@ -285,13 +293,13 @@ pub fn map_stronghold_error(err: tauri_plugin_stronghold::stronghold::Error) -> 
 /// supported providers is in `ai.rs::list_providers`;
 /// this function only checks the *shape* of the
 /// string, not whether it's a known provider.
-fn validate_provider(provider: &str) -> Result<(), SecretError> {
+pub(crate) fn validate_provider(provider: &str) -> Result<(), SecretError> {
     if provider.is_empty() {
         return Err(SecretError::InvalidInput {
             detail: "provider id must not be empty".to_string(),
         });
     }
-    if provider.len() > 64 {
+    if provider.len() > MAX_PROVIDER_LEN {
         return Err(SecretError::InvalidInput {
             detail: "provider id must be 64 characters or fewer".to_string(),
         });
@@ -309,16 +317,36 @@ fn validate_provider(provider: &str) -> Result<(), SecretError> {
 /// (real keys are usually 40-100 chars) and prevents
 /// abuse (someone pasting a megabyte of data into
 /// the keychain entry).
-fn validate_key(key: &str) -> Result<(), SecretError> {
+pub(crate) fn validate_key(key: &str) -> Result<(), SecretError> {
     if key.is_empty() {
         return Err(SecretError::InvalidInput {
             detail: "API key must not be empty".to_string(),
         });
     }
-    if key.len() > 512 {
+    if key.len() > MAX_KEY_LEN {
         return Err(SecretError::InvalidInput {
             detail: "API key must be 512 characters or fewer".to_string(),
         });
+    }
+    Ok(())
+}
+
+/// Combined validator for the Stronghold facade
+/// (`secrets_stronghold.rs`). Provider is always
+/// validated. The key is validated only when the
+/// caller has provided one — for the read paths
+/// (`get` / `has` / `delete`) the caller passes `""`
+/// because they don't have a key. The `has_key`
+/// flag tells the validator which mode we're in.
+#[cfg(feature = "mobile")]
+pub(crate) fn validate_stronghold_input(
+    provider: &str,
+    key: &str,
+    has_key: bool,
+) -> Result<(), SecretError> {
+    validate_provider(provider)?;
+    if has_key {
+        validate_key(key)?;
     }
     Ok(())
 }
@@ -378,7 +406,40 @@ fn entry_for(provider: &str) -> Result<std::sync::Arc<keyring::Entry>, SecretErr
 /// provider. The key is stored in the OS keychain,
 /// never logged, never returned. On success, the
 /// frontend should clear its input field.
-pub fn set_api_key(provider: &str, key: &str) -> Result<(), SecretError> {
+///
+/// `snapshot_path` is the Stronghold snapshot
+/// location. On desktop (Keyring backend) it is
+/// ignored; on mobile (Stronghold backend, gated
+/// by the `mobile` feature) it is required —
+/// `None` is treated as "use the default location".
+#[allow(unused_variables)]
+pub fn set_api_key(
+    provider: &str,
+    key: &str,
+    snapshot_path: Option<&std::path::Path>,
+) -> Result<(), SecretError> {
+    // Mobile-build roadmap Phase B: dispatch to
+    // Stronghold on Android, Keyring everywhere
+    // else. The dispatch is a pure function of the
+    // platform; the `mobile` Cargo feature gates
+    // the Stronghold variant.
+    #[cfg(feature = "mobile")]
+    {
+        if crate::voice_platform::current_os_family()
+            == crate::voice_platform::OsFamily::Android
+        {
+            let path = snapshot_path.ok_or_else(|| SecretError::Platform {
+                detail: "snapshot_path is required for Stronghold backend".to_string(),
+            })?;
+            return crate::secrets_stronghold::set_api_key(provider, key, path);
+        }
+    }
+    set_api_key_keyring(provider, key)
+}
+
+/// Keyring-only `set_api_key` (the original
+/// implementation, unchanged).
+fn set_api_key_keyring(provider: &str, key: &str) -> Result<(), SecretError> {
     validate_provider(provider)?;
     validate_key(key)?;
     let entry = entry_for(provider)?;
@@ -398,7 +459,28 @@ pub fn set_api_key(provider: &str, key: &str) -> Result<(), SecretError> {
 /// `Err(SecretError::…)`. We deliberately do
 /// NOT swallow platform errors here — if the
 /// keychain is broken, the user needs to know.
-pub fn has_api_key(provider: &str) -> Result<bool, SecretError> {
+#[allow(unused_variables)]
+pub fn has_api_key(
+    provider: &str,
+    snapshot_path: Option<&std::path::Path>,
+) -> Result<bool, SecretError> {
+    #[cfg(feature = "mobile")]
+    {
+        if crate::voice_platform::current_os_family()
+            == crate::voice_platform::OsFamily::Android
+        {
+            let path = snapshot_path.ok_or_else(|| SecretError::Platform {
+                detail: "snapshot_path is required for Stronghold backend".to_string(),
+            })?;
+            return crate::secrets_stronghold::has_api_key(provider, path);
+        }
+    }
+    has_api_key_keyring(provider)
+}
+
+/// Keyring-only `has_api_key` (the original
+/// implementation, unchanged).
+fn has_api_key_keyring(provider: &str) -> Result<bool, SecretError> {
     validate_provider(provider)?;
     let entry = entry_for(provider)?;
     match entry.get_password() {
@@ -413,8 +495,29 @@ pub fn has_api_key(provider: &str) -> Result<bool, SecretError> {
 /// This is the only way the AI proxy in 5b
 /// gets the key; the frontend never receives
 /// the key value itself.
+#[allow(dead_code, unused_variables)] // used in Phase 5b
+pub fn get_api_key(
+    provider: &str,
+    snapshot_path: Option<&std::path::Path>,
+) -> Result<Option<String>, SecretError> {
+    #[cfg(feature = "mobile")]
+    {
+        if crate::voice_platform::current_os_family()
+            == crate::voice_platform::OsFamily::Android
+        {
+            let path = snapshot_path.ok_or_else(|| SecretError::Platform {
+                detail: "snapshot_path is required for Stronghold backend".to_string(),
+            })?;
+            return crate::secrets_stronghold::get_api_key(provider, path);
+        }
+    }
+    get_api_key_keyring(provider)
+}
+
+/// Keyring-only `get_api_key` (the original
+/// implementation, unchanged).
 #[allow(dead_code)] // used in Phase 5b
-pub fn get_api_key(provider: &str) -> Result<Option<String>, SecretError> {
+fn get_api_key_keyring(provider: &str) -> Result<Option<String>, SecretError> {
     validate_provider(provider)?;
     let entry = entry_for(provider)?;
     match entry.get_password() {
@@ -428,7 +531,28 @@ pub fn get_api_key(provider: &str) -> Result<Option<String>, SecretError> {
 /// Idempotent: deleting a non-existent key
 /// returns `Ok(())`. Used by the Settings
 /// screen's "Remove key" button.
-pub fn delete_api_key(provider: &str) -> Result<(), SecretError> {
+#[allow(unused_variables)]
+pub fn delete_api_key(
+    provider: &str,
+    snapshot_path: Option<&std::path::Path>,
+) -> Result<(), SecretError> {
+    #[cfg(feature = "mobile")]
+    {
+        if crate::voice_platform::current_os_family()
+            == crate::voice_platform::OsFamily::Android
+        {
+            let path = snapshot_path.ok_or_else(|| SecretError::Platform {
+                detail: "snapshot_path is required for Stronghold backend".to_string(),
+            })?;
+            return crate::secrets_stronghold::delete_api_key(provider, path);
+        }
+    }
+    delete_api_key_keyring(provider)
+}
+
+/// Keyring-only `delete_api_key` (the original
+/// implementation, unchanged).
+fn delete_api_key_keyring(provider: &str) -> Result<(), SecretError> {
     validate_provider(provider)?;
     let entry = entry_for(provider)?;
     match entry.delete_credential() {
@@ -472,25 +596,25 @@ mod tests {
         // don't collide in the in-process mock store.
         let provider = "openai";
         // Clean up any prior state.
-        let _ = delete_api_key(provider);
-        assert!(!has_api_key(provider).unwrap());
-        set_api_key(provider, "sk-test-1234").unwrap();
-        assert!(has_api_key(provider).unwrap());
+        let _ = delete_api_key(provider, None);
+        assert!(!has_api_key(provider, None).unwrap());
+        set_api_key(provider, "sk-test-1234", None).unwrap();
+        assert!(has_api_key(provider, None).unwrap());
         // Cleanup
-        delete_api_key(provider).unwrap();
-        assert!(!has_api_key(provider).unwrap());
+        delete_api_key(provider, None).unwrap();
+        assert!(!has_api_key(provider, None).unwrap());
     }
 
     #[test]
     fn set_then_get_returns_the_key() {
         install_mock();
         let provider = "anthropic";
-        let _ = delete_api_key(provider);
+        let _ = delete_api_key(provider, None);
         let key = "sk-ant-test-abcdef";
-        set_api_key(provider, key).unwrap();
-        let read = get_api_key(provider).unwrap();
+        set_api_key(provider, key, None).unwrap();
+        let read = get_api_key(provider, None).unwrap();
         assert_eq!(read.as_deref(), Some(key));
-        delete_api_key(provider).unwrap();
+        delete_api_key(provider, None).unwrap();
     }
 
     #[test]
@@ -498,35 +622,35 @@ mod tests {
         install_mock();
         let provider = "openrouter";
         // No key exists; delete is a no-op.
-        delete_api_key(provider).unwrap();
-        delete_api_key(provider).unwrap();
+        delete_api_key(provider, None).unwrap();
+        delete_api_key(provider, None).unwrap();
         // Set then delete twice.
-        set_api_key(provider, "sk-or-test").unwrap();
-        delete_api_key(provider).unwrap();
-        delete_api_key(provider).unwrap();
-        assert!(!has_api_key(provider).unwrap());
+        set_api_key(provider, "sk-or-test", None).unwrap();
+        delete_api_key(provider, None).unwrap();
+        delete_api_key(provider, None).unwrap();
+        assert!(!has_api_key(provider, None).unwrap());
     }
 
     #[test]
     fn empty_provider_is_rejected() {
         install_mock();
-        let err = set_api_key("", "key").unwrap_err();
+        let err = set_api_key("", "key", None).unwrap_err();
         assert!(matches!(err, SecretError::InvalidInput { .. }));
-        let err = has_api_key("").unwrap_err();
+        let err = has_api_key("", None).unwrap_err();
         assert!(matches!(err, SecretError::InvalidInput { .. }));
     }
 
     #[test]
     fn empty_key_is_rejected() {
         install_mock();
-        let err = set_api_key("openai", "").unwrap_err();
+        let err = set_api_key("openai", "", None).unwrap_err();
         assert!(matches!(err, SecretError::InvalidInput { .. }));
     }
 
     #[test]
     fn non_ascii_provider_is_rejected() {
         install_mock();
-        let err = set_api_key("opeñai", "key").unwrap_err();
+        let err = set_api_key("opeñai", "key", None).unwrap_err();
         assert!(matches!(err, SecretError::InvalidInput { .. }));
     }
 
@@ -534,7 +658,7 @@ mod tests {
     fn overlong_provider_is_rejected() {
         install_mock();
         let long = "a".repeat(65);
-        let err = set_api_key(&long, "key").unwrap_err();
+        let err = set_api_key(&long, "key", None).unwrap_err();
         assert!(matches!(err, SecretError::InvalidInput { .. }));
     }
 
@@ -542,7 +666,7 @@ mod tests {
     fn overlong_key_is_rejected() {
         install_mock();
         let huge = "x".repeat(513);
-        let err = set_api_key("openai", &huge).unwrap_err();
+        let err = set_api_key("openai", &huge, None).unwrap_err();
         assert!(matches!(err, SecretError::InvalidInput { .. }));
     }
 
@@ -659,24 +783,25 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "mobile"))]
     #[test]
     fn secrets_get_api_key_dispatch_logic_for_android() {
         // Smoke test: the dispatch helper resolves
         // to the right backend for Android. The
         // actual Stronghold client is exercised in
         // the device-level smoke test (future
-        // Mac / Linux session).
+        // Mac / Linux session) + the `mobile`-gated
+        // unit tests in `secrets_stronghold.rs`.
         use crate::voice_platform::OsFamily;
         let backend = pick_secrets_backend(OsFamily::Android);
         // On the Windows dev build (no `mobile`
         // feature), this is `Keyring`; on the
         // Android build (with `mobile` feature),
         // this is `Stronghold`. Both are correct
-        // — the test just verifies the dispatch
-        // resolves to `Keyring` on the default
-        // build. (The `mobile` build's
-        // dispatch is tested by
-        // `pick_secrets_backend_returns_stronghold_for_android`.)
+        // — this test only runs on the default
+        // build (the `mobile` build's dispatch
+        // is tested by
+        // `pick_secrets_backend_returns_stronghold_for_android`).
         assert!(
             matches!(backend, SecretsBackend::Keyring),
             "expected Keyring for Android on the default build, got {backend:?}"

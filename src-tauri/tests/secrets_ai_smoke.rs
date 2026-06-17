@@ -112,25 +112,30 @@ fn secrets_round_trip_through_public_functions() {
     install_mock();
     // Use a unique provider per test.
     let provider = "openai";
+    // The smoke test runs in the default (desktop) build
+    // which uses the OS keyring (mocked above). Stronghold
+    // snapshot_path is None -> ignored on desktop,
+    // required on mobile (gated by the `mobile` feature).
+    let snapshot: Option<&std::path::Path> = None;
     // Ensure clean state.
-    let _ = secrets_delete_rs(provider);
+    let _ = secrets_delete_rs(provider, snapshot);
 
     // has -> false initially
-    let entry = lipi_lib::secrets_has_rs(provider).unwrap();
+    let entry = lipi_lib::secrets_has_rs(provider, snapshot).unwrap();
     assert!(!entry);
 
     // set
-    secrets_set_rs(provider, "sk-test-1234").unwrap();
-    let entry = lipi_lib::secrets_has_rs(provider).unwrap();
+    secrets_set_rs(provider, "sk-test-1234", snapshot).unwrap();
+    let entry = lipi_lib::secrets_has_rs(provider, snapshot).unwrap();
     assert!(entry);
 
     // get returns Some
-    let got = lipi_lib::secrets_get_api_key_rs(provider).unwrap();
+    let got = lipi_lib::secrets_get_api_key_rs(provider, snapshot).unwrap();
     assert_eq!(got.as_deref(), Some("sk-test-1234"));
 
     // delete
-    lipi_lib::secrets_delete_rs(provider).unwrap();
-    let entry = lipi_lib::secrets_has_rs(provider).unwrap();
+    lipi_lib::secrets_delete_rs(provider, snapshot).unwrap();
+    let entry = lipi_lib::secrets_has_rs(provider, snapshot).unwrap();
     assert!(!entry);
 }
 
@@ -138,8 +143,9 @@ fn secrets_round_trip_through_public_functions() {
 fn secret_error_wire_shape_is_camel_case_with_kind_tag() {
     // Empty provider id is invalid — we can verify the
     // wire shape of SecretError directly via
-    // serde_json::to_value.
-    let err = lipi_lib::secrets_set_rs("", "x").unwrap_err();
+    // serde_json::to_value. snapshot_path is None
+    // (desktop build uses the OS keyring, mocked above).
+    let err = lipi_lib::secrets_set_rs("", "x", None).unwrap_err();
     let json = serde_json::to_value(&err).unwrap();
     // SecretError is `#[serde(tag = "kind")]`. The TS
     // side reads `payload.kind` and `payload.detail`.
@@ -163,8 +169,8 @@ fn ai_get_configured_providers_includes_any_provider_with_a_key() {
     // set a unique key, then verify the result
     // contains at least that provider.
     let provider = "openai";
-    lipi_lib::secrets_set_rs(provider, "sk-test-5a").unwrap();
-    let configured: Vec<String> = lipi_lib::ai_get_configured_providers_rs()
+    lipi_lib::secrets_set_rs(provider, "sk-test-5a", None).unwrap();
+    let configured: Vec<String> = lipi_lib::ai_get_configured_providers_rs(None)
         .iter()
         .map(|s| s.to_string())
         .collect();

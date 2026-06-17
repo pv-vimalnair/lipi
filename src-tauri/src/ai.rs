@@ -171,11 +171,13 @@ pub fn provider_by_id(id: &str) -> Option<ProviderInfo> {
 /// that card). We never propagate keychain errors
 /// out of this "list the configured ones" helper —
 /// it's a best-effort UI hint, not a security check.
-pub fn get_configured_providers() -> Vec<&'static str> {
+pub fn get_configured_providers(
+    snapshot_path: Option<&std::path::Path>,
+) -> Vec<&'static str> {
     list_providers()
         .iter()
         .filter_map(|p| {
-            match secrets::has_api_key(p.id) {
+            match secrets::has_api_key(p.id, snapshot_path) {
                 Ok(true) => Some(p.id),
                 _ => None,
             }
@@ -246,7 +248,7 @@ mod tests {
         // pass-through for the *shape* of the result.
         // We assert just that the result is a subset
         // of known providers.
-        let configured = get_configured_providers();
+        let configured = get_configured_providers(None);
         for id in &configured {
             assert!(provider_by_id(id).is_some());
         }

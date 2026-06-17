@@ -57,6 +57,21 @@ pub use terminal::{
 mod secrets;
 pub use secrets::{delete_api_key as secrets_delete_rs, get_api_key as secrets_get_api_key_rs, has_api_key as secrets_has_rs, set_api_key as secrets_set_rs, SecretError};
 
+// Mobile-build roadmap Phase B — Stronghold facade for Android.
+// The desktop build (default) doesn't see this module
+// at all. On Android, the `keyring` 3.x crate has no
+// backend, so we use `tauri-plugin-stronghold` +
+// `iota_stronghold` for secret storage. The facade
+// exposes the same `set_api_key` / `get_api_key` /
+// `has_api_key` / `delete_api_key` signatures as the
+// Keyring path, with an extra `snapshot_path: &Path`
+// parameter (the snapshot file location). The
+// `lib.rs` IPC commands resolve the snapshot path
+// from `app.path().app_local_data_dir()` and pass it
+// down.
+#[cfg(feature = "mobile")]
+mod secrets_stronghold;
+
 // Phase 2: offline-license signing + verification (the
 // first step of the "Lipi to Paid Public Launch" roadmap —
 // see HANDOFF §6 "Next:" and §9.24). The licensing module
@@ -176,8 +191,9 @@ pub use stdio::{
     stdio_read_stderr as stdio_read_stderr_rs,
     stdio_read_stderr_log as stdio_read_stderr_log_rs,
     stdio_write as stdio_write_rs, CheckAvailableArgs, CheckAvailableResult,
-    LspCrashedPayload, LspLogPayload, LspServerKind, LSP_CRASHED_EVENT,
-    LSP_LOG_EVENT, RunStdioArgs, RunStdioResult, StdioError, StdioState,
+    LspCrashedPayload, LspLogPayload, LspServerKind, LspStdoutPayload,
+    LSP_CRASHED_EVENT, LSP_LOG_EVENT, LSP_STDOUT_EVENT, RunStdioArgs,
+    RunStdioResult, StdioError, StdioState,
 };
 
 mod http;
@@ -205,7 +221,8 @@ mod stt;
 pub use stt::{
     is_available as stt_is_available_rs, is_model_installed as stt_is_model_installed_rs,
     list_installed_models as stt_list_installed_models_rs, list_models as stt_list_models_rs,
-    model_by_id as stt_model_by_id_rs, read_active_model_id as stt_read_active_model_id_rs,
+    model_by_id as stt_model_by_id_rs, model_path as stt_model_path_rs,
+    read_active_model_id as stt_read_active_model_id_rs,
     write_active_model_id as stt_write_active_model_id_rs, install_model as stt_install_model_rs,
     remove_model as stt_remove_model_rs, set_active_model as stt_set_active_model_rs,
     SttError, SttModelDescriptor, STT_EVENT_DOWNLOAD_PROGRESS, STT_EVENT_ERROR,
@@ -217,6 +234,11 @@ pub use stt_capture::{
     start_listening as stt_start_listening_rs, stop_listening as stt_stop_listening_rs,
     ListenOptions, TranscriptEvent, WHISPER_SAMPLE_RATE_HZ, WHISPER_SAMPLES_PER_MS,
 };
+
+#[cfg(feature = "m2c-native")]
+mod stt_inference;
+#[cfg(feature = "m2c-native")]
+pub use stt_inference::set_active_model_path;
 
 // M2c mobile: a tiny compile-time capability
 // surface. Reports which STT providers the current
@@ -1056,14 +1078,20 @@ fn terminal_default_shell_cmd() -> String {
 // --- Phase 5a: secrets + AI provider registry ----------------------------
 
 /// Save (or overwrite) an AI provider API key in the OS
-/// keychain. The key never enters the JS bundle — the
-/// frontend hands the raw value to the Rust side via
-/// this command, which immediately writes it to the
+/// keychain (or, on Android, the Stronghold snapshot).
+/// The key never enters the JS bundle — the frontend
+/// hands the raw value to the Rust side via this
+/// command, which immediately writes it to the
 /// keychain and returns. The frontend clears its input
 /// field on success.
 #[tauri::command]
-fn secrets_set_api_key(provider: String, key: String) -> Result<(), SecretError> {
-    secrets_set_rs(&provider, &key)
+fn secrets_set_api_key(
+    app: AppHandle,
+    provider: String,
+    key: String,
+) -> Result<(), SecretError> {
+    let snapshot_path = resolve_snapshot_path(&app);
+    secrets_set_rs(&provider, &key, snapshot_path.as_deref())
 }
 
 /// Returns `true` if the given provider has a key in the
@@ -1071,14 +1099,22 @@ fn secrets_set_api_key(provider: String, key: String) -> Result<(), SecretError>
 /// "Configured" / "Not configured" badge. The actual key
 /// value is never returned to the JS side.
 #[tauri::command]
-fn secrets_has_api_key(provider: String) -> Result<bool, SecretError> {
-    secrets_has_rs(&provider)
+fn secrets_has_api_key(
+    app: AppHandle,
+    provider: String,
+) -> Result<bool, SecretError> {
+    let snapshot_path = resolve_snapshot_path(&app);
+    secrets_has_rs(&provider, snapshot_path.as_deref())
 }
 
 /// Delete the API key for the given provider. Idempotent.
 #[tauri::command]
-fn secrets_delete_api_key(provider: String) -> Result<(), SecretError> {
-    secrets_delete_rs(&provider)
+fn secrets_delete_api_key(
+    app: AppHandle,
+    provider: String,
+) -> Result<(), SecretError> {
+    let snapshot_path = resolve_snapshot_path(&app);
+    secrets_delete_rs(&provider, snapshot_path.as_deref())
 }
 
 /// M2b: returns the raw API key for the given provider.
@@ -1107,8 +1143,35 @@ fn secrets_delete_api_key(provider: String) -> Result<(), SecretError> {
 ///   - The keychain entry is still authoritative; this
 ///     command is a "give me the secret one time" call.
 #[tauri::command]
-fn secrets_get_api_key(provider: String) -> Result<Option<String>, SecretError> {
-    secrets_get_api_key_rs(&provider)
+fn secrets_get_api_key(
+    app: AppHandle,
+    provider: String,
+) -> Result<Option<String>, SecretError> {
+    let snapshot_path = resolve_snapshot_path(&app);
+    secrets_get_api_key_rs(&provider, snapshot_path.as_deref())
+}
+
+/// Resolve the Stronghold snapshot path from the
+/// app's `app_local_data_dir`. Returns `None` on
+/// platforms where the Stronghold backend is
+/// unreachable (the `mobile` feature is off, or the
+/// platform isn't Android) — in that case the
+/// Keyring path is used and the path is ignored.
+fn resolve_snapshot_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    #[cfg(feature = "mobile")]
+    {
+        if crate::voice_platform::current_os_family()
+            == crate::voice_platform::OsFamily::Android
+        {
+            if let Ok(dir) = app.path().app_local_data_dir() {
+                return Some(
+                    crate::secrets_stronghold::snapshot_path_for(&dir),
+                );
+            }
+        }
+    }
+    let _ = app;
+    None
 }
 
 /// Returns the static list of supported AI providers.
@@ -1124,8 +1187,9 @@ fn ai_list_providers() -> Vec<ProviderInfo> {
 /// the "configured" / "not configured" state without
 /// three separate `secrets_has_api_key` round-trips.
 #[tauri::command]
-fn ai_get_configured_providers() -> Vec<String> {
-    ai_get_configured_providers_rs()
+fn ai_get_configured_providers(app: AppHandle) -> Vec<String> {
+    let snapshot_path = resolve_snapshot_path(&app);
+    ai_get_configured_providers_rs(snapshot_path.as_deref())
         .into_iter()
         .map(|s| s.to_string())
         .collect()
@@ -1313,8 +1377,14 @@ async fn ai_chat_stream(
         .ok_or_else(|| ChatError::UnknownProvider(args.provider.clone()))?;
 
     // Read the API key from the keychain. We
-    // never log it; we never return it.
-    let api_key = secrets::get_api_key(&args.provider)
+    // never log it; we never return it. On
+    // Android the keychain is replaced by a
+    // Stronghold snapshot (mobile-build roadmap
+    // Phase B); the dispatch is in
+    // `secrets::get_api_key` and the snapshot
+    // path is resolved from `app_local_data_dir()`.
+    let snapshot_path = resolve_snapshot_path(&app);
+    let api_key = secrets::get_api_key(&args.provider, snapshot_path.as_deref())
         .map_err(|_| ChatError::MissingApiKey(args.provider.clone()))?
         .ok_or_else(|| ChatError::MissingApiKey(args.provider.clone()))?;
 
@@ -1616,6 +1686,36 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            // Mobile-build roadmap Phase B: register
+            // the Stronghold plugin on Android. The
+            // plugin derives the encryption key from
+            // a password (passed by the JS side via
+            // `Stronghold.load(vaultPath, password)`)
+            // using argon2 with a salt file in
+            // `app_local_data_dir()`. The Lipi Rust
+            // side uses `iota_stronghold` directly
+            // (see `secrets_stronghold.rs`) and
+            // doesn't depend on this plugin's IPC;
+            // the registration is for completeness
+            // (and to allow future JS-side code to
+            // share the same Stronghold instance).
+            #[cfg(feature = "mobile")]
+            {
+                if let Ok(app_data_dir) = app.path().app_local_data_dir() {
+                    let salt_path = app_data_dir.join("salt.txt");
+                    if let Some(parent) = salt_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = app
+                        .handle()
+                        .plugin(
+                            tauri_plugin_stronghold::Builder::with_argon2(
+                                &salt_path,
+                            )
+                            .build(),
+                        );
+                }
+            }
             let handle_for_emit = app.handle().clone();
             app.handle().clone().deep_link().on_open_url(move |event| {
                 for url in event.urls() {
@@ -1630,6 +1730,78 @@ pub fn run() {
             #[cfg(any(target_os = "linux", all(debug_assertions, target_os = "windows")))]
             {
                 let _ = app.deep_link().register_all();
+            }
+            // M2c desktop: install the `SessionRegistry`
+            // into Tauri-managed state. The `start_listening`
+            // and `stop_listening` IPC commands look it up
+            // via `app.state::<SessionRegistry>()`. The
+            // registry is always compiled (the cpal
+            // capture path runs in every build); the
+            // `m2c-native` gate only affects what
+            // `stop_listening` does *after* it pulls the
+            // audio buffer (real whisper inference vs.
+            // stub marker).
+            app.manage::<stt_capture::SessionRegistry>(std::sync::Arc::new(
+                std::sync::Mutex::new(std::collections::HashMap::new()),
+            ));
+            // M2c desktop: pre-load the active model's
+            // `WhisperContext` on app startup so the
+            // first `stt_stop_listening` doesn't pay the
+            // multi-second model-load cost. We look up
+            // the active model id from the same
+            // `active_model.json` file the JS side reads
+            // (Decision #45 in HANDOFF §9.7). The pre-load
+            // is best-effort — a missing or unparsed file
+            // just means "no model set," which the JS
+            // settings UI surfaces as a "Download a model"
+            // prompt. We do NOT block startup on the
+            // load; the user can still navigate the
+            // settings UI while the model loads in the
+            // background.
+            #[cfg(feature = "m2c-native")]
+            {
+                if let Ok(app_data_dir) = app.path().app_local_data_dir() {
+                    if let Some(active_id) = stt_read_active_model_id_rs(&app_data_dir) {
+                        match stt_model_path_rs(&app_data_dir, &active_id) {
+                            Ok(model_path) => {
+                                // Validate the file is on
+                                // disk before advertising
+                                // it to the inference
+                                // module — a missing file
+                                // shouldn't shadow a
+                                // working `WhisperContext`
+                                // cache.
+                                if model_path.exists() {
+                                    if let Err(e) = stt_inference::set_active_model_path(
+                                        model_path.clone(),
+                                    ) {
+                                        log::warn!(
+                                            "stt_inference: failed to set active model path ({}): {e}",
+                                            model_path.display()
+                                        );
+                                    } else {
+                                        log::info!(
+                                            "stt_inference: pre-loaded active model '{}' at {}",
+                                            active_id,
+                                            model_path.display()
+                                        );
+                                    }
+                                } else {
+                                    log::info!(
+                                        "stt_inference: active model '{}' is not yet downloaded ({})",
+                                        active_id,
+                                        model_path.display()
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "stt_inference: active model id '{active_id}' is not in the curated list: {e}"
+                                );
+                            }
+                        }
+                    }
+                }
             }
             if let Some(window) = app.get_webview_window("main") {
                 log::info!(

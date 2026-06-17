@@ -177,6 +177,16 @@ pub fn get_capabilities() -> VoicePlatformCapabilities {
     }
 }
 
+/// Return the `OsFamily` for the current build.
+/// Pure function of `OS`; no I/O, no async, no
+/// state. The `secrets` module uses this to
+/// dispatch to the Stronghold backend on Android
+/// (the mobile-build roadmap Phase B).
+#[cfg(feature = "mobile")]
+pub fn current_os_family() -> OsFamily {
+    OS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

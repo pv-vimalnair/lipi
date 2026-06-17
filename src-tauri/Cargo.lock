@@ -3792,6 +3792,7 @@ version = "0.0.2"
 dependencies = [
  "base64 0.22.1",
  "cpal",
+ "dasp_sample",
  "ed25519-dalek",
  "futures-util",
  "getrandom 0.2.17",
@@ -3799,6 +3800,7 @@ dependencies = [
  "hostname",
  "hound",
  "http",
+ "iota_stronghold",
  "keyring",
  "log",
  "mac_address",
@@ -3821,6 +3823,7 @@ dependencies = [
  "url",
  "whisper-rs",
  "whoami",
+ "zeroize",
 ]
 
 [[package]]

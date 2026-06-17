@@ -175,7 +175,32 @@ mac_address = "1"
 # `Host`) are referenced from the stub's interface signature
 # — even when `m2c-native` is off, we want the type-level
 # shape to match what the real implementation will use.
+#
+# cpal pulls `dasp_sample` in as a transitive dep on the
+# 0.15 line (it's the canonical home of the `Sample` trait
+# cpal re-exports). We depend on it directly anyway so:
+#
+#   - the `Sample` trait path we use in `stt_capture.rs`
+#     (`dasp_sample::Sample`) is stable if cpal ever
+#     switches its re-export to a different dasp crate;
+#   - we get `dasp_sample/std` (its only feature) as
+#     a direct declaration, so the `cargo tree` view of
+#     the dep graph is honest about who needs it;
+#   - we can call `Sample::to_sample::<f32>()` /
+#     `Sample::from_sample(0.0_f32)` in our own
+#     resample / format-conversion code without going
+#     through a `cpal::Sample` shim that's nominally
+#     "cpal's" but actually delegates to dasp_sample.
+#
+# The HANDOFF §9.7 comment "the real path uses dasp_sample
+# (a dep whisper-rs already pulls in)" is incorrect on
+# whisper-rs 0.16 — that crate only depends on
+# `whisper-rs-sys` (+ optional `log` / `tracing` / `libc`).
+# `dasp_sample` enters our dep graph via `cpal`, not via
+# `whisper-rs`. We document this so the next person reading
+# the tree doesn't go on a wild-goose chase.
 cpal = "0.15"
+dasp_sample = "0.11"
 # hound: WAV reader used in unit tests regardless of the
 # feature flag (the stub tests verify the audio path's
 # shape, not the inference).
@@ -211,6 +236,20 @@ whisper-rs = { version = "0.16", default-features = false, optional = true }
 # wired) which covers both macOS + iOS per the
 # keyring 3.6 docs; desktop is unchanged.
 tauri-plugin-stronghold = { version = "2", optional = true }
+# `iota_stronghold` is re-exported by `tauri-plugin-stronghold` but only
+# the `Stronghold` struct + the `Error` enum. The `KeyProvider`,
+# `SnapshotPath`, and `Location` types we need for the direct-Rust
+# facade (`secrets_stronghold.rs`) are NOT re-exported, so we depend
+# on `iota_stronghold` directly. Same gating: optional, enabled by
+# the `mobile` feature (Decision #177).
+iota_stronghold = { version = "2", optional = true }
+# `zeroize` is a transitive dep of `iota_stronghold`, but
+# `secrets_stronghold.rs` uses it directly to wrap the
+# placeholder encryption key in a `Zeroizing<Vec<u8>>`
+# (the `KeyProvider::try_from(Zeroizing<Vec<u8>>)` impl
+# requires it). Same gating: optional, enabled by the
+# `mobile` feature.
+zeroize = { version = "1", optional = true }
 
 # Platform-specific deps are added per phase:
 # D2 (editor): notify for FS watcher        [W: shipped]
@@ -315,7 +354,7 @@ m2c-native = ["dep:whisper-rs"]
 # desktop build does not need this (it has keyring).
 # The Android build enables this; iOS continues to
 # use keyring 3.x's apple-native feature.
-mobile = ["dep:tauri-plugin-stronghold"]
+mobile = ["dep:tauri-plugin-stronghold", "dep:iota_stronghold", "dep:zeroize"]
 metal = ["m2c-native", "whisper-rs/metal"]
 cuda = ["m2c-native", "whisper-rs/cuda"]
 vulkan = ["m2c-native", "whisper-rs/vulkan"]

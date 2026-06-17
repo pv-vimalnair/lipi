@@ -6,6 +6,70 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Decisions (Stronghold password-flow — Android Keystore derivation)
+
+The `secrets_stronghold.rs` facade shipped in
+[Phase mobile-build roadmap — Phase A](#added-phase-mobile-build-roadmap---phase-a)
+with a **hardcoded 32-byte placeholder** for the
+`KeyProvider` key (the bytes of
+`"Lipi-stronghold-v1-placeholder!!"`). The placeholder
+is **not a secret** — anyone with access to the snapshot
+file can decrypt it. It exists only to satisfy the
+`KeyProvider::try_from(Zeroizing<Vec<u8>>)` 32-byte
+length requirement so the seam is buildable + testable
+on the Windows dev box.
+
+Decision #186 closes the design loop. The v1
+password-flow is **Android Keystore derivation**: a
+small Kotlin helper (`StrongholdKeyBridge.kt`, sibling
+to the future `lipi-stt-android` plugin) generates a
+hardware-backed AES-256 key via the Android Keystore
+(`KeyGenParameterSpec` + `Cipher` "AES/GCM/NoPadding"),
+encrypts a 32-byte zero plaintext under that key, and
+hands the ciphertext back to Rust. The Rust side
+SHA-256s the ciphertext and uses that as the
+`KeyProvider` key. The Android Keystore key never
+leaves the device's TEE / Strongbox (on hardware that
+supports it), the snapshot file is useless without the
+Keystore key, and the user sees no UX cost (no
+password prompt, no biometric per session).
+
+**Trade-off accepted.** Clearing app data wipes both
+the Android Keystore key and the snapshot file — the
+user re-enters their AI provider keys. Same on app
+uninstall without backup, same on device migration.
+This is acceptable for an IDE (4-5 keys to re-enter
+is a 30-second task) and is the same trade-off
+1Password / Bitwarden / most other Android password
+managers make.
+
+**Alternatives considered.** Per-install random
+(rejected — same security with extra indirection),
+user-entered password (rejected as default for UX +
+low-entropy problems; kept as a v1.1 fallback for
+broken-Keystore devices), hybrid Keystore + password
+(rejected for v1, reserved for a v1.1 Settings
+toggle), EncryptedSharedPreferences (rejected — would
+re-architect the secrets layer; worth re-evaluating
+in v2). See `docs/decisions/0186-p-mb-a-stronghold-password-flow.md`
+for the full analysis (threat model, options,
+alternatives, implementation plan).
+
+**No code changed in this entry.** The implementation
+is a Phase B work item (requires an Android physical
+device + Android Studio Iguana+ on a Linux / Windows
+box). The placeholder constant in `secrets_stronghold.rs`
+is still in place; removing it is part of the
+future-session implementation. The `secrets_stronghold.rs`
++ Android plugin work is still on the future-session
+checklist per `docs/plans/mobile-build-roadmap.md`.
+
+- **`HANDOFF.md`** — new §9.50 (Stronghold snapshot
+  password-flow — DESIGN COMPLETE, IMPLEMENTATION
+  DEFERRED) + updated "End of handoff" paragraph
+- **`docs/decisions/0186-p-mb-a-stronghold-password-flow.md`**
+  — new design doc (the full 5-page design)
+
 ### Added (Phase 9.2 — Multi-server kind taxonomy + inferrer)
 
 The LSP integration was hard-wired to

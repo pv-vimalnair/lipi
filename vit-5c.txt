@@ -1,9 +1,0 @@
-
- RUN  v4.1.8 C:/Users/Pv Vimal Nair/lipi
-
-
- Test Files  13 passed (13)
-      Tests  255 passed (255)
-   Start at  16:00:28
-   Duration  4.84s (transform 4.32s, setup 0ms, import 5.96s, tests 1.72s, environment 34.00s)
-

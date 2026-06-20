@@ -129,9 +129,7 @@ pub fn build_main_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>>
     // (docs, source, license) lives in the in-app About modal so
     // we have one source of truth for the project metadata.
     let about = MenuItemBuilder::with_id("menu.help.about", "About Lipi").build(app)?;
-    let help = SubmenuBuilder::new(app, "Help")
-        .item(&about)
-        .build()?;
+    let help = SubmenuBuilder::new(app, "Help").item(&about).build()?;
 
     // ---- Top-level ----
     // On Windows / Linux this is the menu bar of the main window.

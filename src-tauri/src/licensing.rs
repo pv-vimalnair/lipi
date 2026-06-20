@@ -115,10 +115,8 @@ use serde::{Deserialize, Serialize};
 // same `KID_TRIAL` signing behavior without needing a CI
 // secret.
 const PROD_PUBKEY: [u8; 32] = [
-    0xbe, 0xdf, 0x69, 0x4e, 0x52, 0x4f, 0xc1, 0x49,
-    0xe6, 0x6c, 0xbc, 0x3b, 0xdb, 0xaf, 0x1a, 0xe3,
-    0x96, 0x55, 0x77, 0xe1, 0xa2, 0xaf, 0x35, 0xc7,
-    0xdd, 0x0a, 0xc2, 0x61, 0x8d, 0x22, 0x26, 0xe5,
+    0xbe, 0xdf, 0x69, 0x4e, 0x52, 0x4f, 0xc1, 0x49, 0xe6, 0x6c, 0xbc, 0x3b, 0xdb, 0xaf, 0x1a, 0xe3,
+    0x96, 0x55, 0x77, 0xe1, 0xa2, 0xaf, 0x35, 0xc7, 0xdd, 0x0a, 0xc2, 0x61, 0x8d, 0x22, 0x26, 0xe5,
 ];
 const TRIAL_PUBKEY: [u8; 32] = [
     0xbc, 0xc3, 0xf8, 0x65, 0x31, 0xb8, 0x70, 0x20, 0xba, 0x99, 0xe7, 0xbc, 0x0d, 0xfb, 0x04, 0x3d,
@@ -311,17 +309,26 @@ impl LicensePayload {
     pub fn validate_shape(&self) -> Result<(), LicenseError> {
         if self.format != LICENSE_FORMAT_V1 {
             return Err(LicenseError::InvalidShape {
-                detail: format!("unknown format {:?} (expected {:?})", self.format, LICENSE_FORMAT_V1),
+                detail: format!(
+                    "unknown format {:?} (expected {:?})",
+                    self.format, LICENSE_FORMAT_V1
+                ),
             });
         }
         if self.plan != PLAN_TRIAL && self.plan != PLAN_MONTHLY && self.plan != PLAN_YEARLY {
             return Err(LicenseError::InvalidShape {
-                detail: format!("unknown plan {:?} (expected one of {:?}, {:?}, {:?})", self.plan, PLAN_TRIAL, PLAN_MONTHLY, PLAN_YEARLY),
+                detail: format!(
+                    "unknown plan {:?} (expected one of {:?}, {:?}, {:?})",
+                    self.plan, PLAN_TRIAL, PLAN_MONTHLY, PLAN_YEARLY
+                ),
             });
         }
         if self.sub.len() != 64 || !self.sub.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(LicenseError::InvalidShape {
-                detail: format!("sub {:?} is not 64 hex chars (SHA-256 of hostname||username||mac)", self.sub),
+                detail: format!(
+                    "sub {:?} is not 64 hex chars (SHA-256 of hostname||username||mac)",
+                    self.sub
+                ),
             });
         }
         if self.jti.len() > 64 || self.jti.is_empty() {
@@ -348,7 +355,10 @@ impl LicensePayload {
         if let Some(kid) = &self.kid {
             if kid != KID_TRIAL && kid != KID_OFFLINE && kid != KID_IAP_LOCAL {
                 return Err(LicenseError::InvalidShape {
-                    detail: format!("unknown kid {:?} (expected one of {:?}, {:?}, {:?})", kid, KID_TRIAL, KID_OFFLINE, KID_IAP_LOCAL),
+                    detail: format!(
+                        "unknown kid {:?} (expected one of {:?}, {:?}, {:?})",
+                        kid, KID_TRIAL, KID_OFFLINE, KID_IAP_LOCAL
+                    ),
                 });
             }
         }
@@ -394,10 +404,7 @@ pub enum LicenseStatus {
 
     /// License is past the grace period. The app should
     /// hard-block the workspace (Phase 3).
-    Expired {
-        plan: String,
-        expired_at: i64,
-    },
+    Expired { plan: String, expired_at: i64 },
 
     /// License is on a trial. The plan is "trial", the
     /// expiry is 14 days from iat.
@@ -412,9 +419,7 @@ pub enum LicenseStatus {
     /// machine mismatch (different machine), expired (past
     /// the grace period and still failing verification), or
     /// malformed (the key string wasn't a valid JWS).
-    Invalid {
-        reason: String,
-    },
+    Invalid { reason: String },
 }
 
 // --- Errors -------------------------------------------------------
@@ -462,10 +467,18 @@ pub enum LicenseError {
 impl From<keyring::Error> for LicenseError {
     fn from(e: keyring::Error) -> Self {
         match e {
-            keyring::Error::NoEntry => LicenseError::Platform { detail: "no entry".to_string() },
-            keyring::Error::Ambiguous(_) => LicenseError::Platform { detail: "ambiguous entry".to_string() },
-            keyring::Error::BadEncoding(_) => LicenseError::Platform { detail: "bad encoding".to_string() },
-            other => LicenseError::KeychainUnavailable { detail: other.to_string() },
+            keyring::Error::NoEntry => LicenseError::Platform {
+                detail: "no entry".to_string(),
+            },
+            keyring::Error::Ambiguous(_) => LicenseError::Platform {
+                detail: "ambiguous entry".to_string(),
+            },
+            keyring::Error::BadEncoding(_) => LicenseError::Platform {
+                detail: "bad encoding".to_string(),
+            },
+            other => LicenseError::KeychainUnavailable {
+                detail: other.to_string(),
+            },
         }
     }
 }
@@ -479,7 +492,10 @@ impl From<keyring::Error> for LicenseError {
 /// This is exposed publicly so the offline `sign_license` CLI
 /// tool (Phase 4) can call it. The trial-generation flow uses
 /// it with the trial key (embedded as a const).
-pub fn sign_payload(payload: &LicensePayload, secret_key: &[u8; 32]) -> Result<String, LicenseError> {
+pub fn sign_payload(
+    payload: &LicensePayload,
+    secret_key: &[u8; 32],
+) -> Result<String, LicenseError> {
     let key = SigningKey::from_bytes(secret_key);
     let payload_json = serde_json::to_vec(payload).map_err(|e| LicenseError::InvalidShape {
         detail: format!("serialise payload: {e}"),
@@ -514,7 +530,10 @@ pub fn parse_key(key: &str) -> Result<(LicensePayload, Vec<u8>), LicenseError> {
     }
     if prefix != LICENSE_PREFIX {
         return Err(LicenseError::InvalidShape {
-            detail: format!("unknown prefix {:?} (expected {:?})", prefix, LICENSE_PREFIX),
+            detail: format!(
+                "unknown prefix {:?} (expected {:?})",
+                prefix, LICENSE_PREFIX
+            ),
         });
     }
     let payload_json = URL_SAFE_NO_PAD
@@ -522,9 +541,10 @@ pub fn parse_key(key: &str) -> Result<(LicensePayload, Vec<u8>), LicenseError> {
         .map_err(|e| LicenseError::InvalidShape {
             detail: format!("base64url-decode payload: {e}"),
         })?;
-    let payload: LicensePayload = serde_json::from_slice(&payload_json).map_err(|e| LicenseError::InvalidShape {
-        detail: format!("parse payload JSON: {e}"),
-    })?;
+    let payload: LicensePayload =
+        serde_json::from_slice(&payload_json).map_err(|e| LicenseError::InvalidShape {
+            detail: format!("parse payload JSON: {e}"),
+        })?;
     let signature = URL_SAFE_NO_PAD
         .decode(signature_b64.as_bytes())
         .map_err(|e| LicenseError::InvalidShape {
@@ -565,11 +585,14 @@ where
     let (payload, signature_bytes) = parse_key(key)?;
     let kid = payload.kid.as_deref().unwrap_or(KID_TRIAL);
     let pubkey_bytes = resolve_pubkey(kid)?;
-    let verifying_key = VerifyingKey::from_bytes(&pubkey_bytes).map_err(|e| LicenseError::InvalidShape {
-        detail: format!("invalid pubkey for kid {kid:?}: {e}"),
-    })?;
-    let signature = Signature::from_bytes(signature_bytes.as_slice().try_into().map_err(|_| LicenseError::InvalidShape {
-        detail: "signature is not 64 bytes".to_string(),
+    let verifying_key =
+        VerifyingKey::from_bytes(&pubkey_bytes).map_err(|e| LicenseError::InvalidShape {
+            detail: format!("invalid pubkey for kid {kid:?}: {e}"),
+        })?;
+    let signature = Signature::from_bytes(signature_bytes.as_slice().try_into().map_err(|_| {
+        LicenseError::InvalidShape {
+            detail: "signature is not 64 bytes".to_string(),
+        }
     })?);
     let payload_b64 = key
         .trim()
@@ -761,9 +784,8 @@ fn random_jti() -> String {
 /// user-name. Mirrors the pattern in `secrets.rs` (avoid
 /// repeated Credential Manager lookups; the mock store is
 /// per-Entry).
-fn entry_cache() -> &'static std::sync::Mutex<
-    std::collections::HashMap<String, std::sync::Arc<keyring::Entry>>,
-> {
+fn entry_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<keyring::Entry>>> {
     use std::sync::OnceLock;
     static CACHE: OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<keyring::Entry>>>,
@@ -1043,7 +1065,12 @@ mod tests {
 
     #[test]
     fn sign_then_verify_roundtrip() {
-        let payload = sample_payload(PLAN_YEARLY, 1_000_000, 1_000_000 + 365 * 86_400, &sample_fingerprint());
+        let payload = sample_payload(
+            PLAN_YEARLY,
+            1_000_000,
+            1_000_000 + 365 * 86_400,
+            &sample_fingerprint(),
+        );
         // We sign with the test key, then patch the public
         // key. We can't easily patch the embedded pubkey
         // (it's a const), so we use the trial flow for the
@@ -1066,7 +1093,12 @@ mod tests {
         // `verify_license` because that hard-codes the
         // embedded pubkey, so we use the lower-level `parse_key`
         // + manual ed25519-dalek verification.)
-        let payload = sample_payload(PLAN_YEARLY, 1_000_000, 1_000_000 + 86_400, &sample_fingerprint());
+        let payload = sample_payload(
+            PLAN_YEARLY,
+            1_000_000,
+            1_000_000 + 86_400,
+            &sample_fingerprint(),
+        );
         let key = sign_payload(&payload, &test_key()).unwrap();
         let (parsed, sig_bytes) = parse_key(&key).unwrap();
         assert_eq!(parsed, payload);
@@ -1082,7 +1114,12 @@ mod tests {
 
     #[test]
     fn verify_rejects_wrong_signature() {
-        let payload = sample_payload(PLAN_TRIAL, 1_000_000, 1_000_000 + 86_400, &sample_fingerprint());
+        let payload = sample_payload(
+            PLAN_TRIAL,
+            1_000_000,
+            1_000_000 + 86_400,
+            &sample_fingerprint(),
+        );
         let key = sign_payload(&payload, &TRIAL_PRIVKEY).unwrap();
         // Mutate one byte of the signature.
         let mut parts: Vec<&str> = key.split('.').collect();
@@ -1102,7 +1139,12 @@ mod tests {
 
     #[test]
     fn verify_rejects_tampered_payload() {
-        let payload = sample_payload(PLAN_TRIAL, 1_000_000, 1_000_000 + 86_400, &sample_fingerprint());
+        let payload = sample_payload(
+            PLAN_TRIAL,
+            1_000_000,
+            1_000_000 + 86_400,
+            &sample_fingerprint(),
+        );
         let key = sign_payload(&payload, &TRIAL_PRIVKEY).unwrap();
         // Re-encode a different payload under the same
         // signature. This is "tamper the payload, keep the
@@ -1133,30 +1175,47 @@ mod tests {
         ];
         for bad in cases {
             let result = verify_license(bad);
-            assert!(matches!(result, Err(LicenseError::InvalidShape { .. })), "case {bad:?} should reject");
+            assert!(
+                matches!(result, Err(LicenseError::InvalidShape { .. })),
+                "case {bad:?} should reject"
+            );
         }
     }
 
     #[test]
     fn verify_rejects_oversize_fields() {
-        let mut payload = sample_payload(PLAN_TRIAL, 1_000_000, 1_000_000 + 86_400, &sample_fingerprint());
+        let mut payload = sample_payload(
+            PLAN_TRIAL,
+            1_000_000,
+            1_000_000 + 86_400,
+            &sample_fingerprint(),
+        );
         payload.format = "x".repeat(100);
         let result = sign_payload(&payload, &TRIAL_PRIVKEY);
         // sign_payload doesn't shape-validate, but verify_license
         // does. Build a key from a "pre-validated" payload by
         // bypassing shape validation in sign.
         let _ = result; // shape check happens in parse_key, not sign
-        // Test the shape check directly:
+                        // Test the shape check directly:
         let shape = payload.validate_shape();
         assert!(matches!(shape, Err(LicenseError::InvalidShape { .. })));
 
         payload.format = LICENSE_FORMAT_V1.to_string();
         payload.sub = "z".repeat(33); // wrong length
-        assert!(matches!(payload.validate_shape(), Err(LicenseError::InvalidShape { .. })));
+        assert!(matches!(
+            payload.validate_shape(),
+            Err(LicenseError::InvalidShape { .. })
+        ));
         payload.sub = "not-hex".to_string();
-        assert!(matches!(payload.validate_shape(), Err(LicenseError::InvalidShape { .. }))); // 7 chars, fails the != 64 check
+        assert!(matches!(
+            payload.validate_shape(),
+            Err(LicenseError::InvalidShape { .. })
+        )); // 7 chars, fails the != 64 check
         payload.sub = "z".repeat(64); // 64 z's
-        assert!(matches!(payload.validate_shape(), Err(LicenseError::InvalidShape { .. }))); // 64 non-hex
+        assert!(matches!(
+            payload.validate_shape(),
+            Err(LicenseError::InvalidShape { .. })
+        )); // 64 non-hex
         payload.sub = "a".repeat(64); // 64 valid hex chars
         assert!(payload.validate_shape().is_ok());
     }
@@ -1238,7 +1297,9 @@ mod tests {
         let status = license_activate(key);
         // 3 days into the 7-day grace period.
         match status {
-            LicenseStatus::GracePeriod { days_into_grace, .. } => {
+            LicenseStatus::GracePeriod {
+                days_into_grace, ..
+            } => {
                 assert_eq!(days_into_grace, 3);
             }
             other => panic!("expected GracePeriod, got {other:?}"),
@@ -1309,7 +1370,10 @@ mod tests {
         // something, it's just invalid).
         match status {
             LicenseStatus::Invalid { reason } => {
-                assert!(reason.contains("verification-failed"), "reason was: {reason}");
+                assert!(
+                    reason.contains("verification-failed"),
+                    "reason was: {reason}"
+                );
             }
             other => panic!("expected Invalid, got {other:?}"),
         }
@@ -1344,15 +1408,24 @@ mod tests {
 
         // Active trial, far future exp.
         let p = sample_payload(PLAN_TRIAL, now - 100, now + 86_400, &fp);
-        assert!(matches!(derive_status_at(&p, now), LicenseStatus::Trial { .. }));
+        assert!(matches!(
+            derive_status_at(&p, now),
+            LicenseStatus::Trial { .. }
+        ));
 
         // Active yearly, far future exp.
         let p = sample_payload(PLAN_YEARLY, now - 100, now + 365 * 86_400, &fp);
-        assert!(matches!(derive_status_at(&p, now), LicenseStatus::Active { .. }));
+        assert!(matches!(
+            derive_status_at(&p, now),
+            LicenseStatus::Active { .. }
+        ));
 
         // Grace period, 1 day past exp.
         let p = sample_payload(PLAN_YEARLY, now - 10 * 86_400, now - 86_400, &fp);
-        assert!(matches!(derive_status_at(&p, now), LicenseStatus::GracePeriod { .. }));
+        assert!(matches!(
+            derive_status_at(&p, now),
+            LicenseStatus::GracePeriod { .. }
+        ));
 
         // Grace period, exactly at boundary.
         let p = sample_payload(PLAN_YEARLY, now - 8 * 86_400, now - GRACE_PERIOD_SECS, &fp);
@@ -1363,13 +1436,19 @@ mod tests {
 
         // Expired, 8 days past exp.
         let p = sample_payload(PLAN_YEARLY, now - 16 * 86_400, now - 8 * 86_400, &fp);
-        assert!(matches!(derive_status_at(&p, now), LicenseStatus::Expired { .. }));
+        assert!(matches!(
+            derive_status_at(&p, now),
+            LicenseStatus::Expired { .. }
+        ));
 
         // Not yet valid.
         let p = sample_payload(PLAN_YEARLY, now, now + 365 * 86_400, &fp);
         let mut p = p;
         p.nbf = now + 3600;
-        assert!(matches!(derive_status_at(&p, now), LicenseStatus::Invalid { .. }));
+        assert!(matches!(
+            derive_status_at(&p, now),
+            LicenseStatus::Invalid { .. }
+        ));
     }
 
     #[test]

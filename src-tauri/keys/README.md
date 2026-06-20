@@ -29,11 +29,23 @@ src-tauri/keys/
 ├── dev/                               ← throwaway dev keypair
 │   ├── lipi-dev.key                   ← PRIVATE — git-ignored
 │   └── lipi-dev.key.pub               ← PUBLIC  — committed
-└── production/                        ← real production keypair
-    ├── production.key                 ← PRIVATE — git-ignored, lives in CI secret + offline USB
-    ├── production.key.pub             ← PUBLIC  — committed, embedded in tauri.conf.json
-    └── production-license.key.txt     ← PRIVATE — git-ignored; 64-char hex of the license signing key
+└── production/                        ← production public material only
+    └── production.key.pub             ← PUBLIC  — committed, embedded in tauri.conf.json
 ```
+
+Production private material must live **outside** the repo tree. The
+current local staging path is:
+
+```text
+%USERPROFILE%\.lipi-production-secrets\keys\production\
+├── production.key                 ← PRIVATE updater signing key
+└── production-license.key.txt     ← PRIVATE 64-char hex license signing key
+```
+
+That local staging folder is only a handoff point for importing the
+secrets into the CI secret store and an offline vault / encrypted USB.
+Do not copy those files back under `src-tauri/keys/production/`, even
+though `.gitignore` would ignore them.
 
 The current public key in `tauri.conf.json` is the
 **production** key (so end users can verify update signatures
@@ -59,12 +71,18 @@ root (which sets the same env vars + the dev password):
 .\build-with-key.ps1
 ```
 
-For a **production** build, point Tauri at the production
-private key (which is *not* checked in — it lives in the CI
-secret store, e.g. GitHub Actions `secrets.TAURI_PROD_UPDATER_KEY`).
+For a **production** build, point Tauri at the production private key
+from the CI secret store, e.g. GitHub Actions
+`secrets.TAURI_PROD_UPDATER_KEY`. For a one-off local release dry run,
+use a path outside the repo, for example:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = "$env:USERPROFILE\.lipi-production-secrets\keys\production\production.key"
+```
+
 The CI workflow (`.github/workflows/release.yml`) sets
-`TAURI_SIGNING_PRIVATE_KEY` from the secret and uploads the
-signed `updater.json` to the GitHub release.
+`TAURI_SIGNING_PRIVATE_KEY` from the secret and uploads the signed
+`updater.json` to the GitHub release.
 
 ## Rotating the updater keypair
 
@@ -94,16 +112,19 @@ This prints the new public key as a `const [u8; 32]` array
 (paste it into `licensing::PROD_PUBKEY`) and the new
 private key as a 64-char hex string (store it in the
 `TAURI_PROD_LICENSE_KEY_HEX` CI secret, or in
-`production-license.key.txt` for local dev — the .txt file
-is git-ignored). Any license keys signed with the previous
-private key become invalid after a rotation; communicate
-the rotation to customers before the cutover so they can
+`%USERPROFILE%\.lipi-production-secrets\keys\production\production-license.key.txt`
+while preparing the CI/offline-vault import). Do not store the generated
+private key under `src-tauri/keys/production/`. Any license keys signed
+with the previous private key become invalid after a rotation;
+communicate the rotation to customers before the cutover so they can
 re-download a new license.
 
 ## Security
 
 - **Never** commit a `.key` (private key) file. The
   `.gitignore` in the repo root is the source of truth.
+- **Never** keep production private keys in the repo tree, even as
+  ignored local files. Keep them in CI secrets plus an offline vault.
 - **Never** reuse a dev key for a release artifact. The
   dev key is in source control's `.pub` companion — anyone
   with the public key can craft malicious updates.

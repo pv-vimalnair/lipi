@@ -142,10 +142,7 @@ pub fn list_providers() -> Vec<ProviderInfo> {
             openai_compatible_base_url: Some("https://openrouter.ai/api/v1"),
             anthropic_compatible_base_url: None,
             default_model: "anthropic/claude-3.5-sonnet",
-            available_models: &[
-                "anthropic/claude-3.5-sonnet",
-                "openai/gpt-4o-mini",
-            ],
+            available_models: &["anthropic/claude-3.5-sonnet", "openai/gpt-4o-mini"],
             description: "Unified access to many models. One key, many providers.",
             key_url: "https://openrouter.ai/keys",
         },
@@ -171,16 +168,12 @@ pub fn provider_by_id(id: &str) -> Option<ProviderInfo> {
 /// that card). We never propagate keychain errors
 /// out of this "list the configured ones" helper —
 /// it's a best-effort UI hint, not a security check.
-pub fn get_configured_providers(
-    snapshot_path: Option<&std::path::Path>,
-) -> Vec<&'static str> {
+pub fn get_configured_providers(snapshot_path: Option<&std::path::Path>) -> Vec<&'static str> {
     list_providers()
         .iter()
-        .filter_map(|p| {
-            match secrets::has_api_key(p.id, snapshot_path) {
-                Ok(true) => Some(p.id),
-                _ => None,
-            }
+        .filter_map(|p| match secrets::has_api_key(p.id, snapshot_path) {
+            Ok(true) => Some(p.id),
+            _ => None,
         })
         .collect()
 }

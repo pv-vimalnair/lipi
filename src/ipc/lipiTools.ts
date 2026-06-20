@@ -102,6 +102,15 @@ export interface LipiToolEntry {
    *  string). Ignored for `shell`
    *  tools. */
   body?: string;
+  /** `http` only: explicit host allowlist for
+   *  placeholder-based hosts. Static URL-template
+   *  hosts are derived automatically by the JS
+   *  executor. Supports exact hosts and `*.domain`
+   *  wildcards. */
+  allowedHosts?: string[];
+  /** `http` only: allow localhost/private/link-local
+   *  targets. Defaults to false. */
+  allowPrivateNetwork?: boolean;
   /** Arguments the model can pass. The
    *  Rust side only sees this to build
    *  the provider-specific JSON Schema

@@ -34,9 +34,7 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use lipi_lib::rotate_updater_key::{
-    parse_args, patch_tauri_conf, short_for_diff, validate_pubkey,
-};
+use lipi_lib::rotate_updater_key::{parse_args, patch_tauri_conf, short_for_diff, validate_pubkey};
 
 fn main() -> ExitCode {
     let raw_args: Vec<String> = env::args().skip(1).collect();
@@ -103,13 +101,19 @@ fn main() -> ExitCode {
         Some(old) => {
             println!("# Diff for {}", args.tauri_conf);
             println!("-    \"pubkey\": \"{}\"", short_for_diff(old));
-            println!("+    \"pubkey\": \"{}\"", short_for_diff(&result.new_pubkey));
+            println!(
+                "+    \"pubkey\": \"{}\"",
+                short_for_diff(&result.new_pubkey)
+            );
         }
         None => {
             println!(
                 "# No previous pubkey found at plugins.updater.pubkey; adding the new pubkey."
             );
-            println!("+    \"pubkey\": \"{}\"", short_for_diff(&result.new_pubkey));
+            println!(
+                "+    \"pubkey\": \"{}\"",
+                short_for_diff(&result.new_pubkey)
+            );
         }
     }
 

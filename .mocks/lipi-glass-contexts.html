@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lipi × Liquid Glass — Full screen vs. Windowed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-page: #fafafb;
+    --surface: #ffffff;
+    --line: #ececf2;
+    --line-strong: #d8d8e0;
+    --text: #14171e;
+    --muted: #6b7080;
+    --soft: #f4f4f8;
+    --primary: #2563eb;
+    --primary-soft: rgba(37, 99, 235, 0.10);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', system-ui, sans-serif;
+    background: var(--bg-page);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+
+  .container { max-width: 1600px; margin: 0 auto; padding: 56px 40px 96px; }
+
+  /* Header */
+  .head { margin-bottom: 56px; max-width: 920px; }
+  .head .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--primary); background: var(--primary-soft);
+    padding: 6px 12px; border-radius: 999px; margin-bottom: 18px;
+  }
+  .head h1 { font-size: 40px; line-height: 1.1; margin: 0 0 16px; font-weight: 600; letter-spacing: -0.02em; }
+  .head p { font-size: 17px; color: var(--muted); margin: 0; max-width: 780px; }
+
+  /* Section title */
+  .section-title { display: flex; align-items: center; gap: 12px; margin: 64px 0 24px; }
+  .section-title h2 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .section-title .num {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--soft); color: var(--text);
+    display: grid; place-items: center; font-size: 13px; font-weight: 600;
+  }
+  .section-title .sub { color: var(--muted); font-size: 14px; margin-left: auto; }
+
+  /* Scenario */
+  .scenario {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: 24px;
+    margin-bottom: 32px;
+  }
+  .scenario-head {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--line);
+  }
+  .scenario-head h3 { font-size: 17px; font-weight: 600; margin: 0; }
+  .scenario-head .tag {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 4px 10px; border-radius: 999px;
+  }
+  .scenario-head .tag.subtle { background: var(--soft); color: var(--muted); }
+  .scenario-head .tag.dramatic { background: var(--primary-soft); color: var(--primary); }
+  .scenario-head p { font-size: 13px; color: var(--muted); margin: 0 0 0 auto; max-width: 540px; }
+
+  .stage {
+    position: relative;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #1a1a2e;
+    box-shadow: 0 4px 24px rgba(15, 15, 18, 0.08);
+    aspect-ratio: 16 / 10;
+  }
+
+  /* === Desktop wallpaper === */
+  .desktop {
+    position: absolute;
+    inset: 0;
+    background:
+      /* Sun glow */
+      radial-gradient(ellipse 600px 400px at 28% 35%, rgba(255, 215, 160, 0.55) 0%, transparent 60%),
+      /* Mountain shadow */
+      radial-gradient(ellipse 800px 300px at 75% 70%, rgba(40, 20, 60, 0.5) 0%, transparent 70%),
+      /* Sky gradient */
+      linear-gradient(180deg,
+        #1a0e2e 0%,
+        #3a1e4e 20%,
+        #7a3a5e 40%,
+        #c66a4e 60%,
+        #e8a06a 78%,
+        #f4cc8a 90%,
+        #f9e4b0 100%
+      );
+  }
+  /* SVG mountains layer */
+  .desktop-mountains { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  /* === Desktop icons (subtle) === */
+  .desktop-icons {
+    position: absolute;
+    top: 24px; left: 24px;
+    display: grid;
+    grid-template-columns: repeat(2, 80px);
+    gap: 16px;
+  }
+  .desktop-icon {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    font-size: 11px;
+  }
+  .desktop-icon .ico {
+    width: 40px; height: 40px;
+    background: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(20px);
+    border: 0.5px solid rgba(255, 255, 255, 0.3);
+    border-radius: 10px;
+    display: grid; place-items: center;
+  }
+
+  /* === Windows taskbar === */
+  .taskbar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 48px;
+    background: rgba(20, 20, 30, 0.55);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    border-top: 0.5px solid rgba(255, 255, 255, 0.15);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 4px;
+  }
+  .taskbar .group { display: flex; gap: 4px; align-items: center; }
+  .taskbar .spacer { flex: 1; }
+  .taskbar .icon {
+    width: 36px; height: 36px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    display: grid; place-items: center;
+    color: white;
+  }
+  .taskbar .icon.active {
+    background: rgba(37, 99, 235, 0.4);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.3);
+  }
+  .taskbar .icon.solid-blue { background: #2563eb; }
+
+  /* === IDE window (floating) === */
+  .ide-window {
+    position: absolute;
+    border-radius: 14px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    border: 0.5px solid rgba(255, 255, 255, 0.6);
+    box-shadow:
+      0 30px 80px rgba(0, 0, 0, 0.35),
+      0 8px 20px rgba(0, 0, 0, 0.2),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+  }
+  /* Specular highlight on top of window */
+  .ide-window::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 80px;
+    background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.4) 0%,
+      rgba(255, 255, 255, 0) 100%);
+    border-radius: 14px 14px 0 0;
+    pointer-events: none;
+    z-index: 5;
+  }
+
+  /* Window states for the two scenarios */
+  /* Scenario 1: full screen — fills the stage */
+  .fullscreen .ide-window {
+    inset: 0;
+    border-radius: 0;
+    border: none;
+  }
+  .fullscreen .ide-window::before { display: none; }
+
+  /* Scenario 2: windowed — small floating window */
+  .windowed .ide-window {
+    top: 8%;
+    left: 12%;
+    right: 12%;
+    bottom: 14%;
+  }
+
+  /* === IDE shell content (used in both) === */
+  .ide-content {
+    position: relative;
+    z-index: 1;
+    height: 100%;
+    display: grid;
+    grid-template-rows: 38px 1fr 24px;
+    font-family: 'Outfit', system-ui, sans-serif;
+    color: #14171e;
+  }
+  .ide-content .titlebar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 14px;
+    background: rgba(255, 255, 255, 0.3);
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.4);
+  }
+  .ide-content .traffic { display: flex; gap: 6px; }
+  .ide-content .traffic span { width: 11px; height: 11px; border-radius: 50%; }
+  .ide-content .traffic span:nth-child(1) { background: #ff5f57; }
+  .ide-content .traffic span:nth-child(2) { background: #febc2e; }
+  .ide-content .traffic span:nth-child(3) { background: #28c840; }
+  .ide-content .tab { padding: 4px 10px; border-radius: 6px; font-size: 11px; color: #5c5c66; background: rgba(255,255,255,0.5); }
+  .ide-content .tab.active { background: rgba(255,255,255,0.9); color: #14171e; box-shadow: 0 1px 2px rgba(15,15,18,0.06); }
+  .ide-content .spacer { flex: 1; }
+  .ide-content .path { font-size: 11px; color: #5c5c66; }
+
+  .ide-content .body {
+    display: grid;
+    grid-template-columns: 180px 1fr 220px;
+    gap: 10px;
+    padding: 10px;
+    overflow: hidden;
+  }
+
+  .glass-panel {
+    position: relative;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border-radius: 18px;
+    border: 0.5px solid rgba(255, 255, 255, 0.65);
+    box-shadow:
+      0 6px 20px rgba(15, 15, 18, 0.06),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+  }
+  .glass-panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.4) 0%, transparent 100%);
+    border-radius: 18px 18px 0 0;
+    pointer-events: none;
+  }
+  .glass-panel > * { position: relative; z-index: 1; }
+  .glass-panel .ph { padding: 10px 12px; }
+
+  .panel-title {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: #8e8e96; margin: 0 0 8px; font-weight: 600;
+  }
+  .tree-item { font-size: 11px; line-height: 1.7; color: #5c5c66; }
+  .tree-item .folder { color: #14171e; font-weight: 500; }
+  .tree-item .active {
+    background: rgba(37, 99, 235, 0.18);
+    color: #2563eb;
+    border-radius: 5px;
+    padding: 1px 6px; margin: 0 -6px;
+    font-weight: 500;
+  }
+  .editor-content {
+    background: #ffffff;
+    border-radius: 10px;
+    margin: 4px;
+    padding: 10px 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    line-height: 1.7;
+    color: #14171e;
+    border: 0.5px solid rgba(0,0,0,0.04);
+    overflow: hidden;
+  }
+  .editor-content .kw { color: #c026d3; }
+  .editor-content .fn { color: #2563eb; }
+  .editor-content .str { color: #059669; }
+  .editor-content .com { color: #8e8e96; font-style: italic; }
+  .editor-content .num { color: #d97706; }
+
+  .chat-msg {
+    background: rgba(255, 255, 255, 0.6);
+    border: 0.5px solid rgba(255, 255, 255, 0.5);
+    border-radius: 10px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    font-size: 10.5px;
+    line-height: 1.4;
+  }
+  .chat-msg.user {
+    background: #2563eb;
+    color: white;
+    border-color: transparent;
+  }
+  .chat-msg pre {
+    background: #14171e;
+    color: #e6e8eb;
+    border-radius: 6px;
+    padding: 6px 8px;
+    margin: 4px 0;
+    font-size: 10px;
+  }
+
+  .ide-content .statusbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 12px;
+    background: rgba(255, 255, 255, 0.3);
+    border-top: 0.5px solid rgba(255, 255, 255, 0.4);
+    font-size: 10px; color: #5c5c66;
+  }
+
+  /* === Annotation arrows === */
+  .annotation {
+    position: absolute;
+    pointer-events: none;
+    z-index: 10;
+  }
+  .annotation-line {
+    stroke: #2563eb;
+    stroke-width: 1.5;
+    fill: none;
+    stroke-dasharray: 4 4;
+  }
+  .annotation-label {
+    background: var(--primary);
+    color: white;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .annotation-tag {
+    background: var(--primary);
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 3px 8px;
+    border-radius: 999px;
+    display: inline-block;
+  }
+
+  /* === Side-by-side wrapper === */
+  .side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  /* Footer note */
+  .footer-note {
+    margin-top: 32px; padding: 20px 24px;
+    background: var(--primary-soft);
+    border-radius: 16px;
+    border: 1px solid rgba(37, 99, 235, 0.18);
+    font-size: 14px; color: #14171e; line-height: 1.6;
+  }
+  .footer-note b { font-weight: 600; }
+
+  .small { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- HEADER -->
+  <header class="head">
+    <span class="eyebrow">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+      Liquid Glass — In Context
+    </span>
+    <h1>Full screen vs. Windowed</h1>
+    <p>Two states, same design system, totally different visual impact. The Liquid Glass effect is <strong>always present</strong> (specular highlight, squircle, gel translucency, soft shadow) but it really comes alive when the app is sitting on top of other content — that's where you see the actual glass.</p>
+  </header>
+
+  <!-- SIDE BY SIDE COMPARISON -->
+  <div class="side-by-side">
+
+    <!-- SCENARIO 1: FULL SCREEN -->
+    <div class="scenario">
+      <div class="scenario-head">
+        <h3>Full screen</h3>
+        <span class="tag subtle">Subtle effect</span>
+        <p>The app fills the whole viewport. Glass is there — specular shine on top, squircle corners, soft shadows — but the "behind" is just the app's own white background. You <em>feel</em> the glass more than you <em>see</em> it.</p>
+      </div>
+
+      <div class="stage fullscreen">
+        <div class="desktop"></div>
+        <div class="ide-window">
+          <div class="ide-content">
+            <div class="titlebar">
+              <div class="traffic"><span></span><span></span><span></span></div>
+              <div class="tab active">index.tsx</div>
+              <div class="tab">Editor.tsx</div>
+              <div class="tab">Tabs.tsx</div>
+              <div class="spacer"></div>
+              <div class="path">src/screens/EditorWorkspace/</div>
+            </div>
+            <div class="body">
+              <div class="glass-panel">
+                <div class="ph">
+                  <div class="panel-title">Explorer</div>
+                  <div class="tree-item">
+                    <div class="folder">▼ src</div>
+                    <div style="padding-left:12px">▼ screens</div>
+                    <div style="padding-left:24px">▼ EditorWorkspace</div>
+                    <div style="padding-left:36px"><span class="active">index.tsx</span></div>
+                    <div style="padding-left:36px">Editor.tsx</div>
+                    <div style="padding-left:24px">▶ Settings</div>
+                    <div style="padding-left:12px">▶ shared</div>
+                  </div>
+                </div>
+              </div>
+              <div class="glass-panel">
+                <div class="editor-content">
+<span class="kw">export const</span> <span class="fn">EditorWorkspace</span> = () =&gt; {<br>
+&nbsp;&nbsp;<span class="kw">const</span> { active } = <span class="fn">useEditor</span>();<br>
+&nbsp;&nbsp;<span class="kw">return</span> (<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">Pane</span> <span class="str">dir</span>=<span class="str">"row"</span>&gt;<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">FileTree</span> /&gt;<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">MonacoEditor</span> <span class="str">file</span>={active} /&gt;<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">ChatPanel</span> /&gt;<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;/<span class="fn">Pane</span>&gt;<br>
+&nbsp;&nbsp;);<br>
+};
+                </div>
+              </div>
+              <div class="glass-panel">
+                <div class="ph">
+                  <div class="panel-title">AI Chat</div>
+                  <div class="chat-msg">Refactor <code style="background:rgba(0,0,0,0.06);padding:0 3px;border-radius:3px;font-family:'JetBrains Mono',monospace;font-size:9.5px">FileTree</code> for virtualized rendering.<pre><span class="kw">const</span> <span class="fn">Tree</span> = <span class="fn">memo</span>(...)</pre></div>
+                  <div class="chat-msg user">Apply that to the editor too.</div>
+                </div>
+              </div>
+            </div>
+            <div class="statusbar">
+              <span>⎇ main</span><span>TypeScript</span><span>UTF-8</span>
+              <div class="spacer"></div>
+              <span>Ln 24, Col 18</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="small" style="margin-top:12px">Notice: panels have <em>visible squircle corners</em>, <em>specular shine</em> on top, and <em>soft drop shadows</em> — but no refraction, because there's nothing interesting behind the glass.</p>
+    </div>
+
+    <!-- SCENARIO 2: WINDOWED -->
+    <div class="scenario">
+      <div class="scenario-head">
+        <h3>Windowed on desktop</h3>
+        <span class="tag dramatic">Dramatic effect</span>
+        <p>The app is a floating window on a Windows 11 desktop. Now you <em>see</em> the glass: the desktop wallpaper bleeds through every panel, the squircle bezel refracts the colors around each surface, the float-shadow separates the app from the desktop.</p>
+      </div>
+
+      <div class="stage windowed">
+        <div class="desktop"></div>
+        <svg class="desktop-mountains" viewBox="0 0 1600 1000" preserveAspectRatio="none">
+          <!-- Distant mountains -->
+          <path d="M 0 700 L 150 580 L 280 640 L 400 520 L 520 600 L 640 540 L 760 580 L 880 480 L 1020 560 L 1140 500 L 1260 600 L 1400 520 L 1520 580 L 1600 540 L 1600 1000 L 0 1000 Z"
+                fill="rgba(20, 10, 35, 0.5)" />
+          <!-- Closer mountains -->
+          <path d="M 0 820 L 100 760 L 220 800 L 360 700 L 480 780 L 620 720 L 760 800 L 900 700 L 1040 780 L 1180 720 L 1320 800 L 1460 740 L 1600 780 L 1600 1000 L 0 1000 Z"
+                fill="rgba(15, 8, 30, 0.7)" />
+        </svg>
+        <div class="desktop-icons">
+          <div class="desktop-icon"><div class="ico">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6" stroke="#1a1a2e" stroke-width="1.5" fill="none"/></svg>
+          </div>README.md</div>
+          <div class="desktop-icon"><div class="ico">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></svg>
+          </div>Projects</div>
+        </div>
+        <div class="ide-window">
+          <div class="ide-content">
+            <div class="titlebar">
+              <div class="traffic"><span></span><span></span><span></span></div>
+              <div class="tab active">index.tsx</div>
+              <div class="tab">Editor.tsx</div>
+              <div class="tab">Tabs.tsx</div>
+              <div class="spacer"></div>
+              <div class="path">src/screens/EditorWorkspace/</div>
+            </div>
+            <div class="body">
+              <div class="glass-panel">
+                <div class="ph">
+                  <div class="panel-title">Explorer</div>
+                  <div class="tree-item">
+                    <div class="folder">▼ src</div>
+                    <div style="padding-left:12px">▼ screens</div>
+                    <div style="padding-left:24px">▼ EditorWorkspace</div>
+                    <div style="padding-left:36px"><span class="active">index.tsx</span></div>
+                    <div style="padding-left:36px">Editor.tsx</div>
+                    <div style="padding-left:24px">▶ Settings</div>
+                    <div style="padding-left:12px">▶ shared</div>
+                  </div>
+                </div>
+              </div>
+              <div class="glass-panel">
+                <div class="editor-content">
+<span class="kw">export const</span> <span class="fn">EditorWorkspace</span> = () =&gt; {<br>
+&nbsp;&nbsp;<span class="kw">const</span> { active } = <span class="fn">useEditor</span>();<br>
+&nbsp;&nbsp;<span class="kw">return</span> (<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">Pane</span> <span class="str">dir</span>=<span class="str">"row"</span>&gt;<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">FileTree</span> /&gt;<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">MonacoEditor</span> <span class="str">file</span>={active} /&gt;<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">ChatPanel</span> /&gt;<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;/<span class="fn">Pane</span>&gt;<br>
+&nbsp;&nbsp;);<br>
+};
+                </div>
+              </div>
+              <div class="glass-panel">
+                <div class="ph">
+                  <div class="panel-title">AI Chat</div>
+                  <div class="chat-msg">Refactor <code style="background:rgba(0,0,0,0.06);padding:0 3px;border-radius:3px;font-family:'JetBrains Mono',monospace;font-size:9.5px">FileTree</code> for virtualized rendering.<pre><span class="kw">const</span> <span class="fn">Tree</span> = <span class="fn">memo</span>(...)</pre></div>
+                  <div class="chat-msg user">Apply that to the editor too.</div>
+                </div>
+              </div>
+            </div>
+            <div class="statusbar">
+              <span>⎇ main</span><span>TypeScript</span><span>UTF-8</span>
+              <div class="spacer"></div>
+              <span>Ln 24, Col 18</span>
+            </div>
+          </div>
+        </div>
+        <div class="taskbar">
+          <div class="group">
+            <div class="icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><path d="M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z" opacity="0.5"/></svg>
+            </div>
+            <div class="icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="white"><circle cx="12" cy="12" r="9" stroke="white" stroke-width="1.5" fill="none"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" stroke="white" stroke-width="1.5" fill="none"/></svg>
+            </div>
+          </div>
+          <div class="spacer"></div>
+          <div class="group">
+            <div class="icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><rect x="3" y="3" width="18" height="18" rx="2" stroke="white" stroke-width="1.5" fill="none"/><path d="M3 9h18" stroke="white" stroke-width="1.5"/></svg>
+            </div>
+            <div class="icon solid-blue">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M8 3l-6 9 6 9 6-9zM16 3l6 9-6 9-6-9z"/></svg>
+            </div>
+            <div class="icon active">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="white"><path d="M9 2v6.5L4 18a2 2 0 0 0 1.7 3h12.6A2 2 0 0 0 20 18l-5-9.5V2"/></svg>
+            </div>
+          </div>
+          <div class="spacer"></div>
+          <div class="group">
+            <div class="icon" style="width:auto;padding:0 10px;font-size:10px">12:42</div>
+          </div>
+        </div>
+      </div>
+      <p class="small" style="margin-top:12px">Now the sunset wallpaper bleeds through every panel. The squircle bezel softens the boundary. The drop shadow lifts the window off the desktop. This is what makes Liquid Glass feel like a "material" and not just a CSS blur.</p>
+    </div>
+
+  </div>
+
+  <!-- KEY DIFFERENCES -->
+  <div class="section-title">
+    <span class="num">!</span>
+    <h2>What you see differently in each state</h2>
+    <span class="sub">same code · different visual impact</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px">
+    <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--primary);margin-bottom:8px">Squircle bezel</div>
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:8px">Visible in both</div>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.5">The 24px squircle corner is the first thing your eye registers. It's there in full screen too — just less dramatic without something to refract against.</p>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--primary);margin-bottom:8px">Specular highlight</div>
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:8px">Visible in both</div>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.5">The bright shine on the top edge of every panel. Pure CSS, works identically. Adds the "wet gel" feel.</p>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--primary);margin-bottom:8px">Translucent body</div>
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:8px"><b>Dramatic in windowed</b></div>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.5">This is the part that <em>needs</em> something behind it. In full screen, you see white-on-white. Windowed, you see the sunset bleeding through.</p>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--primary);margin-bottom:8px">Float shadow</div>
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:8px">Dramatic in windowed</div>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.5">The soft drop shadow only "lifts" the app when there's something underneath. In full screen, it's invisible. On a desktop, it sells the depth.</p>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--primary);margin-bottom:8px">Refraction (bending)</div>
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:8px">Windowed only · future phase</div>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.5">Real light-bending needs SVG displacement maps or WebGL — Chromium-only. CSS blur is the closest we get today. Refraction is the future phase, not the ship-now one.</p>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:20px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--primary);margin-bottom:8px">OS chrome (Mica)</div>
+      <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:8px">Windowed only · Tauri setting</div>
+      <p style="font-size:13px;color:var(--muted);margin:0;line-height:1.5">Windows 11's native Mica material on the Tauri window frame itself. <code style="font-family:'JetBrains Mono',monospace;background:#f4f4f8;padding:1px 4px;border-radius:3px;font-size:11px">tauri-plugin-decorum</code>. 5-line add.</p>
+    </div>
+  </div>
+
+  <div class="footer-note">
+    <b>Honest takeaway for the design</b>
+    <p style="margin:8px 0 0">If you ship Liquid Glass in Lipi, ~80% of the visual impact is already in the CSS — squircle, specular, gel translucency, soft shadow. It works in full screen (subtle but there) and sings in windowed mode (dramatic). For the last 20% (real refraction), you need WebGL — future phase. For OS-native chrome integration, you add <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 4px;border-radius:3px">tauri-plugin-decorum</code> and get Windows 11 Mica on the window itself — 5 lines of code.</p>
+  </div>
+
+  <p class="small" style="margin-top:24px">Mock for review. Not committed. Once you sign off, the actual implementation in Lipi is ~150 lines of CSS in <code style="font-family:'JetBrains Mono',monospace;background:#f4f4f8;padding:1px 5px;border-radius:3px">tokens.css</code> + 10-12 surface class updates + the Monaco theme flip + <code style="font-family:'JetBrains Mono',monospace;background:#f4f4f8;padding:1px 5px;border-radius:3px">tauri-plugin-decorum</code>.</p>
+
+</div>
+</body>
+</html>

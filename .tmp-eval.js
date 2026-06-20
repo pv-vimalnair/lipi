@@ -1,0 +1,1 @@
+{"function":"async () => { const btn = document.querySelector('button[aria-label=\"Open settings\"]'); if (btn) btn.click(); await new Promise(r => setTimeout(r, 500)); const el = document.querySelector('[data-testid=\"theme-section\"]'); if (el) { el.scrollIntoView({block: 'start'}); return { ok: true, rect: el.getBoundingClientRect() }; } return { ok: false }; }"}

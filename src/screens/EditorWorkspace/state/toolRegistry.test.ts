@@ -40,12 +40,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   executeToolCall,
+  deregisterCustomTool,
+  deregisterTool,
   getTool,
   listTools,
   registerCustomTool,
   registerTool,
   type ToolHandler,
 } from './toolRegistry';
+import {
+  EMPTY_TAB_STATE,
+  useWorkspaceStore,
+} from '@/shared/state/workspaceStore';
 
 // --- 5c: mocks for the new IPCs ---------------------------
 //
@@ -70,6 +76,23 @@ const stubHandler: ToolHandler = async (args) => {
 };
 
 beforeEach(() => {
+  invokeMock.mockReset();
+  for (const tool of listTools()) {
+    if (tool.kind !== 'builtin') {
+      deregisterCustomTool(tool.name);
+    }
+  }
+  useWorkspaceStore.setState({
+    workspaces: [
+      {
+        id: 'ws-test',
+        path: '/workspace',
+        addedAt: 1,
+        state: { ...EMPTY_TAB_STATE },
+      },
+    ],
+    activeId: 'ws-test',
+  });
   // The registry is module-level, so we
   // re-register the stub fresh for each
   // test. We use a fresh name to avoid
@@ -113,6 +136,26 @@ describe('toolRegistry basic CRUD', () => {
     expect(getTool(STUB_NAME)?.description).toBe('Replaced.');
   });
 
+  it('deregisterTool removes custom tools', () => {
+    registerCustomTool({
+      name: 'temporary_tool',
+      description: 'Temporary.',
+      kind: 'shell',
+      command: 'echo',
+      args: ['temporary'],
+      argsSpec: [],
+    });
+    expect(getTool('temporary_tool')).toBeDefined();
+    expect(deregisterTool('temporary_tool')).toBe(true);
+    expect(getTool('temporary_tool')).toBeUndefined();
+  });
+
+  it('deregisterTool does not remove built-in tools', () => {
+    expect(getTool('get_file_contents')?.kind).toBe('builtin');
+    expect(deregisterTool('get_file_contents')).toBe(false);
+    expect(getTool('get_file_contents')?.kind).toBe('builtin');
+  });
+
   it('get_file_contents is registered as kind: builtin at module load', () => {
     // 5c: the built-in marker is part of
     // the public contract — the Settings
@@ -123,6 +166,95 @@ describe('toolRegistry basic CRUD', () => {
     expect(tool).toBeDefined();
     expect(tool?.kind).toBe('builtin');
     expect(tool?.customConfig).toBeUndefined();
+  });
+});
+
+describe('toolRegistry get_file_contents workspace boundary', () => {
+  it('reads a relative path through fs_read_workspace_file', async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'fs_read_workspace_file') {
+        return Promise.resolve({
+          content: 'export const answer = 42;',
+          encoding: 'utf-8',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const result = await executeToolCall({
+      toolCallId: 'file_1',
+      name: 'get_file_contents',
+      arguments: '{"path":"src/main.ts"}',
+    });
+
+    expect(result.kind).toBe('text');
+    expect(result.output).toBe('export const answer = 42;');
+    expect(invokeMock).toHaveBeenCalledWith('fs_read_workspace_file', {
+      workspaceRoot: '/workspace',
+      path: 'src/main.ts',
+    });
+  });
+
+  it('rejects absolute paths before IPC', async () => {
+    const result = await executeToolCall({
+      toolCallId: 'file_abs',
+      name: 'get_file_contents',
+      arguments: '{"path":"C:/Users/me/.ssh/id_rsa"}',
+    });
+
+    expect(result.kind).toBe('text');
+    expect(result.output).toMatch(/absolute/);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects parent traversal before IPC', async () => {
+    const result = await executeToolCall({
+      toolCallId: 'file_dotdot',
+      name: 'get_file_contents',
+      arguments: '{"path":"../secret.txt"}',
+    });
+
+    expect(result.kind).toBe('text');
+    expect(result.output).toMatch(/contains '\.\.'/);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects reads when no workspace is active', async () => {
+    useWorkspaceStore.setState({
+      workspaces: [],
+      activeId: null,
+    });
+
+    const result = await executeToolCall({
+      toolCallId: 'file_no_workspace',
+      name: 'get_file_contents',
+      arguments: '{"path":"src/main.ts"}',
+    });
+
+    expect(result.kind).toBe('text');
+    expect(result.output).toMatch(/no workspace/i);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('surfaces Rust outside-workspace rejections', async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'fs_read_workspace_file') {
+        return Promise.reject({
+          kind: 'OutsideWorkspace',
+          detail: 'link.txt',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    const result = await executeToolCall({
+      toolCallId: 'file_symlink_escape',
+      name: 'get_file_contents',
+      arguments: '{"path":"link.txt"}',
+    });
+
+    expect(result.kind).toBe('text');
+    expect(result.output).toMatch(/outside the active workspace/);
   });
 });
 
@@ -490,13 +622,61 @@ describe('toolRegistry.registerCustomTool (5c)', () => {
     const httpCall = invokeMock.mock.calls.find((c) => c[0] === 'http_request');
     expect(httpCall).toBeDefined();
     const ipcArgs = (httpCall?.[1] as {
-      args: { url: string; method: string; headers: Record<string, string> };
+      args: {
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        allowedHosts: string[];
+        allowPrivateNetwork: boolean;
+      };
     }).args;
     // The `{key}` placeholder is
     // substituted.
     expect(ipcArgs.url).toBe('https://example.atlassian.net/rest/api/3/issue/PROJ-1');
     expect(ipcArgs.method).toBe('GET');
     expect(ipcArgs.headers).toEqual({ Authorization: 'Bearer fake' });
+    expect(ipcArgs.allowedHosts).toEqual(['example.atlassian.net']);
+    expect(ipcArgs.allowPrivateNetwork).toBe(false);
+  });
+
+  it('passes explicit allowed hosts and private-network opt-in for dynamic HTTP hosts', async () => {
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === 'http_request') {
+        return Promise.resolve({
+          status: 200,
+          headers: [],
+          body: 'ok',
+        });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    registerCustomTool({
+      name: 'fetch_local',
+      description: 'Fetch a local service.',
+      kind: 'http',
+      url: 'http://{host}/status',
+      method: 'GET',
+      headers: {},
+      allowedHosts: ['localhost'],
+      allowPrivateNetwork: true,
+      argsSpec: [
+        { name: 'host', type: 'string', description: 'Host to call.' },
+      ],
+    });
+
+    await executeToolCall({
+      toolCallId: 'http_call_local',
+      name: 'fetch_local',
+      arguments: '{"host":"localhost:3000"}',
+    });
+
+    const httpCall = invokeMock.mock.calls.find((c) => c[0] === 'http_request');
+    const ipcArgs = (httpCall?.[1] as {
+      args: { allowedHosts: string[]; allowPrivateNetwork: boolean };
+    }).args;
+    expect(ipcArgs.allowedHosts).toEqual(['localhost']);
+    expect(ipcArgs.allowPrivateNetwork).toBe(true);
   });
 
   it('substitutes missing placeholders with an empty string (the command will fail)', async () => {
@@ -686,5 +866,27 @@ describe('toolRegistry.registerCustomTool (5c)', () => {
     });
     expect(getTool('foo')?.description).toBe('Second version.');
     expect(getTool('foo')?.customConfig?.description).toBe('Second version.');
+  });
+
+  it('deregisterCustomTool removes a custom handler so stale calls fail closed', async () => {
+    registerCustomTool({
+      name: 'removed_tool',
+      description: 'Will be removed.',
+      kind: 'shell',
+      command: 'echo',
+      args: ['removed'],
+      argsSpec: [],
+    });
+    expect(getTool('removed_tool')).toBeDefined();
+    expect(deregisterCustomTool('removed_tool')).toBe(true);
+
+    const result = await executeToolCall({
+      toolCallId: 'removed_1',
+      name: 'removed_tool',
+      arguments: '{}',
+    });
+
+    expect(result.kind).toBe('error');
+    expect(result.output).toMatch(/Unknown tool 'removed_tool'/);
   });
 });

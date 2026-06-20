@@ -37,6 +37,7 @@ export interface FsErrorPayload {
     | 'NotAFile'
     | 'TooLarge'
     | 'AlreadyExists'
+    | 'OutsideWorkspace'
     | 'Io';
   detail: string;
 }
@@ -76,6 +77,20 @@ export async function readDir(path: string): Promise<FsEntry[]> {
 export async function readFile(path: string): Promise<FileContent> {
   try {
     return await invoke<FileContent>('fs_read_file', { path });
+  } catch (err) {
+    throw asFsError(err);
+  }
+}
+
+export async function readWorkspaceFile(
+  workspaceRoot: string,
+  path: string,
+): Promise<FileContent> {
+  try {
+    return await invoke<FileContent>('fs_read_workspace_file', {
+      workspaceRoot,
+      path,
+    });
   } catch (err) {
     throw asFsError(err);
   }

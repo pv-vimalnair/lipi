@@ -172,7 +172,10 @@ pub fn validate_apple_response(
             status: response.status,
         });
     }
-    let row = response.latest_receipt_info.first().ok_or(AppleError::NoPurchaseFound)?;
+    let row = response
+        .latest_receipt_info
+        .first()
+        .ok_or(AppleError::NoPurchaseFound)?;
     let expected_product_id = expected_product_id_for_plan(plan);
     if row.product_id != expected_product_id {
         return Err(AppleError::ProductIdMismatch {
@@ -180,9 +183,15 @@ pub fn validate_apple_response(
             got: row.product_id.clone(),
         });
     }
-    let purchased_at_ms: i64 = row.purchase_date_ms.parse().map_err(|_| AppleError::InvalidResponse {
-        detail: format!("purchase_date_ms {:?} is not a valid integer", row.purchase_date_ms),
-    })?;
+    let purchased_at_ms: i64 =
+        row.purchase_date_ms
+            .parse()
+            .map_err(|_| AppleError::InvalidResponse {
+                detail: format!(
+                    "purchase_date_ms {:?} is not a valid integer",
+                    row.purchase_date_ms
+                ),
+            })?;
     let expires_at_ms: i64 = row.expires_date_ms.parse().ok().ok_or_else(|| AppleError::InvalidResponse {
         detail: format!("expires_date_ms {:?} is not a valid integer (or is missing — required for auto-renewing subscriptions)", row.expires_date_ms),
     })?;
@@ -297,7 +306,10 @@ impl AppleError {
                     format!("iap-rejected-by-apple: Apple status {status} (see https://developer.apple.com/documentation/appstorereceipts/status for the full code reference)")
                 }
             }
-            AppleError::NoPurchaseFound => "iap-no-purchase-found: the receipt is valid but has no in-app purchases".to_string(),
+            AppleError::NoPurchaseFound => {
+                "iap-no-purchase-found: the receipt is valid but has no in-app purchases"
+                    .to_string()
+            }
             AppleError::ProductIdMismatch { expected, got } => {
                 format!("iap-product-id-mismatch: expected {expected:?} for this plan, got {got:?}")
             }
@@ -373,9 +385,13 @@ pub async fn verify_apple_receipt(
             detail: format!("Apple returned HTTP {status}"),
         });
     }
-    let body: AppleVerifyResponse = response.json().await.map_err(|e| AppleError::InvalidResponse {
-        detail: format!("failed to parse Apple response: {e}"),
-    })?;
+    let body: AppleVerifyResponse =
+        response
+            .json()
+            .await
+            .map_err(|e| AppleError::InvalidResponse {
+                detail: format!("failed to parse Apple response: {e}"),
+            })?;
     validate_apple_response(&body, plan, now_unix_secs)
 }
 
@@ -389,12 +405,18 @@ mod tests {
 
     #[test]
     fn expected_product_id_for_plan_monthly() {
-        assert_eq!(expected_product_id_for_plan("monthly"), APPLE_PRODUCT_ID_MONTHLY);
+        assert_eq!(
+            expected_product_id_for_plan("monthly"),
+            APPLE_PRODUCT_ID_MONTHLY
+        );
     }
 
     #[test]
     fn expected_product_id_for_plan_yearly() {
-        assert_eq!(expected_product_id_for_plan("yearly"), APPLE_PRODUCT_ID_YEARLY);
+        assert_eq!(
+            expected_product_id_for_plan("yearly"),
+            APPLE_PRODUCT_ID_YEARLY
+        );
     }
 
     #[test]
@@ -470,7 +492,10 @@ mod tests {
         // from the sandbox, not production. The
         // reason string should mention sandbox.
         let reason = err.reason();
-        assert!(reason.contains("sandbox"), "expected sandbox in reason: {reason}");
+        assert!(
+            reason.contains("sandbox"),
+            "expected sandbox in reason: {reason}"
+        );
     }
 
     // --- validate_apple_response: product ID ---
@@ -565,7 +590,9 @@ mod tests {
 
     #[test]
     fn apple_error_reason_for_network_error() {
-        let err = AppleError::NetworkError { detail: "connection refused".to_string() };
+        let err = AppleError::NetworkError {
+            detail: "connection refused".to_string(),
+        };
         let reason = err.reason();
         assert!(reason.starts_with("iap-network-error:"));
         assert!(reason.contains("connection refused"));

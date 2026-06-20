@@ -58,6 +58,16 @@ export interface RunCommandArgs {
   /** Per-call max-output cap (bytes). Omit
    *  to use the Rust default (256 KiB). */
   maxOutputBytes?: number;
+  /** Required Rust-side spawn policy. Keeps
+   *  `run_command` from being a generic
+   *  renderer-controlled process launcher. */
+  policy?: RunCommandPolicy;
+}
+
+export interface RunCommandPolicy {
+  kind: 'customTool';
+  toolName: string;
+  workspaceRoot: string;
 }
 
 /**
@@ -93,26 +103,29 @@ export interface RunCommandResult {
  * return. Discriminated union on `kind` —
  * the `toolRegistry` switches on the
  * discriminator to format a model-friendly
- * error message. The `message` field is the
- * human-readable display string; the
- * `stdout` / `stderr` fields (only on
+ * error message. Tauri exposes the serialized
+ * Rust fields directly, so variants do not
+ * always include a display `message`.
+ * The `stdout` / `stderr` fields (only on
  * `nonZeroExit`) include the captured
  * output for the model to see.
  */
 export type RunCommandError =
-  | { kind: 'empty'; message: string }
+  | { kind: 'empty'; message?: string }
   | {
       kind: 'spawn';
-      message: string;
       program: string;
+      detail: string;
+      message?: string;
     }
-  | { kind: 'timeout'; message: string; seconds: number }
+  | { kind: 'timeout'; seconds: number; message?: string }
+  | { kind: 'policy'; detail: string; message?: string }
   | {
       kind: 'nonZeroExit';
-      message: string;
       code: number | null;
       stdout: string;
       stderr: string;
+      message?: string;
     };
 
 /**

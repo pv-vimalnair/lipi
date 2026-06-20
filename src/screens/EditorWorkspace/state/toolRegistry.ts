@@ -82,7 +82,14 @@
  * to decide which handler to wire up.
  */
 
-import { FsError, httpRequest, readFile, runCommand, type LipiToolEntry } from '@/ipc';
+import {
+  FsError,
+  httpRequest,
+  readWorkspaceFile,
+  runCommand,
+  type LipiToolEntry,
+} from '@/ipc';
+import { useActivePath, useWorkspaceStore } from '@/shared/state/workspaceStore';
 
 /**
  * The discriminator for a tool's
@@ -164,6 +171,20 @@ const REGISTRY = new Map<string, RegisteredTool>();
  */
 export function registerTool(tool: RegisteredTool): void {
   REGISTRY.set(tool.name, tool);
+}
+
+/**
+ * Deregister a tool by name. Built-ins are intentionally
+ * protected: user/workspace state may remove custom tools,
+ * but it should not be able to erase Lipi's built-in tool
+ * surface.
+ */
+export function deregisterTool(name: string): boolean {
+  const existing = REGISTRY.get(name);
+  if (!existing || existing.kind === 'builtin') {
+    return false;
+  }
+  return REGISTRY.delete(name);
 }
 
 /**
@@ -416,8 +437,16 @@ const getFileContentsHandler: ToolHandler = async (args) => {
   if (typeof path !== 'string' || path.length === 0) {
     return `Error: 'get_file_contents' requires a non-empty 'path' string argument.`;
   }
+  const workspaceRoot = useActivePath(useWorkspaceStore.getState());
+  if (!workspaceRoot) {
+    return `Error: no workspace is currently open; 'get_file_contents' can only read files inside the active workspace.`;
+  }
+  const pathError = validateWorkspaceRelativeToolPath(path);
+  if (pathError) {
+    return pathError;
+  }
   try {
-    const content = await readFile(path);
+    const content = await readWorkspaceFile(workspaceRoot, path);
     if (content.encoding === 'binary') {
       // Don't expose raw binary bytes —
       // the model can't make sense of
@@ -444,6 +473,8 @@ const getFileContentsHandler: ToolHandler = async (args) => {
           return `Error: a parent of '${path}' is not a directory.`;
         case 'AlreadyExists':
           return `Error: '${path}' already exists.`;
+        case 'OutsideWorkspace':
+          return `Error: '${path}' is outside the active workspace.`;
         case 'Io':
           return `Error reading '${path}': ${e.payload.detail}`;
         default: {
@@ -457,6 +488,24 @@ const getFileContentsHandler: ToolHandler = async (args) => {
     return `Error reading '${path}': ${message}`;
   }
 };
+
+function validateWorkspaceRelativeToolPath(path: string): string | null {
+  if (path.includes('\0')) {
+    return `Error: '${path}' contains a NUL byte and cannot be read.`;
+  }
+  if (
+    path.startsWith('/') ||
+    path.startsWith('\\') ||
+    /^[A-Za-z]:[\\/]/.test(path)
+  ) {
+    return `Error: '${path}' is absolute. 'get_file_contents' only accepts paths relative to the active workspace.`;
+  }
+  const parts = path.replace(/\\/g, '/').split('/');
+  if (parts.some((part) => part === '..')) {
+    return `Error: '${path}' contains '..'. 'get_file_contents' cannot read outside the active workspace.`;
+  }
+  return null;
+}
 
 registerTool({
   name: 'get_file_contents',
@@ -555,6 +604,10 @@ function makeShellHandler(entry: LipiToolEntry): ToolHandler {
     if (!entry.command) {
       return `Error: shell tool '${entry.name}' has no 'command' configured.`;
     }
+    const workspaceRoot = useActivePath(useWorkspaceStore.getState());
+    if (!workspaceRoot) {
+      return `Error: shell tool '${entry.name}' requires an open workspace.`;
+    }
     const program = substitutePlaceholders(entry.command, args);
     const argv = (entry.args ?? []).map((a) =>
       substitutePlaceholders(a, args),
@@ -563,7 +616,12 @@ function makeShellHandler(entry: LipiToolEntry): ToolHandler {
       const result = await runCommand({
         program,
         args: argv,
-        cwd: entry.cwd,
+        cwd: entry.cwd ?? workspaceRoot,
+        policy: {
+          kind: 'customTool',
+          toolName: entry.name,
+          workspaceRoot,
+        },
       });
       const header = `Exit code: ${result.exitCode ?? 'null'}`;
       const parts = [header];
@@ -582,8 +640,24 @@ function makeShellHandler(entry: LipiToolEntry): ToolHandler {
       // errors with a serialised payload —
       // the `e` here is the error envelope
       // from `command.rs`.
-      const err = e as { kind?: string; message?: string; code?: number; stdout?: string; stderr?: string; seconds?: number; program?: string };
-      const message = err.message ?? String(e);
+      const err = e as {
+        kind?: string;
+        message?: unknown;
+        detail?: unknown;
+        code?: number;
+        stdout?: string;
+        stderr?: string;
+        seconds?: number;
+        program?: string;
+      };
+      const message =
+        typeof err.message === 'string'
+          ? err.message
+          : typeof err.detail === 'string'
+            ? err.detail
+            : e instanceof Error
+              ? e.message
+              : String(e);
       switch (err.kind) {
         case 'nonZeroExit': {
           const parts = [`Error: command exited with code ${err.code ?? 'null'}.`];
@@ -595,6 +669,8 @@ function makeShellHandler(entry: LipiToolEntry): ToolHandler {
           return `Error: command timed out after ${err.seconds ?? 30}s. The process may still be running in the background.`;
         case 'spawn':
           return `Error: failed to spawn '${err.program ?? program}': ${message}`;
+        case 'policy':
+          return `Error: command blocked by Lipi policy. ${message}`;
         case 'empty':
           return `Error: command is empty. Check the 'command' field for '${entry.name}'.`;
         default:
@@ -641,6 +717,8 @@ function makeHttpHandler(entry: LipiToolEntry): ToolHandler {
         method: entry.method,
         headers: entry.headers,
         body,
+        allowedHosts: allowedHostsForHttpTool(entry),
+        allowPrivateNetwork: entry.allowPrivateNetwork === true,
       });
       const headerLines = [
         `Status: ${result.status}`,
@@ -707,4 +785,30 @@ export function registerCustomTool(entry: LipiToolEntry): void {
     kind: entry.kind,
     customConfig: entry,
   });
+}
+
+function allowedHostsForHttpTool(entry: LipiToolEntry): string[] {
+  if (entry.allowedHosts && entry.allowedHosts.length > 0) {
+    return entry.allowedHosts;
+  }
+  if (!entry.url) {
+    return [];
+  }
+  try {
+    const parseableUrl = entry.url.replace(
+      /\{[a-zA-Z_][a-zA-Z0-9_]*\}/g,
+      'placeholder',
+    );
+    const parsed = new URL(parseableUrl);
+    if (parsed.hostname.includes('placeholder')) {
+      return [];
+    }
+    return parsed.hostname ? [parsed.hostname] : [];
+  } catch {
+    return [];
+  }
+}
+
+export function deregisterCustomTool(name: string): boolean {
+  return deregisterTool(name);
 }

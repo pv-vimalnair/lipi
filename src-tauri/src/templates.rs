@@ -97,9 +97,7 @@ impl<'de> Deserialize<'de> for TemplateError {
         let s = String::deserialize(d)?;
         // The JS side never re-hydrates TemplateError; this
         // impl exists for symmetry with other Lipi errors.
-        Ok(TemplateError::UnknownId(format!(
-            "(re-hydrated) {s}"
-        )))
+        Ok(TemplateError::UnknownId(format!("(re-hydrated) {s}")))
     }
 }
 
@@ -693,13 +691,7 @@ go test ./...
 
 /// The canonical ordered registry. The order here is the
 /// display order in the JS gallery.
-pub const REGISTRY: &[Template] = &[
-    REACT_VITE,
-    TAURI_RUST,
-    NODE_API,
-    PYTHON_VENV,
-    GO_MODULE,
-];
+pub const REGISTRY: &[Template] = &[REACT_VITE, TAURI_RUST, NODE_API, PYTHON_VENV, GO_MODULE];
 
 /// Look up a template by id. Returns `None` for unknown
 /// ids (so the JS side can show "Unknown template" instead
@@ -723,8 +715,8 @@ pub fn by_id(id: &str) -> Option<&'static Template> {
 /// any write fails, the staging dir is removed and `dest`
 /// is left untouched.
 pub fn apply(template_id: &str, dest: &Path) -> Result<ApplyResult, TemplateError> {
-    let template = by_id(template_id)
-        .ok_or_else(|| TemplateError::UnknownId(template_id.to_string()))?;
+    let template =
+        by_id(template_id).ok_or_else(|| TemplateError::UnknownId(template_id.to_string()))?;
 
     // Validate `dest` is a real, writable directory.
     if !dest.exists() {
@@ -786,12 +778,7 @@ pub fn apply(template_id: &str, dest: &Path) -> Result<ApplyResult, TemplateErro
             fs::create_dir_all(parent)?;
         }
         if let Err(e) = fs::rename(&staged_abs, &final_abs) {
-            return Err(partial_after_move_failure(
-                dest,
-                &staging,
-                &created,
-                e,
-            ));
+            return Err(partial_after_move_failure(dest, &staging, &created, e));
         }
         created.push(final_abs.display().to_string());
     }
@@ -948,8 +935,7 @@ mod tests {
         assert_eq!(res.template_id, "tauri-rust");
         // The Cargo.toml lives at src-tauri/Cargo.toml.
         assert!(dest.join("src-tauri").join("Cargo.toml").is_file());
-        let body =
-            fs::read_to_string(dest.join("src-tauri").join("Cargo.toml")).unwrap();
+        let body = fs::read_to_string(dest.join("src-tauri").join("Cargo.toml")).unwrap();
         assert!(body.contains("tauri-react-app"));
         let _ = fs::remove_dir_all(&dest);
     }
@@ -968,10 +954,7 @@ mod tests {
         // Plant a file.
         fs::write(dest.join("blocker.txt"), "x").unwrap();
         let err = apply("go-module", &dest).unwrap_err();
-        assert!(
-            matches!(err, TemplateError::DestNotEmpty(_)),
-            "got {err:?}"
-        );
+        assert!(matches!(err, TemplateError::DestNotEmpty(_)), "got {err:?}");
         // The blocker file must still be present.
         assert!(dest.join("blocker.txt").is_file());
         let _ = fs::remove_dir_all(&dest);

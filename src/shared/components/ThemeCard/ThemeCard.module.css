@@ -1,0 +1,148 @@
+/**
+ * ThemeCard.module.css — one card in the theme picker.
+ *
+ * Styling notes:
+ *   - Reads from the project's existing dark-first token palette
+ *     (--color-* in src/shared/styles/tokens.css). No raw hex.
+ *   - Per-card accent is passed in as `--card-accent` /
+ *     `--card-accent-soft` from the React component's inline
+ *     style. The checkmark badge, active border, and focus ring
+ *     all read those vars — single source of truth for the
+ *     theme color.
+ *   - Aspect ratio 4/5 on the art container matches the
+ *     vintage-illustration proportions in lipi-themes-settings.html
+ *     so the embedded preview matches what the user sees in
+ *     Settings → Theme.
+ *   - The card is a `<button>` so we style the focus state
+ *     explicitly (no default outline ring on the art).
+ */
+
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 0;
+  background: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  /* No default focus ring — we draw our own via :focus-visible. */
+  outline: none;
+  /* The shadow + transition are the same shape as Button /
+   * IconButton — lift on hover, deeper shadow on hover, settle
+   * on press. Per Rule 4 we reuse the same motion tokens. */
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--motion-fast) var(--easing-standard),
+              box-shadow var(--motion-fast) var(--easing-standard),
+              border-color var(--motion-fast) var(--easing-standard);
+}
+
+.card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+  /* Hover border picks up the per-card accent, even when not
+   * selected — gives a "this is interactive" hint without
+   * committing to the active state. */
+  border-color: var(--card-accent, var(--color-accent));
+}
+
+.card:focus-visible {
+  /* 2px accent ring offset 2px — matches the focus ring on
+   * Button / IconButton so the picker feels like one UI. */
+  box-shadow:
+    0 0 0 2px var(--color-bg-base),
+    0 0 0 4px var(--card-accent, var(--color-accent));
+}
+
+.card:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Active state — applied when data-active is set. We use a
+ * darker border + the same box-shadow trick as focus so the
+ * active card reads as "selected" at a glance even without
+ * the checkmark (which is also rendered, see ThemeCard.tsx). */
+.card[data-active] {
+  border-color: var(--card-accent, var(--color-accent));
+  box-shadow:
+    0 0 0 1px var(--card-accent, var(--color-accent)),
+    var(--shadow-md);
+}
+
+.art {
+  /* Cover-fit the illustration. background-position: center
+   * is the default crop; the crop picker (when active)
+   * overrides --theme-img-crop on :root to shift the image,
+   * but for the picker cards themselves we always show the
+   * full image so the user can see what they're picking. */
+  aspect-ratio: 4 / 5;
+  background-color: var(--color-bg-pane);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: relative;
+  /* The image source is set inline by the React component
+   * (`style={{ backgroundImage: ... }}`). */
+}
+
+.meta {
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-elevated);
+  border-top: 1px solid var(--color-border-subtle);
+  /* Two-line stack: name (semibold, slightly larger) on top,
+   * mood (muted, smaller) below. No Stack primitive here —
+   * two static lines don't justify the wrapper overhead. */
+}
+
+.name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
+  /* Truncate the name gracefully if a future i18n layer
+   * produces a longer translation. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mood {
+  margin-top: 2px;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-normal);
+  color: var(--color-text-muted);
+  /* Mood lines are short — "October · warm · nostalgic" — but
+   * allow up to 2 lines for translations that read longer. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Checkmark badge — sits in the top-right corner of the art
+ * container. Only rendered when isActive is true. */
+.checkBadge {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--card-accent, var(--color-accent));
+  color: var(--color-text-inverse);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.checkBadge svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}

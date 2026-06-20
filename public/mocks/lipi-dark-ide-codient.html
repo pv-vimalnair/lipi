@@ -1,0 +1,956 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lipi — Dark Mode IDE (Codient layout)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Dark IDE base (matches Lipi's current tokens.css) */
+    --bg-page: #fafafb;
+    --ide-bg: #0d0e10;
+    --ide-bg-2: #14171c;
+    --ide-bg-3: #1a1e25;
+    --ide-bg-4: #232831;
+    --ide-line: #232831;
+    --ide-line-2: #2a313c;
+    --ide-text: #e6e8eb;
+    --ide-text-dim: #aab1bb;
+    --ide-text-muted: #6e7682;
+
+    /* Accents */
+    --accent: #4f8cff;
+    --accent-dim: rgba(79, 140, 255, 0.18);
+    --green: #4caf82;
+    --green-soft: rgba(76, 175, 130, 0.15);
+    --green-border: rgba(76, 175, 130, 0.4);
+    --amber: #e0a458;
+    --cyan: #56b6c2;
+    --pink: #c678dd;
+    --red: #e06c75;
+
+    /* Code syntax */
+    --code-keyword: #c678dd;   /* import, const, export, return */
+    --code-string: #e0a458;    /* "react" */
+    --code-variable: #56b6c2;  /* bannerImg */
+    --code-number: #d19a66;
+    --code-comment: #6e7682;
+    --code-tag: #e06c75;       /* JSX */
+    --code-attr: #4f8cff;      /* JSX attrs */
+    --code-punc: #abb2bf;
+    --code-fn: #61afef;        /* function names */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', system-ui, sans-serif;
+    background: var(--bg-page);
+    color: var(--ide-text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+    overflow: hidden;
+  }
+
+  /* === Page chrome (the area around the IDE) === */
+  .page {
+    width: 100vw;
+    height: 100vh;
+    background:
+      /* Teal/green ambient gradient (the "wallpaper" the IDE floats on) */
+      radial-gradient(ellipse 80% 60% at 50% 0%, rgba(76, 175, 130, 0.35) 0%, transparent 60%),
+      radial-gradient(ellipse 70% 80% at 50% 100%, rgba(20, 80, 70, 0.6) 0%, transparent 70%),
+      linear-gradient(180deg, #1a3a35 0%, #0d2624 50%, #061814 100%);
+    display: grid;
+    place-items: center;
+    padding: 32px;
+    overflow: hidden;
+  }
+
+  /* === The IDE window === */
+  .ide {
+    width: min(1600px, 100%);
+    height: min(950px, 100%);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--ide-bg);
+    box-shadow:
+      0 50px 100px rgba(0, 0, 0, 0.5),
+      0 20px 50px rgba(0, 0, 0, 0.3),
+      0 0 0 0.5px rgba(255, 255, 255, 0.04);
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    font-family: 'Outfit', system-ui, sans-serif;
+    color: var(--ide-text);
+    position: relative;
+  }
+
+  /* === Top bar === */
+  .topbar {
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    background: var(--ide-bg-2);
+    border-bottom: 0.5px solid var(--ide-line);
+    gap: 16px;
+    position: relative;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 8px;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--ide-text);
+  }
+  .brand .logo {
+    width: 22px; height: 22px;
+    background: linear-gradient(135deg, #4f8cff, #c678dd);
+    border-radius: 6px;
+    display: grid; place-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: white;
+    position: relative;
+  }
+  .brand .logo::after {
+    content: '✦';
+    position: absolute;
+    top: -2px; right: -2px;
+    font-size: 8px;
+    color: #4f8cff;
+  }
+  .workspace {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12.5px;
+    color: var(--ide-text-dim);
+    padding: 5px 10px;
+    border-radius: 6px;
+    background: var(--ide-bg-3);
+    cursor: pointer;
+  }
+  .workspace:hover { background: var(--ide-bg-4); }
+  .workspace .chev { opacity: 0.6; }
+
+  .view-tabs {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex; gap: 2px;
+    background: var(--ide-bg-3);
+    border-radius: 8px;
+    padding: 3px;
+  }
+  .view-tab {
+    padding: 5px 16px;
+    font-size: 12.5px;
+    color: var(--ide-text-dim);
+    border-radius: 5px;
+    font-weight: 500;
+  }
+  .view-tab.active {
+    background: var(--green);
+    color: #061814;
+    font-weight: 600;
+  }
+
+  .topbar-right {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .avatar {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4f8cff, #c678dd);
+    display: grid; place-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: white;
+  }
+  .invite {
+    padding: 5px 12px;
+    background: linear-gradient(135deg, #4f8cff, #6a9fff);
+    color: white;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 6px;
+  }
+
+  /* === Main body (4 columns) === */
+  .body {
+    display: grid;
+    grid-template-columns: 52px 220px 1fr 360px;
+    overflow: hidden;
+  }
+
+  /* === Far-left icon rail === */
+  .rail {
+    background: var(--ide-bg-2);
+    border-right: 0.5px solid var(--ide-line);
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    gap: 4px;
+  }
+  .rail-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: grid; place-items: center;
+    color: var(--ide-text-dim);
+    font-size: 18px;
+    cursor: pointer;
+    position: relative;
+  }
+  .rail-icon:hover { color: var(--ide-text); background: var(--ide-bg-3); }
+  .rail-icon.active {
+    color: var(--ide-text);
+    background: var(--ide-bg-3);
+  }
+  .rail-icon.active::before {
+    content: '';
+    position: absolute;
+    left: -8px; top: 8px; bottom: 8px;
+    width: 2px;
+    background: var(--accent);
+    border-radius: 0 2px 2px 0;
+  }
+  .rail .spacer { flex: 1; }
+  .rail-icon .badge {
+    position: absolute;
+    top: 4px; right: 4px;
+    min-width: 14px; height: 14px;
+    border-radius: 7px;
+    background: var(--accent);
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+    display: grid; place-items: center;
+    padding: 0 3px;
+  }
+
+  /* === File tree panel === */
+  .tree-panel {
+    background: var(--ide-bg-2);
+    border-right: 0.5px solid var(--ide-line);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .tree-header {
+    display: flex; align-items: center;
+    padding: 10px 14px 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ide-text-muted);
+    font-weight: 600;
+  }
+  .tree-header .search {
+    margin-left: auto;
+    color: var(--ide-text-dim);
+    cursor: pointer;
+  }
+  .tree {
+    flex: 1;
+    overflow: auto;
+    padding: 4px 0 12px;
+    font-size: 13px;
+  }
+  .tree-row {
+    display: flex; align-items: center;
+    padding: 3px 14px 3px 8px;
+    cursor: pointer;
+    color: var(--ide-text-dim);
+    gap: 4px;
+    user-select: none;
+  }
+  .tree-row:hover { background: var(--ide-bg-3); color: var(--ide-text); }
+  .tree-row .chev { width: 14px; opacity: 0.5; font-size: 10px; text-align: center; }
+  .tree-row .ico { width: 16px; font-size: 12px; text-align: center; }
+  .tree-row .name { font-size: 13px; }
+  .tree-row .name.active { color: var(--accent); }
+  .tree-section {
+    padding: 4px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ide-text-muted);
+    margin-top: 4px;
+    font-weight: 600;
+  }
+
+  /* === Code editor === */
+  .editor {
+    display: flex; flex-direction: column;
+    background: var(--ide-bg);
+    overflow: hidden;
+  }
+  .tabbar {
+    display: flex; align-items: end;
+    background: var(--ide-bg-2);
+    border-bottom: 0.5px solid var(--ide-line);
+    padding: 0 4px 0 12px;
+    overflow-x: auto;
+    flex-shrink: 0;
+  }
+  .edtab {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 12px;
+    font-size: 12.5px;
+    color: var(--ide-text-muted);
+    border-right: 0.5px solid var(--ide-line);
+    cursor: pointer;
+    position: relative;
+    white-space: nowrap;
+  }
+  .edtab.active {
+    color: var(--ide-text);
+    background: var(--ide-bg);
+  }
+  .edtab.active::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: var(--accent);
+  }
+  .edtab .ico-dot {
+    width: 8px; height: 8px;
+    border-radius: 2px;
+  }
+  .edtab .close {
+    margin-left: 4px;
+    color: var(--ide-text-muted);
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    display: grid; place-items: center;
+    font-size: 14px; line-height: 1;
+  }
+  .edtab .close:hover { background: var(--ide-bg-3); color: var(--ide-text); }
+  .edtab .add {
+    color: var(--ide-text-muted);
+    padding: 9px 10px;
+    cursor: pointer;
+  }
+  .edtab .add:hover { color: var(--ide-text); }
+
+  .tabbar-right {
+    margin-left: auto;
+    display: flex; align-items: center;
+    gap: 4px;
+    padding: 0 8px;
+  }
+  .zoom {
+    padding: 4px 8px;
+    font-size: 11px;
+    color: var(--ide-text-dim);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .zoom:hover { background: var(--ide-bg-3); }
+  .edtab-action {
+    width: 28px; height: 28px;
+    display: grid; place-items: center;
+    color: var(--ide-text-dim);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .edtab-action:hover { background: var(--ide-bg-3); color: var(--ide-text); }
+
+  .code-body {
+    flex: 1;
+    overflow: auto;
+    padding: 14px 0 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+  .code-row {
+    display: grid;
+    grid-template-columns: 56px 1fr;
+  }
+  .gutter {
+    text-align: right;
+    padding-right: 16px;
+    color: var(--ide-text-muted);
+    user-select: none;
+  }
+  .src { padding-left: 12px; white-space: pre; }
+  .kw { color: var(--code-keyword); }
+  .str { color: var(--code-string); }
+  .var { color: var(--code-variable); }
+  .num { color: var(--code-number); }
+  .com { color: var(--code-comment); font-style: italic; }
+  .tag { color: var(--code-tag); }
+  .attr { color: var(--code-attr); }
+  .punc { color: var(--code-punc); }
+  .fn { color: var(--code-fn); }
+  .ty { color: var(--code-keyword); }
+  .caret {
+    display: inline-block;
+    width: 2px; height: 16px;
+    background: var(--accent);
+    vertical-align: text-bottom;
+    margin-left: 1px;
+    animation: blink 1.2s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* === AI Assistance panel (Mavis) === */
+  .ai {
+    background: var(--ide-bg-2);
+    border-left: 0.5px solid var(--ide-line);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .ai-header {
+    display: flex; align-items: center;
+    padding: 12px 16px;
+    border-bottom: 0.5px solid var(--ide-line);
+  }
+  .ai-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ide-text);
+  }
+  .ai-chat-btn {
+    margin-left: auto;
+    padding: 5px 12px;
+    background: var(--ide-text);
+    color: var(--ide-bg);
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 6px;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+
+  .ai-body {
+    flex: 1;
+    overflow: auto;
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .ai-msg {
+    background: var(--ide-bg-3);
+    border: 0.5px solid var(--ide-line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    color: var(--ide-text);
+    line-height: 1.55;
+  }
+  .ai-msg .file-card {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--ide-bg);
+    border: 0.5px solid var(--ide-line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .ai-msg .file-card .ico {
+    width: 28px; height: 32px;
+    background: linear-gradient(135deg, #4f8cff, #c678dd);
+    border-radius: 4px;
+    display: grid; place-items: center;
+    color: white;
+    font-size: 9px;
+    font-weight: 700;
+  }
+  .ai-msg .file-card .name { font-size: 12.5px; font-weight: 500; color: var(--ide-text); }
+  .ai-msg .file-card .size { font-size: 11px; color: var(--ide-text-muted); }
+
+  .reasoning-toggle {
+    color: var(--ide-text-dim);
+    font-size: 12px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .reasoning-toggle:hover { color: var(--ide-text); }
+  .reasoning-toggle .chev { font-size: 10px; }
+
+  .action-row {
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .action-chip {
+    padding: 5px 12px;
+    border: 0.5px solid var(--green-border);
+    color: var(--green);
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .action-chip:hover { background: var(--green-soft); }
+
+  .diff-block {
+    background: var(--ide-bg);
+    border: 0.5px solid var(--ide-line);
+    border-radius: 8px;
+    overflow: hidden;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+  }
+  .diff-block .head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    background: var(--ide-bg-3);
+    border-bottom: 0.5px solid var(--ide-line);
+    font-family: 'Outfit', system-ui, sans-serif;
+    font-size: 11px;
+    color: var(--ide-text-dim);
+    font-weight: 500;
+  }
+  .diff-block .head .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+  }
+  .diff-block.before .head .dot { background: var(--red); }
+  .diff-block.after .head .dot { background: var(--green); }
+  .diff-block .body {
+    padding: 8px 12px;
+    color: var(--ide-text);
+    white-space: pre;
+  }
+  .diff-block .body .minus { color: var(--red); }
+  .diff-block .body .plus { color: var(--green); }
+  .diff-block .body .com { color: var(--ide-text-muted); }
+
+  .ai-action-row {
+    display: flex; gap: 8px; align-items: center;
+  }
+  .ai-btn {
+    padding: 7px 14px;
+    background: var(--ide-bg-3);
+    border: 0.5px solid var(--ide-line);
+    color: var(--ide-text);
+    font-size: 12.5px;
+    font-weight: 500;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .ai-btn:hover { background: var(--ide-bg-4); }
+  .ai-btn.primary {
+    background: var(--green);
+    color: #061814;
+    border-color: var(--green);
+  }
+  .ai-btn.primary:hover { background: #5dc08f; }
+
+  .no-code {
+    background: var(--ide-bg-3);
+    border: 0.5px dashed var(--ide-line-2);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+  }
+  .no-code .ico {
+    font-size: 24px;
+    color: var(--ide-text-muted);
+    margin-bottom: 6px;
+  }
+  .no-code .title { font-size: 12.5px; font-weight: 500; color: var(--ide-text); margin-bottom: 2px; }
+  .no-code .desc { font-size: 11.5px; color: var(--ide-text-muted); }
+
+  .ai-input-wrap {
+    padding: 12px 16px;
+    border-top: 0.5px solid var(--ide-line);
+    background: var(--ide-bg-2);
+  }
+  .ai-input {
+    background: var(--ide-bg-3);
+    border: 0.5px solid var(--ide-line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--ide-text-muted);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .ai-input .send {
+    margin-left: auto;
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    background: var(--accent);
+    display: grid; place-items: center;
+    color: white;
+  }
+  .ai-toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 4px;
+    font-size: 12px;
+  }
+  .ai-toolbar .ic-btn {
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    color: var(--ide-text-dim);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .ai-toolbar .ic-btn:hover { background: var(--ide-bg-3); color: var(--ide-text); }
+  .ai-toolbar .mode {
+    margin-left: 4px;
+    padding: 4px 12px;
+    background: var(--ide-bg-3);
+    border: 0.5px solid var(--ide-line);
+    border-radius: 6px;
+    color: var(--ide-text);
+    display: inline-flex; align-items: center; gap: 6px;
+    font-weight: 500;
+  }
+  .ai-toolbar .mode .pulse {
+    width: 6px; height: 6px;
+    background: var(--green);
+    border-radius: 50%;
+  }
+  .ai-toolbar .send-btn {
+    margin-left: auto;
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    background: var(--ide-bg-3);
+    display: grid; place-items: center;
+    color: var(--ide-text-dim);
+  }
+  .ai-toolbar .send-btn:hover { background: var(--ide-bg-4); color: var(--ide-text); }
+
+  /* === Bottom legend === */
+  .legend {
+    position: fixed;
+    bottom: 16px; left: 16px;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(20px);
+    border: 0.5px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: white;
+    font-size: 11px;
+    z-index: 100;
+  }
+  .legend b { color: var(--green); }
+
+  /* === Mini map / line indicator on right of code (subtle) === */
+  .minimap {
+    width: 60px;
+    background: var(--ide-bg-2);
+    border-left: 0.5px solid var(--ide-line);
+    position: relative;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="ide">
+
+    <!-- Top bar -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">L</div>
+        <span>Lipi</span>
+      </div>
+      <div class="workspace">
+        <span>lipi</span>
+        <span class="chev">▾</span>
+      </div>
+
+      <div class="view-tabs">
+        <div class="view-tab">Preview</div>
+        <div class="view-tab">Design</div>
+        <div class="view-tab active">Code</div>
+      </div>
+
+      <div class="topbar-right">
+        <div class="avatar">V</div>
+        <div class="invite">Invite</div>
+      </div>
+    </div>
+
+    <!-- Main body (4 columns + minimap) -->
+    <div class="body">
+
+      <!-- Far-left icon rail -->
+      <div class="rail">
+        <div class="rail-icon active" title="Explorer">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"/></svg>
+        </div>
+        <div class="rail-icon" title="Search">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+        </div>
+        <div class="rail-icon" title="Source Control">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M18 9.5c0-2-2-3.5-4-3.5s-4 1.5-4 3.5 2 3.5 4 3.5 4 1.5 4 3.5"/></svg>
+          <span class="badge">3</span>
+        </div>
+        <div class="rail-icon" title="Run & Debug">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </div>
+        <div class="rail-icon" title="Extensions">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        </div>
+        <div class="rail-icon" title="Mavis">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+        <div class="spacer"></div>
+        <div class="rail-icon" title="Settings">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </div>
+      </div>
+
+      <!-- File tree panel -->
+      <div class="tree-panel">
+        <div class="tree-header">
+          <span>Explorer</span>
+          <span class="search">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          </span>
+        </div>
+        <div class="tree">
+          <div class="tree-section">Open Editors</div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">tokens.css</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">secrets_strongho...</span>
+          </div>
+
+          <div class="tree-section" style="margin-top: 8px">lipi</div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="chev">▾</span>
+            <span class="ico">📁</span>
+            <span class="name">src-tauri</span>
+          </div>
+          <div class="tree-row" style="padding-left: 38px">
+            <span class="chev">▾</span>
+            <span class="ico">📁</span>
+            <span class="name">src</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="ico">📄</span>
+            <span class="name active">tokens.css</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="ico">📄</span>
+            <span class="name">secrets_stronghold_key_bridge.rs</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="ico">📄</span>
+            <span class="name">stt_capture.rs</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="ico">📄</span>
+            <span class="name">stt_inference.rs</span>
+          </div>
+          <div class="tree-row" style="padding-left: 38px">
+            <span class="chev">▾</span>
+            <span class="ico">📁</span>
+            <span class="name">screens</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="chev">▸</span>
+            <span class="ico">📁</span>
+            <span class="name">EditorWorkspace</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="chev">▸</span>
+            <span class="ico">📁</span>
+            <span class="name">SettingsProvider</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="chev">▸</span>
+            <span class="ico">📁</span>
+            <span class="name">src</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">package.json</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">Cargo.toml</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">tauri.conf.json</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">.gitignore</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">README.md</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Code editor -->
+      <div class="editor">
+        <div class="tabbar">
+          <div class="edtab active">
+            <span class="ico-dot" style="background: var(--accent)"></span>
+            <span>tokens.css</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab">
+            <span class="ico-dot" style="background: var(--code-string)"></span>
+            <span>secrets_stronghold_key_bridge.rs</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab">
+            <span class="ico-dot" style="background: var(--code-string)"></span>
+            <span>ChatPanel.tsx</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab add">+</div>
+          <div class="tabbar-right">
+            <div class="zoom">88% ▾</div>
+            <div class="edtab-action" title="Split">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            </div>
+            <div class="edtab-action" title="More">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="code-body">
+<div class="code-row"><div class="gutter">1</div><div class="src"><span class="com">/*</span></div></div>
+<div class="code-row"><div class="gutter">2</div><div class="src"><span class="com"> * Apple Liquid Glass — design tokens (port from WWDC25)</span></div></div>
+<div class="code-row"><div class="gutter">3</div><div class="src"><span class="com"> * The single source of truth for Lipi's design system.</span></div></div>
+<div class="code-row"><div class="gutter">4</div><div class="src"><span class="com"> */</span></div></div>
+<div class="code-row"><div class="gutter">5</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">6</div><div class="src"><span class="kw">:root</span> <span class="punc">{</span></div></div>
+<div class="code-row"><div class="gutter">7</div><div class="src">  <span class="com">/* === Glass surfaces (translucent body) === */</span></div></div>
+<div class="code-row"><div class="gutter">8</div><div class="src">  <span class="attr">--glass-bg</span>:           <span class="str">rgba(255, 255, 255, 0.55)</span>;</div></div>
+<div class="code-row"><div class="gutter">9</div><div class="src">  <span class="attr">--glass-bg-strong</span>:    <span class="str">rgba(255, 255, 255, 0.72)</span>;</div></div>
+<div class="code-row"><div class="gutter">10</div><div class="src">  <span class="attr">--glass-bg-subtle</span>:    <span class="str">rgba(255, 255, 255, 0.40)</span>;</div></div>
+<div class="code-row"><div class="gutter">11</div><div class="src">  <span class="attr">--glass-bg-tinted</span>:    <span class="str">rgba(37, 99, 235, 0.14)</span>;</div></div>
+<div class="code-row"><div class="gutter">12</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">13</div><div class="src">  <span class="com">/* === Glass edge (squircle + inner highlights) === */</span></div></div>
+<div class="code-row"><div class="gutter">14</div><div class="src">  <span class="attr">--glass-border</span>:       <span class="str">0.5px solid rgba(255, 255, 255, 0.65)</span>;</div></div>
+<div class="code-row"><div class="gutter">15</div><div class="src">  <span class="attr">--glass-highlight</span>:    <span class="str">inset 0 1px 0 rgba(255, 255, 255, 0.7)</span>;</div></div>
+<div class="code-row"><div class="gutter">16</div><div class="src">  <span class="attr">--glass-depth</span>:        <span class="str">inset 0 -1px 0 rgba(0, 0, 0, 0.04)</span>;</div></div>
+<div class="code-row"><div class="gutter">17</div><div class="src">  <span class="attr">--glass-outer-shadow</span>: <span class="str">0 12px 32px rgba(15, 15, 18, 0.08)</span>;</div></div>
+<div class="code-row"><div class="gutter">18</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">19</div><div class="src">  <span class="com">/* === Glass blur (illumination) === */</span></div></div>
+<div class="code-row"><div class="gutter">20</div><div class="src">  <span class="attr">--glass-blur</span>:         <span class="str">blur(30px) saturate(180%)</span>;</div></div>
+<div class="code-row"><div class="gutter">21</div><div class="src">  <span class="attr">--glass-blur-subtle</span>:  <span class="str">blur(15px) saturate(180%)</span>;</div></div>
+<div class="code-row"><div class="gutter">22</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">23</div><div class="src">  <span class="com">/* === Geometry (squircle) === */</span></div></div>
+<div class="code-row"><div class="gutter">24</div><div class="src">  <span class="attr">--radius-glass</span>:       <span class="num">24px</span>;</div></div>
+<div class="code-row"><div class="gutter">25</div><div class="src">  <span class="attr">--radius-control</span>:     <span class="num">12px</span>;</div></div>
+<div class="code-row"><div class="gutter">26</div><div class="src"><span class="punc">}</span><span class="caret"></span></div></div>
+        </div>
+      </div>
+
+      <!-- AI Assistance (Mavis) -->
+      <div class="ai">
+        <div class="ai-header">
+          <div class="ai-title">Mavis</div>
+          <div class="ai-chat-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+          </div>
+        </div>
+
+        <div class="ai-body">
+          <!-- User request with file attachment -->
+          <div class="ai-msg">
+            <div class="file-card">
+              <div class="ico">FIG</div>
+              <div>
+                <div class="name">tokens-glass.fig</div>
+                <div class="size">182.4 KB</div>
+              </div>
+            </div>
+            <div>Implement the Liquid Glass tokens from this Figma across all 12 surface classes. Keep the current dark theme intact.</div>
+          </div>
+
+          <div class="reasoning-toggle">
+            <span class="chev">▸</span> Reasoning
+          </div>
+
+          <div class="action-row">
+            <div class="action-chip">Add tokens</div>
+            <div class="action-chip">Apply globally</div>
+          </div>
+
+          <!-- Response: Before/After diff -->
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:12.5px;color:var(--ide-text);font-weight:500">Refactor · Add glass surface classes</div>
+            <div style="font-size:12px;color:var(--ide-text-dim);line-height:1.5">
+              The current sidebar uses a hard-coded dark color. I'll wrap it in a <code style="background:var(--ide-bg-3);padding:1px 5px;border-radius:3px;font-family:'JetBrains Mono',monospace;font-size:11px">.glass-surface</code> utility so it picks up the new tokens automatically.
+            </div>
+          </div>
+
+          <div class="diff-block before">
+            <div class="head"><span class="dot"></span> Before · src/screens/EditorWorkspace/Sidebar.tsx</div>
+            <div class="body"><span class="minus">-</span> <span class="com">// hard-coded dark color</span>
+<span class="minus">-</span> <span class="kw">const</span> <span class="var">Sidebar</span> = () =&gt; (
+<span class="minus">-</span>   &lt;<span class="tag">aside</span> <span class="attr">className</span>=<span class="str">"bg-[#14171c] border-r border-[#232831]"</span>&gt;
+<span class="minus">-</span>     ...
+<span class="minus">-</span>   &lt;/<span class="tag">aside</span>&gt;
+<span class="minus">-</span> );</div>
+          </div>
+
+          <div class="diff-block after">
+            <div class="head"><span class="dot"></span> After · src/screens/EditorWorkspace/Sidebar.tsx</div>
+            <div class="body"><span class="plus">+</span> <span class="com">// uses Liquid Glass utility</span>
+<span class="plus">+</span> <span class="kw">import</span> <span class="str">'./glass.css'</span>;
+<span class="plus">+</span>
+<span class="plus">+</span> <span class="kw">const</span> <span class="var">Sidebar</span> = () =&gt; (
+<span class="plus">+</span>   &lt;<span class="tag">aside</span> <span class="attr">className</span>=<span class="str">"glass-surface"</span>&gt;
+<span class="plus">+</span>     ...
+<span class="plus">+</span>   &lt;/<span class="tag">aside</span>&gt;
+<span class="plus">+</span> );</div>
+          </div>
+
+          <div class="ai-action-row">
+            <div class="ai-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              Explain
+            </div>
+            <div class="ai-btn">Cancel</div>
+            <div class="ai-btn primary" style="margin-left:auto">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Apply
+            </div>
+          </div>
+        </div>
+
+        <div class="ai-input-wrap">
+          <div class="ai-input">
+            <span>Ask a follow-up...</span>
+            <div class="send">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </div>
+          </div>
+          <div class="ai-toolbar">
+            <div class="ic-btn" title="Attach">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </div>
+            <div class="ic-btn" title="Voice">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </div>
+            <div class="mode">
+              <span class="pulse"></span>
+              Builder
+            </div>
+            <div class="send-btn">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="legend">
+    <b>Lipi</b> · dark mode IDE · 5-column layout · Dribbble "Codient" reference
+  </div>
+</div>
+</body>
+</html>

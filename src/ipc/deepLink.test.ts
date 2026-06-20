@@ -2,7 +2,7 @@
  * Tests for the pure `parseOpenUrl` helper and the
  * user-facing `friendlyRejectionReason` mapping.
  *
- * Phase I: `app://lipi.open?path=<urlencoded>` deep
+ * Phase I: `lipi://open?path=<urlencoded>` deep
  * link. The parser is pure (no Tauri runtime, no DOM
  * dependencies) so it can be tested directly with
  * faked `userDirs` values.
@@ -44,7 +44,7 @@ const POSIX_DIRS: UserDirs = {
 describe('parseOpenUrl', () => {
   it('accepts a path under the user home (Windows)', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CProjects%5Cmy-app',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CProjects%5Cmy-app',
       WIN_DIRS,
     );
     expect(r).toEqual({ kind: 'ok', path: 'C:\\Users\\alice\\Projects\\my-app' });
@@ -52,7 +52,7 @@ describe('parseOpenUrl', () => {
 
   it('accepts a path under Documents', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CDocuments%5Cnote.txt',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDocuments%5Cnote.txt',
       WIN_DIRS,
     );
     expect(r).toEqual({
@@ -63,7 +63,7 @@ describe('parseOpenUrl', () => {
 
   it('accepts a path under Desktop', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CDesktop%5Ctodo.md',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDesktop%5Ctodo.md',
       WIN_DIRS,
     );
     expect(r).toEqual({
@@ -74,7 +74,7 @@ describe('parseOpenUrl', () => {
 
   it('accepts a path under the user home (POSIX)', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=%2Fhome%2Falice%2Fcode%2Fapp',
+      'lipi://open?path=%2Fhome%2Falice%2Fcode%2Fapp',
       POSIX_DIRS,
     );
     // The normaliser converts `/` to `\` so the
@@ -86,7 +86,7 @@ describe('parseOpenUrl', () => {
 
   it('rejects a path containing .. (path traversal)', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CDocuments%5C..%5C..%5CWindows%5CSystem32',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDocuments%5C..%5C..%5CWindows%5CSystem32',
       WIN_DIRS,
     );
     expect(r).toEqual({ kind: 'reject', reason: 'path-traversal' });
@@ -94,7 +94,7 @@ describe('parseOpenUrl', () => {
 
   it('rejects a path under C:\\Windows (outside user dirs)', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=C%3A%5CWindows%5CSystem32%5Ccmd.exe',
+      'lipi://open?path=C%3A%5CWindows%5CSystem32%5Ccmd.exe',
       WIN_DIRS,
     );
     expect(r).toEqual({ kind: 'reject', reason: 'outside-user-dirs' });
@@ -102,31 +102,47 @@ describe('parseOpenUrl', () => {
 
   it('rejects a relative path', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=Projects%2Fmy-app',
+      'lipi://open?path=Projects%2Fmy-app',
       WIN_DIRS,
     );
     expect(r).toEqual({ kind: 'reject', reason: 'not-absolute' });
   });
 
   it('rejects a missing path query field', () => {
-    const r = parseOpenUrl('app://lipi.open', WIN_DIRS);
+    const r = parseOpenUrl('lipi://open', WIN_DIRS);
     expect(r).toEqual({ kind: 'reject', reason: 'missing-path' });
   });
 
   it('rejects an empty path query field', () => {
-    const r = parseOpenUrl('app://lipi.open?path=', WIN_DIRS);
+    const r = parseOpenUrl('lipi://open?path=', WIN_DIRS);
     expect(r).toEqual({ kind: 'reject', reason: 'missing-path' });
   });
 
-  it('rejects a non-app:// URL', () => {
+  it('rejects a non-lipi URL', () => {
     const r = parseOpenUrl('https://example.com?path=C%3A%5Cfoo', WIN_DIRS);
-    expect(r).toEqual({ kind: 'reject', reason: 'missing-path' });
+    expect(r).toEqual({ kind: 'reject', reason: 'invalid-url' });
+  });
+
+  it('rejects a lipi URL with the wrong authority', () => {
+    const r = parseOpenUrl(
+      'lipi://anything-else?path=C%3A%5CUsers%5Calice%5CDocuments%5Cnote.txt',
+      WIN_DIRS,
+    );
+    expect(r).toEqual({ kind: 'reject', reason: 'invalid-url' });
+  });
+
+  it('rejects a lipi URL with an unexpected route path', () => {
+    const r = parseOpenUrl(
+      'lipi://open/project?path=C%3A%5CUsers%5Calice%5CDocuments%5Cnote.txt',
+      WIN_DIRS,
+    );
+    expect(r).toEqual({ kind: 'reject', reason: 'invalid-url' });
   });
 
   it('rejects a percent-encoded garbage path', () => {
     // `%E0%A4%A` is an invalid UTF-8 sequence when decoded.
     const r = parseOpenUrl(
-      'app://lipi.open?path=%E0%A4%A',
+      'lipi://open?path=%E0%A4%A',
       WIN_DIRS,
     );
     expect(r).toEqual({ kind: 'reject', reason: 'decode-failed' });
@@ -139,7 +155,7 @@ describe('parseOpenUrl', () => {
       desktop: null,
     };
     const r = parseOpenUrl(
-      'app://lipi.open?path=%2Fhome%2Falice%2FDocuments%2Ffoo',
+      'lipi://open?path=%2Fhome%2Falice%2FDocuments%2Ffoo',
       dirsNoDocs,
     );
     // Path is under the home, so still accepted.
@@ -151,7 +167,7 @@ describe('parseOpenUrl', () => {
 
   it('is case-insensitive on Windows for the home check', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=c%3A%5Cusers%5Calice%5CDocuments%5Cnote.txt',
+      'lipi://open?path=c%3A%5Cusers%5Calice%5CDocuments%5Cnote.txt',
       WIN_DIRS,
     );
     // The normaliser preserves the original casing;
@@ -165,13 +181,13 @@ describe('parseOpenUrl', () => {
 
   it('strips a trailing separator on the accepted path', () => {
     const r = parseOpenUrl(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CDocuments%5Cnote.txt%5C',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDocuments%5Cnote.txt%5C',
       WIN_DIRS,
     );
     // The path itself doesn't end with a separator, but
     // verify the normaliser works on a folder-style path:
     const r2 = parseOpenUrl(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CDesktop%5C',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDesktop%5C',
       WIN_DIRS,
     );
     expect(r).toEqual({
@@ -183,6 +199,22 @@ describe('parseOpenUrl', () => {
       path: 'C:\\Users\\alice\\Desktop',
     });
   });
+
+  it('rejects a Windows sibling whose path merely shares the home prefix', () => {
+    const r = parseOpenUrl(
+      'lipi://open?path=C%3A%5CUsers%5Calice2%5CDocuments%5Cnote.txt',
+      WIN_DIRS,
+    );
+    expect(r).toEqual({ kind: 'reject', reason: 'outside-user-dirs' });
+  });
+
+  it('rejects a POSIX sibling whose path merely shares the home prefix', () => {
+    const r = parseOpenUrl(
+      'lipi://open?path=%2Fhome%2Falice2%2Fcode%2Fapp',
+      POSIX_DIRS,
+    );
+    expect(r).toEqual({ kind: 'reject', reason: 'outside-user-dirs' });
+  });
 });
 
 describe('friendlyRejectionReason', () => {
@@ -193,6 +225,8 @@ describe('friendlyRejectionReason', () => {
       'not-absolute',
       'outside-user-dirs',
       'decode-failed',
+      'invalid-url',
+      'not-found',
     ] as const;
     for (const r of reasons) {
       const m = friendlyRejectionReason(r);

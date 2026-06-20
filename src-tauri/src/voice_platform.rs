@@ -146,10 +146,7 @@ pub fn get_capabilities() -> VoicePlatformCapabilities {
     // path is wired here". We ship it on the three
     // desktop targets; the M2c mobile path uses the
     // OS-native STT on phones/tablets.
-    let ondevice = matches!(
-        OS,
-        OsFamily::Windows | OsFamily::Macos | OsFamily::LinuxGtk
-    );
+    let ondevice = matches!(OS, OsFamily::Windows | OsFamily::Macos | OsFamily::LinuxGtk);
     // `web_speech` tracks "the WebView exposes
     // SpeechRecognition". True on Chromium-based
     // WebViews (Windows, macOS) and on WKWebView
@@ -158,10 +155,7 @@ pub fn get_capabilities() -> VoicePlatformCapabilities {
     // based but Google strips SpeechRecognition
     // from the production build — see HANDOFF §9.7
     // risk R1).
-    let web_speech = matches!(
-        OS,
-        OsFamily::Windows | OsFamily::Macos | OsFamily::Ios
-    );
+    let web_speech = matches!(OS, OsFamily::Windows | OsFamily::Macos | OsFamily::Ios);
     // `native_dictation` is true only on platforms
     // where the deferred Swift / Kotlin plugin
     // would land. On the current Windows-only
@@ -198,10 +192,22 @@ mod tests {
         // interface in `src/voice/capabilities.ts`.
         let caps = get_capabilities();
         let json = serde_json::to_string(&caps).unwrap();
-        assert!(json.contains("\"ondevice\""), "missing 'ondevice' key: {json}");
-        assert!(json.contains("\"webSpeech\""), "missing 'webSpeech' key: {json}");
-        assert!(json.contains("\"nativeDictation\""), "missing 'nativeDictation' key: {json}");
-        assert!(json.contains("\"osFamily\""), "missing 'osFamily' key: {json}");
+        assert!(
+            json.contains("\"ondevice\""),
+            "missing 'ondevice' key: {json}"
+        );
+        assert!(
+            json.contains("\"webSpeech\""),
+            "missing 'webSpeech' key: {json}"
+        );
+        assert!(
+            json.contains("\"nativeDictation\""),
+            "missing 'nativeDictation' key: {json}"
+        );
+        assert!(
+            json.contains("\"osFamily\""),
+            "missing 'osFamily' key: {json}"
+        );
     }
 
     #[test]
@@ -229,11 +235,21 @@ mod tests {
         // build strips it. So only Windows / macOS
         // / iOS get `web_speech: true`.
         let caps = get_capabilities();
-        if cfg!(any(target_os = "windows", target_os = "macos", target_os = "ios")) {
-            assert!(caps.web_speech, "web_speech should be true on Windows/macOS/iOS");
+        if cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios"
+        )) {
+            assert!(
+                caps.web_speech,
+                "web_speech should be true on Windows/macOS/iOS"
+            );
         }
         if cfg!(target_os = "linux") {
-            assert!(!caps.web_speech, "web_speech should be false on Linux (WebKitGTK)");
+            assert!(
+                !caps.web_speech,
+                "web_speech should be false on Linux (WebKitGTK)"
+            );
         }
         if cfg!(target_os = "android") {
             assert!(!caps.web_speech, "web_speech should be false on Android");

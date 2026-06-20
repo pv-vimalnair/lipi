@@ -72,7 +72,7 @@ architectural decisions, file lists, and verification output.
 
 ### Prereqs (already installed on the dev machine)
 
-- **Node ≥ 20** (we test on 24.x)
+- **Node ≥ 20.19** (Vite 8 requirement; we test on 24.x)
 - **Rust stable** (MSVC ABI on Windows) — `rustup-init.exe` from <https://rustup.rs>
 - **Visual Studio Build Tools** with the *C++ build tools* workload + **Windows 11 SDK**
 - **Tauri CLI 2.x** — `cargo install tauri-cli --version "^2.0" --locked`
@@ -85,7 +85,8 @@ architectural decisions, file lists, and verification output.
 ```bash
 npm install              # one-time
 npm run typecheck        # strict TS, no emit
-npm test                 # vitest, 1243 tests across 97 files
+npm run lint             # same strict TS check, CI-friendly script
+npm test                 # vitest, 1293 tests across 99 files
 npm run dev              # frontend only on http://localhost:1420/
 npm run dev:tauri        # full Tauri shell (compiles Rust first time, ~2 min)
 npm run build            # production frontend build to dist/
@@ -94,7 +95,7 @@ npm run build:tauri      # full Tauri build with bundling (.nsis + .msi)
 # Rust side
 cd src-tauri
 cargo check                                  # default build
-cargo test --lib                             # 380 unit tests
+cargo test --lib                             # 413 unit tests
 cargo test --tests                           # 24 integration tests
 cargo check --features mobile                # mobile build (Stronghold + secrets)
 cargo check --features m2c-native --lib      # desktop Whisper inference (needs libclang)

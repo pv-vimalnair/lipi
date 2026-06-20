@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lipi — Theme Options: Dark vs Light</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', system-ui, sans-serif;
+    background: #0a0a0e;
+    color: #e6e8eb;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+  .container { max-width: 1600px; margin: 0 auto; padding: 48px 32px 80px; }
+
+  /* Header */
+  .head { margin-bottom: 56px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em;
+    color: #4caf82; background: rgba(76, 175, 130, 0.12);
+    padding: 5px 12px; border-radius: 999px; margin-bottom: 16px;
+  }
+  .head h1 { font-size: 36px; line-height: 1.1; margin: 0 0 12px; font-weight: 700; letter-spacing: -0.02em; }
+  .head p { font-size: 16px; color: #aab1bb; margin: 0; max-width: 760px; }
+
+  /* Section title */
+  .section-title { display: flex; align-items: center; gap: 12px; margin: 56px 0 20px; }
+  .section-title h2 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .section-title .tag {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 4px 10px; border-radius: 999px;
+  }
+  .section-title .tag.dark { background: #4f8cff; color: white; }
+  .section-title .tag.light { background: #2563eb; color: white; }
+  .section-title .sub { color: #6e7682; font-size: 13px; margin-left: auto; }
+
+  /* Mock frame */
+  .mock-frame {
+    background: #14171c;
+    border: 0.5px solid #232831;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  }
+  .mock-frame.light {
+    background: #fafafb;
+    border-color: rgba(0, 0, 0, 0.08);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.06);
+  }
+  .mock-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    background: #1a1e25;
+    border-bottom: 0.5px solid #232831;
+  }
+  .mock-frame.light .mock-bar {
+    background: #f4f4f8;
+    border-bottom-color: rgba(0, 0, 0, 0.06);
+  }
+  .mock-bar .dot { width: 10px; height: 10px; border-radius: 50%; background: #2a313c; }
+  .mock-frame.light .mock-bar .dot { background: #d8d8e0; }
+  .mock-bar .title { font-size: 12px; color: #aab1bb; font-weight: 500; }
+  .mock-frame.light .mock-bar .title { color: #5c5c66; }
+  .mock-bar .right { margin-left: auto; font-size: 11px; color: #6e7682; }
+  .mock-frame.light .mock-bar .right { color: #8e8e96; }
+
+  .mock-iframe {
+    width: 100%;
+    height: 720px;
+    border: 0;
+    display: block;
+    background: #0d0e10;
+  }
+
+  /* Tradeoff table */
+  .tradeoff {
+    background: #14171c;
+    border: 0.5px solid #232831;
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .tradeoff table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .tradeoff th, .tradeoff td {
+    text-align: left;
+    padding: 14px 18px;
+    border-bottom: 0.5px solid #232831;
+    vertical-align: top;
+  }
+  .tradeoff th { background: #1a1e25; color: #e6e8eb; font-weight: 600; font-size: 12px; }
+  .tradeoff tr:last-child td { border-bottom: none; }
+  .tradeoff .label { color: #aab1bb; font-weight: 500; width: 180px; }
+  .tradeoff .col { width: 50%; }
+  .tradeoff .col-head { color: #4f8cff; font-weight: 600; }
+  .tradeoff .col-head.light { color: #2563eb; }
+
+  /* Decision */
+  .decision {
+    margin-top: 40px;
+    background: linear-gradient(135deg, rgba(76, 175, 130, 0.10), rgba(79, 140, 255, 0.10));
+    border: 0.5px solid rgba(76, 175, 130, 0.3);
+    border-radius: 16px;
+    padding: 24px 28px;
+  }
+  .decision h3 { font-size: 16px; font-weight: 600; margin: 0 0 8px; color: #4caf82; }
+  .decision p { margin: 0; color: #aab1bb; font-size: 14px; line-height: 1.6; }
+  .decision p + p { margin-top: 10px; }
+
+  .option-cards {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    margin-top: 20px;
+  }
+  .option-card {
+    background: #14171c;
+    border: 0.5px solid #232831;
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .option-card h4 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+  .option-card.dark h4 { color: #4f8cff; }
+  .option-card.light h4 { color: #2563eb; }
+  .option-card p { font-size: 13px; color: #aab1bb; margin: 0; line-height: 1.55; }
+
+  /* Small */
+  .small { font-size: 12px; color: #6e7682; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- HEADER -->
+  <header class="head">
+    <span class="eyebrow">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 2v20M2 12h20"/></svg>
+      Theme Picker · Two Options
+    </span>
+    <h1>Lipi — Dark &amp; Light, side by side</h1>
+    <p>Both themes share the same 5-column layout (rail / tree / editor / Mavis) and the same Liquid Glass token system — they only differ in color, ambient background, and a few element styles. Ship one as default with a toggle, or pick one and commit.</p>
+  </header>
+
+  <!-- OPTION A: DARK -->
+  <div class="section-title">
+    <span class="tag dark">Option A</span>
+    <h2>Dark · Codient layout · Teal/green ambient</h2>
+    <span class="sub">5-column dark mode IDE on a teal gradient</span>
+  </div>
+
+  <div class="mock-frame">
+    <div class="mock-bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="title">lipi-dark-ide-codient.html</span>
+      <span class="right">Dark theme · tokens.css · 5-column</span>
+    </div>
+    <iframe class="mock-iframe" src="lipi-dark-ide-codient.html"></iframe>
+  </div>
+
+  <!-- OPTION B: LIGHT -->
+  <div class="section-title">
+    <span class="tag light">Option B</span>
+    <h2>Light · Windowed · Painted landscape wallpaper</h2>
+    <span class="sub">Windowed white panels on a painted landscape, translucent chrome</span>
+  </div>
+
+  <div class="mock-frame light">
+    <div class="mock-bar">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="title">lipi-light-ide-codient.html</span>
+      <span class="right">Light theme · 5-column · Codient layout</span>
+    </div>
+    <iframe class="mock-iframe" src="lipi-light-ide-codient.html" style="background: #87ceeb"></iframe>
+  </div>
+
+  <!-- TRADEOFFS -->
+  <div class="section-title">
+    <h2>Tradeoffs</h2>
+    <span class="sub">where each shines · where each strains</span>
+  </div>
+
+  <div class="tradeoff">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:180px">Aspect</th>
+          <th class="col">Option A — Dark</th>
+          <th class="col">Option B — Light</th>
+        </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td class="label">Layout</td>
+        <td>5 columns (rail / tree / editor / Mavis) — fuller, more IDE-native</td>
+        <td>5 columns (rail / tree / editor / Mavis) — same structure, light surface</td>
+      </tr>
+        <tr>
+          <td class="label">Code editor</td>
+          <td>Dark surface, high-contrast syntax — long sessions, eye-friendly</td>
+          <td>White surface, ink-style syntax — bright, print-like, but more eye strain in dark rooms</td>
+        </tr>
+        <tr>
+          <td class="label">AI chat</td>
+          <td>Dark cards, dark code blocks stand out — Mavis feels integrated</td>
+          <td>White cards, dark code blocks punch through — Copilot-style, very familiar</td>
+        </tr>
+      <tr>
+        <td class="label">Ambient</td>
+        <td>Teal/green radial gradient — subtle, modern, "AI tool" vibe</td>
+        <td>Painted landscape wallpaper — bleeds through translucent chrome (title bar, tab bar, rail)</td>
+      </tr>
+        <tr>
+          <td class="label">Brand fit</td>
+          <td>Matches current Lipi (dark-first) — zero migration cost</td>
+          <td>Big shift from current — users will need to adapt</td>
+        </tr>
+        <tr>
+          <td class="label">Code blocks in chat</td>
+          <td>Dark, can blend with surrounding — needs border to separate</td>
+          <td>Dark on light — high contrast, very legible (GitHub Copilot pattern)</td>
+        </tr>
+        <tr>
+          <td class="label">Energy cost (OLED)</td>
+          <td>Lower — fewer lit pixels on dark panels</td>
+          <td>Higher — most surfaces are full white</td>
+        </tr>
+        <tr>
+          <td class="label">Best for</td>
+          <td>Long dev sessions, dark rooms, "I'm a code cave" crowd</td>
+          <td>Daytime, screen-shares, "I want my IDE to feel modern like a Mac app"</td>
+        </tr>
+        <tr>
+          <td class="label">Risk</td>
+          <td>Low — same Lipi theme, just polished</td>
+          <td>Medium — big visual change, retraining users on where things are</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- DECISION -->
+  <div class="section-title">
+    <h2>What I'd recommend</h2>
+    <span class="sub">pick one or ship both</span>
+  </div>
+
+  <div class="decision">
+    <h3>Ship both as a theme toggle. Default to dark.</h3>
+    <p>The Lipi renderer (WebView2 / WKWebView) already has the tooling to swap CSS variables on the fly. One `tokens.css` file with two color sets — one dark, one light — and a `data-theme` attribute on the root element. User picks their theme in Settings.</p>
+    <p style="margin-top:10px"><b style="color:#e6e8eb">Why both, not one:</b> the dark version is what power users want (long sessions, no eye strain). The light version is what screen-sharers and daytime users want. Apple, GitHub, JetBrains, VS Code — they all ship both. The token system makes this nearly free.</p>
+  </div>
+
+  <div class="option-cards">
+    <div class="option-card dark">
+      <h4>If we only ship one — Dark</h4>
+      <p>Keeps Lipi's current identity. Lower risk, faster ship. Power-user favorite. Single set of tokens, single test path. The Liquid Glass effect becomes a subtle inner shine on dark panels.</p>
+    </div>
+    <div class="option-card light">
+      <h4>If we only ship one — Light</h4>
+      <p>Bigger brand shift, but the kind of move that gets the IDE noticed. The "Mac app on a wallpaper" feel is genuinely different from anything else in the IDE space right now. Riskier, more memorable.</p>
+    </div>
+  </div>
+
+  <p class="small" style="margin-top:32px">Mock for review. Not committed. Both design files are self-contained and can be opened in any modern browser. The next step is to pick, then update <code style="font-family:'JetBrains Mono',monospace;background:#1a1e25;padding:1px 5px;border-radius:3px">src/shared/styles/tokens.css</code> with the chosen palette + a theme toggle, and ship one phase.</p>
+
+</div>
+</body>
+</html>

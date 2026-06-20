@@ -20,42 +20,46 @@
 //!
 //! See HANDOFF.md §6 (How to continue) for the phase order.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_deep_link::DeepLinkExt;
+use tauri_plugin_dialog::DialogExt;
 
 mod fs;
 mod fs_watcher;
 mod workspace_search;
 use fs::{
-    read_dir, read_file, write_file, create_file, delete_entry, rename_entry,
-    path_exists, FsEntry, FsError, FileContent,
+    create_file, delete_entry, path_exists, read_dir, read_file, read_workspace_file, rename_entry,
+    write_file, FileContent, FsEntry, FsError,
 };
 use fs_watcher::{fs_unwatch, fs_watch};
-use workspace_search::workspace_search;
+use workspace_search::{workspace_search, workspace_search_cancel};
 
 mod menu;
 
 mod git;
-pub use git::{
-    commit, diff, discard, open_repo, stage_all, status, validate_commit_message,
-    ChangeKind, ChangedFile, CommitResult, FileDiff, GitError, RepoHandle, RepoStatus,
-};
 use git::current_branch;
+pub use git::{
+    commit, diff, discard, open_repo, stage_all, status, validate_commit_message, ChangeKind,
+    ChangedFile, CommitResult, FileDiff, GitError, RepoHandle, RepoStatus,
+};
 
 mod terminal;
 pub use terminal::{
-    default_shell as terminal_default_shell, open as terminal_open_rs, resize as terminal_resize_rs,
-    write as terminal_write_rs, close as terminal_close_rs, EventSink, OpenOptions, OpenResult,
+    close as terminal_close_rs, default_shell as terminal_default_shell, open as terminal_open_rs,
+    resize as terminal_resize_rs, write as terminal_write_rs, EventSink, OpenOptions, OpenResult,
     TerminalError, TerminalState,
 };
 
 mod secrets;
-pub use secrets::{delete_api_key as secrets_delete_rs, get_api_key as secrets_get_api_key_rs, has_api_key as secrets_has_rs, set_api_key as secrets_set_rs, SecretError};
+pub use secrets::{
+    delete_api_key as secrets_delete_rs, get_api_key as secrets_get_api_key_rs,
+    get_renderer_api_key as secrets_get_renderer_api_key_rs, has_api_key as secrets_has_rs,
+    set_api_key as secrets_set_rs, SecretError,
+};
 
 // Mobile-build roadmap Phase B — Stronghold facade for Android.
 // The desktop build (default) doesn't see this module
@@ -185,34 +189,42 @@ pub use updater_health::updater_health_check;
 pub mod rotate_updater_key;
 
 mod ai;
-pub use ai::{get_configured_providers as ai_get_configured_providers_rs, list_providers as ai_list_providers_rs, provider_by_id, ProviderInfo};
+pub use ai::{
+    get_configured_providers as ai_get_configured_providers_rs,
+    list_providers as ai_list_providers_rs, provider_by_id, ProviderInfo,
+};
 
 mod chat;
 pub use chat::{stream_chat_anthropic, stream_chat_openai, ChatDelta, ChatError, ChatMessage};
 
 mod custom_tool;
 pub use custom_tool::{
-    custom_tool_to_anthropic, custom_tool_to_openai, merge_tool_list,
-    merge_tool_list_anthropic, CustomToolArg, CustomToolSpec,
+    custom_tool_to_anthropic, custom_tool_to_openai, merge_tool_list, merge_tool_list_anthropic,
+    CustomToolArg, CustomToolSpec,
 };
 
 mod command;
-pub use command::{run_command as run_command_rs, RunCommandArgs, RunCommandError, RunCommandResult};
+pub use command::{
+    run_command as run_command_rs, RunCommandArgs, RunCommandError, RunCommandResult,
+};
 
 mod stdio;
 pub use stdio::{
     check_available as stdio_check_available_rs, run_stdio as stdio_run_stdio_rs,
     stdio_close as stdio_close_rs, stdio_read as stdio_read_rs,
-    stdio_read_stderr as stdio_read_stderr_rs,
-    stdio_read_stderr_log as stdio_read_stderr_log_rs,
-    stdio_write as stdio_write_rs, CheckAvailableArgs, CheckAvailableResult,
-    LspCrashedPayload, LspLogPayload, LspServerKind, LspStdoutPayload,
-    LSP_CRASHED_EVENT, LSP_LOG_EVENT, LSP_STDOUT_EVENT, RunStdioArgs,
-    RunStdioResult, StdioError, StdioState,
+    stdio_read_stderr as stdio_read_stderr_rs, stdio_read_stderr_log as stdio_read_stderr_log_rs,
+    stdio_write as stdio_write_rs, CheckAvailableArgs, CheckAvailableResult, LspCrashedPayload,
+    LspLogPayload, LspServerKind, LspStdoutPayload, RunStdioArgs, RunStdioResult, StdioError,
+    StdioState, LSP_CRASHED_EVENT, LSP_LOG_EVENT, LSP_STDOUT_EVENT,
 };
 
 mod http;
-pub use http::{http_request as http_request_rs, HttpRequestArgs, HttpRequestError, HttpRequestResult};
+pub use http::{
+    http_request as http_request_rs, HttpRequestArgs, HttpRequestError, HttpRequestResult,
+};
+
+mod ipc_policy;
+use ipc_policy::{audit as audit_ipc, IpcAuditEvent};
 
 mod lipi_tools;
 pub use lipi_tools::{
@@ -234,20 +246,20 @@ mod cancel;
 // loop.
 mod stt;
 pub use stt::{
-    is_available as stt_is_available_rs, is_model_installed as stt_is_model_installed_rs,
+    install_model as stt_install_model_rs, is_available as stt_is_available_rs,
+    is_model_installed as stt_is_model_installed_rs,
     list_installed_models as stt_list_installed_models_rs, list_models as stt_list_models_rs,
     model_by_id as stt_model_by_id_rs, model_path as stt_model_path_rs,
-    read_active_model_id as stt_read_active_model_id_rs,
-    write_active_model_id as stt_write_active_model_id_rs, install_model as stt_install_model_rs,
-    remove_model as stt_remove_model_rs, set_active_model as stt_set_active_model_rs,
-    SttError, SttModelDescriptor, STT_EVENT_DOWNLOAD_PROGRESS, STT_EVENT_ERROR,
-    STT_EVENT_TRANSCRIPT,
+    read_active_model_id as stt_read_active_model_id_rs, remove_model as stt_remove_model_rs,
+    set_active_model as stt_set_active_model_rs,
+    write_active_model_id as stt_write_active_model_id_rs, SttError, SttModelDescriptor,
+    STT_EVENT_DOWNLOAD_PROGRESS, STT_EVENT_ERROR, STT_EVENT_TRANSCRIPT,
 };
 
 mod stt_capture;
 pub use stt_capture::{
     start_listening as stt_start_listening_rs, stop_listening as stt_stop_listening_rs,
-    ListenOptions, TranscriptEvent, WHISPER_SAMPLE_RATE_HZ, WHISPER_SAMPLES_PER_MS,
+    ListenOptions, TranscriptEvent, WHISPER_SAMPLES_PER_MS, WHISPER_SAMPLE_RATE_HZ,
 };
 
 #[cfg(feature = "m2c-native")]
@@ -274,7 +286,9 @@ pub use voice_platform::get_capabilities as voice_platform_get_capabilities_rs;
 // atomically (staging + rename). See `templates.rs`
 // for the full design and the unit tests.
 mod templates;
-pub use templates::{apply as templates_apply, ApplyResult as TemplatesApplyResult, TemplateError as TemplatesError};
+pub use templates::{
+    apply as templates_apply, ApplyResult as TemplatesApplyResult, TemplateError as TemplatesError,
+};
 mod native_dictation;
 pub use native_dictation::get_native_dictation_contract;
 
@@ -405,7 +419,7 @@ fn haptic(intensity: HapticIntensity) -> Result<(), String> {
 /// Phase I: the user's home, Documents, and Desktop
 /// directories. Returned as strings (display form on each
 /// platform) so the JS-side deep-link path validator can
-/// check that an incoming `app://lipi.open?path=...` URL
+/// check that an incoming `lipi://open?path=...` URL
 /// points at a user-owned location. We expand `~` /
 /// `%USERPROFILE%` to the absolute, canonical paths
 /// (resolving symlinks where the platform can) so a
@@ -432,6 +446,17 @@ fn expand_dir(p: &std::path::Path) -> Option<String> {
     // Strip the Windows extended-length prefix.
     let stripped = s.strip_prefix(r"\\?\").unwrap_or(&s);
     Some(stripped.to_string())
+}
+
+fn canonical_path_string(p: &Path) -> Option<String> {
+    let canonical = std::fs::canonicalize(p).ok()?;
+    let s = canonical.to_string_lossy().to_string();
+    let stripped = s.strip_prefix(r"\\?\").unwrap_or(&s);
+    Some(stripped.to_string())
+}
+
+fn path_is_exact_root_or_descendant(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
 }
 
 #[tauri::command]
@@ -494,6 +519,47 @@ fn fs_read_file(path: String) -> Result<FileContent, FsError> {
 }
 
 #[tauri::command]
+fn validate_deep_link_path(path: String) -> Result<String, String> {
+    let raw_path = Path::new(&path);
+    if !raw_path.is_absolute() {
+        return Err("not-absolute".to_string());
+    }
+
+    let canonical = canonical_path_string(raw_path).ok_or_else(|| "not-found".to_string())?;
+    let canonical_path = Path::new(&canonical);
+    let user_dirs = get_user_dirs();
+
+    let mut roots: Vec<&str> = Vec::new();
+    if !user_dirs.home.is_empty() {
+        roots.push(user_dirs.home.as_str());
+    }
+    if let Some(documents) = user_dirs.documents.as_deref() {
+        roots.push(documents);
+    }
+    if let Some(desktop) = user_dirs.desktop.as_deref() {
+        roots.push(desktop);
+    }
+
+    let inside_user_dirs = roots
+        .iter()
+        .map(Path::new)
+        .any(|root| path_is_exact_root_or_descendant(canonical_path, root));
+    if !inside_user_dirs {
+        return Err("outside-user-dirs".to_string());
+    }
+
+    Ok(canonical)
+}
+
+#[tauri::command]
+fn fs_read_workspace_file(workspace_root: String, path: String) -> Result<FileContent, FsError> {
+    read_workspace_file(
+        std::path::Path::new(&workspace_root),
+        std::path::Path::new(&path),
+    )
+}
+
+#[tauri::command]
 fn fs_write_file(path: String, content: String) -> Result<(), FsError> {
     write_file(std::path::Path::new(&path), &content)
 }
@@ -534,8 +600,29 @@ fn fs_path_exists(path: String) -> bool {
 // 5d+ enhancement.
 
 #[tauri::command]
-async fn run_command(args: RunCommandArgs) -> Result<RunCommandResult, RunCommandError> {
-    run_command_rs(args).await
+async fn run_command(
+    app: AppHandle,
+    args: RunCommandArgs,
+) -> Result<RunCommandResult, RunCommandError> {
+    let subject = args.policy.as_ref().map(|p| p.tool_name.clone());
+    let workspace_root = args.policy.as_ref().map(|p| p.workspace_root.clone());
+    let program = args.program.clone();
+    let result = run_command_rs(args).await;
+    let detail = match &result {
+        Ok(_) => Some(program),
+        Err(e) => Some(e.to_string()),
+    };
+    audit_ipc(
+        &app,
+        IpcAuditEvent {
+            action: "run_command",
+            outcome: if result.is_ok() { "allowed" } else { "blocked" },
+            subject: subject.as_deref(),
+            workspace_root: workspace_root.as_deref(),
+            detail: detail.as_deref(),
+        },
+    );
+    result
 }
 
 // Phase 9 (Tiniest scope) — `lsp_run_stdio` /
@@ -552,7 +639,28 @@ async fn lsp_run_stdio(
     app: tauri::AppHandle,
     args: RunStdioArgs,
 ) -> Result<RunStdioResult, StdioError> {
-    stdio_run_stdio_rs(state, app, args).await
+    let subject = format!(
+        "{:?}",
+        args.server_kind.unwrap_or(LspServerKind::Typescript)
+    );
+    let workspace_root = args.cwd.clone();
+    let command = args.command.clone();
+    let result = stdio_run_stdio_rs(state, app.clone(), args).await;
+    let detail = match &result {
+        Ok(_) => Some(command),
+        Err(e) => Some(e.to_string()),
+    };
+    audit_ipc(
+        &app,
+        IpcAuditEvent {
+            action: "lsp_run_stdio",
+            outcome: if result.is_ok() { "allowed" } else { "blocked" },
+            subject: Some(&subject),
+            workspace_root: workspace_root.as_deref(),
+            detail: detail.as_deref(),
+        },
+    );
+    result
 }
 
 #[tauri::command]
@@ -608,9 +716,27 @@ async fn lsp_check_available(
 
 #[tauri::command]
 async fn http_request(
+    app: AppHandle,
     args: HttpRequestArgs,
 ) -> Result<HttpRequestResult, HttpRequestError> {
-    http_request_rs(args).await
+    let subject = args.method.clone().unwrap_or_else(|| "GET".to_string());
+    let url = args.url.clone();
+    let result = http_request_rs(args).await;
+    let detail = match &result {
+        Ok(_) => Some(url),
+        Err(e) => Some(e.to_string()),
+    };
+    audit_ipc(
+        &app,
+        IpcAuditEvent {
+            action: "http_request",
+            outcome: if result.is_ok() { "allowed" } else { "blocked" },
+            subject: Some(&subject),
+            workspace_root: None,
+            detail: detail.as_deref(),
+        },
+    );
+    result
 }
 
 // --- Phase 5c: workspace-local lipi-tools.json storage -----------------
@@ -654,10 +780,7 @@ fn read_lipi_tools(workspace_root: String) -> Result<LipiToolsFile, LipiToolsErr
 /// truth, the file is just a
 /// persistence layer.
 #[tauri::command]
-fn write_lipi_tools(
-    workspace_root: String,
-    file: LipiToolsFile,
-) -> Result<(), LipiToolsError> {
+fn write_lipi_tools(workspace_root: String, file: LipiToolsFile) -> Result<(), LipiToolsError> {
     let path = std::path::Path::new(&workspace_root);
     write_lipi_tools_rs(path, &file)
 }
@@ -809,10 +932,9 @@ fn stt_list_models() -> Vec<SttModelDescriptor> {
 /// path.
 #[tauri::command]
 fn stt_list_installed_models(app: AppHandle) -> Result<Vec<String>, SttError> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    let data_dir = app.path().app_data_dir().map_err(|e| SttError::Io {
+        message: e.to_string(),
+    })?;
     Ok(stt_list_installed_models_rs(&data_dir))
 }
 
@@ -822,10 +944,9 @@ fn stt_list_installed_models(app: AppHandle) -> Result<Vec<String>, SttError> {
 /// if this returns `false`.
 #[tauri::command]
 fn stt_is_available(app: AppHandle) -> Result<bool, SttError> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    let data_dir = app.path().app_data_dir().map_err(|e| SttError::Io {
+        message: e.to_string(),
+    })?;
     Ok(stt_is_available_rs(&data_dir))
 }
 
@@ -839,10 +960,9 @@ fn stt_is_available(app: AppHandle) -> Result<bool, SttError> {
 /// completed).
 #[tauri::command]
 async fn stt_install_model(app: AppHandle, id: String) -> Result<(), SttError> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    let data_dir = app.path().app_data_dir().map_err(|e| SttError::Io {
+        message: e.to_string(),
+    })?;
     stt_install_model_rs(&app, &data_dir, &id).await
 }
 
@@ -852,10 +972,9 @@ async fn stt_install_model(app: AppHandle, id: String) -> Result<(), SttError> {
 /// from the model card's "Delete" button.
 #[tauri::command]
 async fn stt_remove_model(app: AppHandle, id: String) -> Result<(), SttError> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    let data_dir = app.path().app_data_dir().map_err(|e| SttError::Io {
+        message: e.to_string(),
+    })?;
     stt_remove_model_rs(&app, &data_dir, &id).await
 }
 
@@ -865,10 +984,9 @@ async fn stt_remove_model(app: AppHandle, id: String) -> Result<(), SttError> {
 /// calls this from the radio-button click.
 #[tauri::command]
 async fn stt_set_active_model(app: AppHandle, id: String) -> Result<(), SttError> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    let data_dir = app.path().app_data_dir().map_err(|e| SttError::Io {
+        message: e.to_string(),
+    })?;
     stt_set_active_model_rs(&app, &data_dir, &id).await
 }
 
@@ -886,10 +1004,9 @@ async fn stt_start_listening(
     app: AppHandle,
     opts: Option<stt_listen_args_js::ListenArgs>,
 ) -> Result<String, SttError> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| SttError::Io { message: e.to_string() })?;
+    let data_dir = app.path().app_data_dir().map_err(|e| SttError::Io {
+        message: e.to_string(),
+    })?;
     let listen_opts = opts
         .map(|o| ListenOptions {
             language: o.language,
@@ -905,10 +1022,7 @@ async fn stt_start_listening(
 /// After this call, the next `stt://transcript` event
 /// for this session will be the last (if any).
 #[tauri::command]
-async fn stt_stop_listening(
-    app: AppHandle,
-    session_id: String,
-) -> Result<(), SttError> {
+async fn stt_stop_listening(app: AppHandle, session_id: String) -> Result<(), SttError> {
     stt_stop_listening_rs(&app, &session_id).await
 }
 
@@ -1037,13 +1151,43 @@ fn terminal_open(
     state: tauri::State<'_, Arc<TerminalState>>,
     args: TerminalOpenArgs,
 ) -> Result<OpenResult, TerminalError> {
-    let sink: Arc<dyn EventSink> = Arc::new(TauriEventSink { app });
+    if args.shell.is_some() {
+        audit_ipc(
+            &app,
+            IpcAuditEvent {
+                action: "terminal_open",
+                outcome: "blocked",
+                subject: args.shell.as_deref(),
+                workspace_root: None,
+                detail: Some("terminal shell override is not allowed"),
+            },
+        );
+        return Err(TerminalError::Policy(
+            "terminal shell override is not allowed".to_string(),
+        ));
+    }
+    let sink: Arc<dyn EventSink> = Arc::new(TauriEventSink { app: app.clone() });
     let opts = OpenOptions {
-        shell: args.shell,
+        shell: None,
         rows: args.rows.unwrap_or(24),
         cols: args.cols.unwrap_or(80),
     };
-    terminal_open_rs(state.inner(), opts, sink)
+    let result = terminal_open_rs(state.inner(), opts, sink);
+    let detail = match &result {
+        Ok(open) => Some(open.shell.clone()),
+        Err(e) => Some(e.to_string()),
+    };
+    audit_ipc(
+        &app,
+        IpcAuditEvent {
+            action: "terminal_open",
+            outcome: if result.is_ok() { "allowed" } else { "blocked" },
+            subject: None,
+            workspace_root: None,
+            detail: detail.as_deref(),
+        },
+    );
+    result
 }
 
 /// Write a chunk of bytes to the session's stdin. The bytes
@@ -1100,11 +1244,7 @@ fn terminal_default_shell_cmd() -> String {
 /// keychain and returns. The frontend clears its input
 /// field on success.
 #[tauri::command]
-fn secrets_set_api_key(
-    app: AppHandle,
-    provider: String,
-    key: String,
-) -> Result<(), SecretError> {
+fn secrets_set_api_key(app: AppHandle, provider: String, key: String) -> Result<(), SecretError> {
     let snapshot_path = resolve_snapshot_path(&app);
     secrets_set_rs(&provider, &key, snapshot_path.as_deref())
 }
@@ -1114,25 +1254,19 @@ fn secrets_set_api_key(
 /// "Configured" / "Not configured" badge. The actual key
 /// value is never returned to the JS side.
 #[tauri::command]
-fn secrets_has_api_key(
-    app: AppHandle,
-    provider: String,
-) -> Result<bool, SecretError> {
+fn secrets_has_api_key(app: AppHandle, provider: String) -> Result<bool, SecretError> {
     let snapshot_path = resolve_snapshot_path(&app);
     secrets_has_rs(&provider, snapshot_path.as_deref())
 }
 
 /// Delete the API key for the given provider. Idempotent.
 #[tauri::command]
-fn secrets_delete_api_key(
-    app: AppHandle,
-    provider: String,
-) -> Result<(), SecretError> {
+fn secrets_delete_api_key(app: AppHandle, provider: String) -> Result<(), SecretError> {
     let snapshot_path = resolve_snapshot_path(&app);
     secrets_delete_rs(&provider, snapshot_path.as_deref())
 }
 
-/// M2b: returns the raw API key for the given provider.
+/// M2b: returns the raw API key for Wispr only.
 ///
 /// Unlike the AI providers (whose keys are read by the Rust
 /// AI proxy and never enter the JS side per Decision #17),
@@ -1145,8 +1279,10 @@ fn secrets_delete_api_key(
 /// duration of the WebSocket call, and dropped on
 /// `stop()` / unmount.
 ///
-/// Returns `None` if the provider has no key in the
+/// Returns `None` if Wispr has no key in the
 /// keychain. Throws `SecretError` on keychain errors.
+/// Rejects every other provider id before reading the
+/// keychain; AI-provider keys must stay Rust-side.
 ///
 /// Threat model:
 ///   - The key is exposed to the JS side, but only in the
@@ -1158,12 +1294,9 @@ fn secrets_delete_api_key(
 ///   - The keychain entry is still authoritative; this
 ///     command is a "give me the secret one time" call.
 #[tauri::command]
-fn secrets_get_api_key(
-    app: AppHandle,
-    provider: String,
-) -> Result<Option<String>, SecretError> {
+fn secrets_get_api_key(app: AppHandle, provider: String) -> Result<Option<String>, SecretError> {
     let snapshot_path = resolve_snapshot_path(&app);
-    secrets_get_api_key_rs(&provider, snapshot_path.as_deref())
+    secrets_get_renderer_api_key_rs(&provider, snapshot_path.as_deref())
 }
 
 /// Resolve the Stronghold snapshot path from the
@@ -1175,13 +1308,9 @@ fn secrets_get_api_key(
 fn resolve_snapshot_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     #[cfg(feature = "mobile")]
     {
-        if crate::voice_platform::current_os_family()
-            == crate::voice_platform::OsFamily::Android
-        {
+        if crate::voice_platform::current_os_family() == crate::voice_platform::OsFamily::Android {
             if let Ok(dir) = app.path().app_local_data_dir() {
-                return Some(
-                    crate::secrets_stronghold::snapshot_path_for(&dir),
-                );
+                return Some(crate::secrets_stronghold::snapshot_path_for(&dir));
             }
         }
     }
@@ -1294,7 +1423,9 @@ struct ChatRequestArgs {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 enum ChatEventPayload {
-    Delta { text: String },
+    Delta {
+        text: String,
+    },
     /// 5b-4: a complete tool call (function name +
     /// assembled JSON argument). The model has
     /// decided to invoke a named function. The JS
@@ -1329,7 +1460,10 @@ enum ChatEventPayload {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         stop_reason: Option<String>,
     },
-    Error { error_kind: String, message: String },
+    Error {
+        error_kind: String,
+        message: String,
+    },
 }
 
 impl From<ChatDelta> for ChatEventPayload {
@@ -1339,13 +1473,20 @@ impl From<ChatDelta> for ChatEventPayload {
             ChatDelta::ToolCall { id, name, input } => {
                 ChatEventPayload::ToolCall { id, name, input }
             }
-            ChatDelta::Done { cancelled, stop_reason } => ChatEventPayload::Done {
+            ChatDelta::Done {
+                cancelled,
+                stop_reason,
+            } => ChatEventPayload::Done {
                 cancelled,
                 stop_reason,
             },
-            ChatDelta::Error { error_kind, message } => {
-                ChatEventPayload::Error { error_kind, message }
-            }
+            ChatDelta::Error {
+                error_kind,
+                message,
+            } => ChatEventPayload::Error {
+                error_kind,
+                message,
+            },
         }
     }
 }
@@ -1380,10 +1521,7 @@ impl From<ChatDelta> for ChatEventPayload {
 /// `ChatDelta::Error` chunks (which the JS
 /// store demuxes into the same error UI).
 #[tauri::command]
-async fn ai_chat_stream(
-    app: AppHandle,
-    args: ChatRequestArgs,
-) -> Result<String, ChatError> {
+async fn ai_chat_stream(app: AppHandle, args: ChatRequestArgs) -> Result<String, ChatError> {
     // Look up the provider. Unknown provider
     // id → `ChatError::UnknownProvider`. The JS
     // side pre-validates with `ai_list_providers`
@@ -1477,16 +1615,23 @@ async fn ai_chat_stream(
         let on_chunk = move |delta: ChatDelta| {
             // If this is a Done chunk, capture
             // the payload before emitting.
-            if let ChatDelta::Done { cancelled, stop_reason } = &delta {
+            if let ChatDelta::Done {
+                cancelled,
+                stop_reason,
+            } = &delta
+            {
                 let mut state = done_state_for_chunk.lock().expect("done state poisoned");
                 state.cancelled = *cancelled;
                 state.stop_reason = stop_reason.clone();
             }
             let payload: ChatEventPayload = delta.into();
-            let _ = app_for_chunk.emit(AI_EVENT_CHUNK, ChunkEnvelope {
-                request_id: request_id_for_chunk.clone(),
-                payload,
-            });
+            let _ = app_for_chunk.emit(
+                AI_EVENT_CHUNK,
+                ChunkEnvelope {
+                    request_id: request_id_for_chunk.clone(),
+                    payload,
+                },
+            );
         };
 
         // Dispatch by provider. The OpenAI
@@ -1542,11 +1687,14 @@ async fn ai_chat_stream(
         };
 
         if let Err(e) = stream_result {
-            let _ = app.emit(AI_EVENT_ERROR, ErrorEnvelope {
-                request_id: request_id.clone(),
-                kind: "transport".to_string(),
-                message: format!("chat_stream failed: {e}"),
-            });
+            let _ = app.emit(
+                AI_EVENT_ERROR,
+                ErrorEnvelope {
+                    request_id: request_id.clone(),
+                    kind: "transport".to_string(),
+                    message: format!("chat_stream failed: {e}"),
+                },
+            );
         }
 
         // Final `ai://done` event. We pull the
@@ -1563,11 +1711,14 @@ async fn ai_chat_stream(
             (s.cancelled, s.stop_reason.clone())
         };
         let (cancelled, stop_reason) = final_state;
-        let _ = app.emit(AI_EVENT_DONE, DoneEnvelope {
-            request_id,
-            cancelled,
-            stop_reason,
-        });
+        let _ = app.emit(
+            AI_EVENT_DONE,
+            DoneEnvelope {
+                request_id,
+                cancelled,
+                stop_reason,
+            },
+        );
     });
 
     // Return the requestId synchronously.
@@ -1684,7 +1835,7 @@ fn random_hex(n: usize) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Phase I: when the OS hands the app an `app://lipi.open?path=...`
+    // Phase I: when the OS hands the app a `lipi://open?path=...`
     // URL (cold start, warm activation, or a second-instance launch on
     // Windows / Linux), the deep-link plugin fires a `deep-link://new-url`
     // event. We re-emit it as `lipi://deep-link` so the frontend doesn't
@@ -1837,6 +1988,7 @@ pub fn run() {
             open_devtools,
             fs_read_dir,
             fs_read_file,
+            fs_read_workspace_file,
             fs_write_file,
             fs_pick_folder,
             fs_create_file,
@@ -1846,6 +1998,7 @@ pub fn run() {
             fs_watch,
             fs_unwatch,
             workspace_search,
+            workspace_search_cancel,
             git_open,
             git_status,
             git_current_branch,
@@ -1887,6 +2040,7 @@ pub fn run() {
             stt_stop_listening,
             voice_platform_get_capabilities,
             get_user_dirs,
+            validate_deep_link_path,
             apply_template,
             haptic,
             get_native_dictation_contract,
@@ -1929,6 +2083,31 @@ pub fn run() {
 // before a future Mac / Linux session tries to build.
 // ────────────────────────────────────────────────────────
 #[cfg(test)]
+mod deep_link_path_validation {
+    use super::path_is_exact_root_or_descendant;
+    use std::path::Path;
+
+    #[test]
+    fn root_boundary_accepts_exact_root_and_descendant() {
+        let root = Path::new("/tmp/lipi-home");
+        assert!(path_is_exact_root_or_descendant(root, root));
+        assert!(path_is_exact_root_or_descendant(
+            Path::new("/tmp/lipi-home/project"),
+            root
+        ));
+    }
+
+    #[test]
+    fn root_boundary_rejects_sibling_prefix() {
+        let root = Path::new("/tmp/lipi-home");
+        assert!(!path_is_exact_root_or_descendant(
+            Path::new("/tmp/lipi-home-evil/project"),
+            root
+        ));
+    }
+}
+
+#[cfg(test)]
 mod tauri_config {
     use std::fs;
 
@@ -1940,8 +2119,8 @@ mod tauri_config {
     fn tauri_conf_json_mobile_block_parses() {
         let raw = fs::read_to_string(TAURI_CONF)
             .expect("tauri.conf.json must be readable (run from src-tauri/ dir)");
-        let v: serde_json::Value = serde_json::from_str(&raw)
-            .expect("tauri.conf.json must be valid JSON");
+        let v: serde_json::Value =
+            serde_json::from_str(&raw).expect("tauri.conf.json must be valid JSON");
 
         // The mobile block is the source of truth for
         // the platform floors. These exact values are
@@ -1968,14 +2147,28 @@ mod tauri_config {
     }
 
     #[test]
+    fn tauri_conf_json_uses_lipi_deep_link_scheme() {
+        let raw = fs::read_to_string(TAURI_CONF)
+            .expect("tauri.conf.json must be readable (run from src-tauri/ dir)");
+        let v: serde_json::Value =
+            serde_json::from_str(&raw).expect("tauri.conf.json must be valid JSON");
+
+        let schemes = v
+            .pointer("/plugins/deep-link/desktop/schemes")
+            .and_then(|v| v.as_array())
+            .expect("deep-link desktop schemes must be configured");
+        assert_eq!(schemes.len(), 1);
+        assert_eq!(schemes[0].as_str(), Some("lipi"));
+    }
+
+    #[test]
     fn per_platform_conf_files_parse() {
         // Both files must be present and parse as valid
         // JSON. The exact schema is enforced by the Tauri
         // CLI on `cargo tauri {ios,android} build`; here
         // we just check they exist + parse.
         for path in [TAURI_ANDROID_CONF, TAURI_IOS_CONF] {
-            let raw = fs::read_to_string(path)
-                .unwrap_or_else(|_| panic!("{path} must exist"));
+            let raw = fs::read_to_string(path).unwrap_or_else(|_| panic!("{path} must exist"));
             let _: serde_json::Value = serde_json::from_str(&raw)
                 .unwrap_or_else(|e| panic!("{path} must be valid JSON: {e}"));
         }

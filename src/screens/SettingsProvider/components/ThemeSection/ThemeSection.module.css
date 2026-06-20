@@ -1,0 +1,120 @@
+/**
+ * ThemeSection.module.css — the Appearance → Theme block in
+ * Settings. Self-contained: section heading, lede paragraph,
+ * theme-card grid, and the "Frame your view" subsection
+ * (heading + lede + CropPicker wrapper).
+ *
+ * The layout re-uses the existing Settings section vocabulary
+ * (`sectionHeading`, `sectionLede`) but defines its own class
+ * names so the section is portable — moving it to a different
+ * Settings screen or a future "Quick switcher" Command Palette
+ * doesn't drag the Settings screen's stylesheet along.
+ *
+ * Per Rule 1, every color / spacing / radius / shadow comes
+ * from `src/shared/styles/tokens.css`. No raw px except
+ * accent decorations that are *meant* to be pixel-stable
+ * across zoom levels (the 3x3 grid dimensions in CropPicker's
+ * own module).
+ */
+
+.section {
+  /* Vertical rhythm matches the surrounding Settings sections
+   * (WebSpeechCard, OnDeviceCard, LanguageServerCard). */
+  margin-top: var(--space-8);
+}
+
+.heading {
+  /* Same scale as SettingsProvider's `.sectionHeading` —
+   * semibold, large, with subtle letter-spacing. */
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.005em;
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-3) 0;
+}
+
+.lede {
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-secondary);
+  max-width: 720px;
+  margin: 0 0 var(--space-6) 0;
+}
+
+/* Theme card grid — 3 cols on desktop, 2 on tablet, 1 on phone.
+ * The breakpoint tokens (`--bp-tablet-max: 900px`) come from
+ * tokens.css. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+@media (max-width: 900px) {
+  .grid {
+    /* Two columns on tablet portrait. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .grid {
+    /* Single column on phone. */
+    grid-template-columns: 1fr;
+  }
+}
+
+/* "Frame your view" subsection — mirrors the existing
+ * `.subSectionHeading` style in SettingsProvider.module.css.
+ * Same idea, scoped locally so the section is portable. */
+.frame {
+  margin-top: var(--space-6);
+}
+
+.frameHeading {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  color: var(--color-text-primary);
+  margin: 0 0 var(--space-2) 0;
+}
+
+.frameLede {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-secondary);
+  max-width: 640px;
+  margin: 0 0 var(--space-4) 0;
+}
+
+/* Reset-to-center link, sitting below the crop picker. Mirrors
+ * the muted inline-action pattern used elsewhere in Settings
+ * (e.g. "Reset all" danger-zone link). We put it BELOW the
+ * picker rather than inside it because the picker already has
+ * its own internal Reset button — exposing both keeps the
+ * affordance discoverable from the page-level section
+ * without forcing the user to reach into the picker row. */
+.resetLink {
+  margin-top: var(--space-2);
+  padding: 0;
+  background: transparent;
+  border: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-decoration: underline;
+  cursor: pointer;
+  transition: color var(--motion-fast) var(--easing-standard);
+}
+
+.resetLink:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+.resetLink:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  text-decoration: none;
+}

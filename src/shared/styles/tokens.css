@@ -77,6 +77,40 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
 
+  /* ================================================================
+   * Glass system — Apple Liquid Glass (WWDC25 port)
+   * The single source of truth for translucent surfaces, squircle
+   * geometry, soft outer shadows, and illumination highlights.
+   *
+   * The color tokens default to LIGHT values here; the dark theme
+   * overrides them in the [data-theme="dark"] block. Structural
+   * tokens (blur radii, highlights, depth, geometry) are theme-
+   * independent.
+   *
+   * Names are 1:1 with tokens-glass.fig — keep aligned with the
+   * Figma source for handoff.
+   * ================================================================ */
+
+  /* -- Glass surfaces (translucent body) -- */
+  --glass-bg:           rgba(255, 255, 255, 0.55);
+  --glass-bg-strong:    rgba(255, 255, 255, 0.72);
+  --glass-bg-subtle:    rgba(255, 255, 255, 0.40);
+  --glass-bg-tinted:    rgba(37, 99, 235, 0.14);
+
+  /* -- Glass edge (squircle + inner highlights) -- */
+  --glass-border:       0.5px solid rgba(255, 255, 255, 0.65);
+  --glass-highlight:    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --glass-depth:        inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+  --glass-outer-shadow: 0 12px 32px rgba(15, 15, 18, 0.08);
+
+  /* -- Glass blur (illumination) -- */
+  --glass-blur:         blur(30px) saturate(180%);
+  --glass-blur-subtle:  blur(15px) saturate(180%);
+
+  /* -- Squircle geometry -- */
+  --radius-glass:       24px;
+  --radius-control:     12px;
+
   /* -- Z-index scale -- */
   --z-base: 1;
   --z-overlay: 100;

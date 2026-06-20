@@ -92,7 +92,11 @@
 import { create } from 'zustand';
 
 import { readLipiTools, writeLipiTools, type LipiToolEntry, type LipiToolsFile } from '@/ipc';
-import { registerCustomTool } from '@/screens/EditorWorkspace/state/toolRegistry';
+import {
+  deregisterCustomTool,
+  listTools,
+  registerCustomTool,
+} from '@/screens/EditorWorkspace/state/toolRegistry';
 
 interface CustomToolsState {
   /** The in-memory list of custom tools.
@@ -165,7 +169,7 @@ interface CustomToolsState {
    *  entry is REPLACED, not merged —
    *  the user passes the full new
    *  entry. */
-  updateTool: (entry: LipiToolEntry) => Promise<void>;
+  updateTool: (entry: LipiToolEntry, previousName?: string) => Promise<void>;
 
   /** Remove a tool by name. No-op if
    *  the tool doesn't exist. */
@@ -252,6 +256,18 @@ function validateEntry(
   return null;
 }
 
+function syncCustomToolRegistry(tools: LipiToolEntry[]): void {
+  const nextNames = new Set(tools.map((tool) => tool.name));
+  for (const registered of listTools()) {
+    if (registered.kind !== 'builtin' && !nextNames.has(registered.name)) {
+      deregisterCustomTool(registered.name);
+    }
+  }
+  for (const entry of tools) {
+    registerCustomTool(entry);
+  }
+}
+
 export const useCustomToolsStore = create<CustomToolsState>((set, get) => ({
   tools: [],
   workspaceRoot: null,
@@ -267,16 +283,7 @@ export const useCustomToolsStore = create<CustomToolsState>((set, get) => ({
     try {
       const file: LipiToolsFile = await readLipiTools(workspaceRoot);
       set({ tools: file.tools, loaded: true, loading: false });
-      // Re-register every tool with the
-      // registry. This is a full
-      // re-register (not a delta) — the
-      // store is the source of truth, so
-      // any drift between the registry
-      // and the file is corrected by
-      // this load.
-      for (const entry of file.tools) {
-        registerCustomTool(entry);
-      }
+      syncCustomToolRegistry(file.tools);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       set({
@@ -304,7 +311,7 @@ export const useCustomToolsStore = create<CustomToolsState>((set, get) => ({
     await get().save();
   },
 
-  updateTool: async (entry) => {
+  updateTool: async (entry, previousName) => {
     // For an update, we pre-filter the
     // sibling list to exclude the
     // entry's own name — a rename
@@ -315,16 +322,26 @@ export const useCustomToolsStore = create<CustomToolsState>((set, get) => ({
     // filter) is the only thing
     // that triggers a duplicate
     // error.
-    const siblings = get().tools.filter((t) => t.name !== entry.name);
+    const currentName = previousName ?? entry.name;
+    const current = get().tools.find((tool) => tool.name === currentName);
+    if (!current) {
+      const message = `Tool '${currentName}' does not exist.`;
+      set({ lastError: message });
+      throw new Error(message);
+    }
+    const siblings = get().tools.filter((t) => t.name !== currentName);
     const err = validateEntry(entry, siblings);
     if (err) {
       set({ lastError: err });
       throw new Error(err);
     }
     set((s) => ({
-      tools: s.tools.map((t) => (t.name === entry.name ? entry : t)),
+      tools: s.tools.map((t) => (t.name === currentName ? entry : t)),
       lastError: null,
     }));
+    if (currentName !== entry.name) {
+      deregisterCustomTool(currentName);
+    }
     registerCustomTool(entry);
     await get().save();
   },
@@ -341,18 +358,7 @@ export const useCustomToolsStore = create<CustomToolsState>((set, get) => ({
       return;
     }
     set({ tools: after, lastError: null });
-    // We don't have a "deregister" in
-    // the registry — the tool stays
-    // registered but the store no
-    // longer returns it. To make the
-    // "removed" state observable, we
-    // also re-register every remaining
-    // tool (a no-op for them, but
-    // ensures the registry reflects
-    // the on-disk state).
-    for (const entry of get().tools) {
-      registerCustomTool(entry);
-    }
+    deregisterCustomTool(name);
     await get().save();
   },
 

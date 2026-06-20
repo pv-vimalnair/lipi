@@ -691,6 +691,7 @@ export class LspClient {
     let spawn: RunStdioResult;
     try {
       spawn = await lspRunStdio({
+        serverKind: this.kind,
         command: spec.command,
         args: spec.args,
         cwd: this.workspaceRoot,

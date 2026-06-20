@@ -1,0 +1,1205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lipi — IDE Preview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <style>
+    /* ============================================================
+       PRODUCTION DARK TOKENS — matches src/shared/styles/tokens.css
+       so the mock renders identically to the running app.
+       The embedded IDE preview (which uses --paper/--card/--ink/etc.)
+       gets dark-restyled automatically via the aliases below.
+       ============================================================ */
+    :root {
+      /* Production tokens.css (mirrored) */
+      --color-bg-base:        #0b0d10;
+      --color-bg-elevated:    #14171c;
+      --color-bg-pane:        #1a1e25;
+      --color-bg-hover:       #232831;
+      --color-bg-active:      #2a313c;
+      --color-border-subtle:  #232831;
+      --color-border-strong:  #353c47;
+      --color-text-primary:   #e6e8eb;
+      --color-text-secondary: #aab1bb;
+      --color-text-muted:     #6e7682;
+      --color-text-inverse:   #0b0d10;
+      --color-accent:         #4f8cff;
+      --color-accent-hover:   #6a9fff;
+      --color-accent-soft:    rgba(79, 140, 255, 0.18);
+
+      /* Backwards-compat aliases — the rest of the mock was written
+         against the cream --paper / --ink / --card / --line vocabulary. */
+      --paper:        var(--color-bg-base);
+      --paper-2:      var(--color-bg-elevated);
+      --paper-3:      var(--color-border-strong);
+      --card:         var(--color-bg-elevated);
+      --card-edge:    var(--color-border-subtle);
+      --ink:          var(--color-text-primary);
+      --ink-2:        var(--color-text-secondary);
+      --ink-3:        var(--color-text-muted);
+      --line:         var(--color-border-subtle);
+      --line-soft:    var(--color-border-subtle);
+      --accent-soft:  var(--color-bg-pane);
+      --shadow-1:     0 1px 2px rgba(0, 0, 0, 0.4);
+      --shadow-2:     0 4px 12px rgba(0, 0, 0, 0.45),
+                      0 1px 2px rgba(0, 0, 0, 0.4);
+
+      /* Theme accent (driven by active theme — overridden via JS) */
+      --accent:       #8a5a2a;
+
+      /* Theme image slots — driven by active theme (overridden via JS) */
+      --active-img:   url('/themes/01-hickory-hollow.png');
+      --active-crop:  50% 50%;
+
+      /* Typography — production: Inter / JetBrains Mono */
+      --font-serif:   var(--font-family-sans, 'Inter', system-ui, sans-serif);
+      --font-sans:    'Inter', -apple-system, BlinkMacSystemFont,
+                      "Segoe UI", system-ui, sans-serif;
+      --font-mono:    "JetBrains Mono", "SF Mono", "Cascadia Code",
+                      "Consolas", "Menlo", monospace;
+    }
+
+    /* ============================================================
+       RESET + BASE
+       ============================================================ */
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font-sans);
+      font-size: 13.5px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+
+      /* Subtle paper grain — two layered radial dot patterns */
+      background-image:
+        radial-gradient(rgba(120, 95, 60, 0.045) 1px, transparent 1px),
+        radial-gradient(rgba(120, 95, 60, 0.03) 1px, transparent 1px);
+      background-size: 18px 18px, 7px 7px;
+      background-position: 0 0, 9px 9px;
+    }
+
+    /* ============================================================
+       IDE WINDOW — title bar (36) / body (1fr) / status (24)
+       ============================================================ */
+    .ide {
+      display: grid;
+      grid-template-rows: 36px 1fr 24px;
+      height: 720px;
+      max-width: 1480px;
+      margin: 32px auto 0;
+      background: var(--card);
+      border: 1px solid var(--card-edge);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow:
+        0 30px 60px -20px rgba(60, 45, 25, 0.25),
+        0 0 0 0.5px rgba(120, 95, 60, 0.08);
+    }
+
+    /* ============================================================
+       TITLE BAR — macOS dots · centered title · search box
+       ============================================================ */
+    .titlebar {
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      background: var(--paper-2);
+      border-bottom: 1px solid var(--line);
+      gap: 12px;
+    }
+
+    .dots {
+      display: flex;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      border: 0.5px solid rgba(0, 0, 0, 0.12);
+    }
+
+    .dot.r { background: #ed6a5e; }
+    .dot.y { background: #f5bf4f; }
+    .dot.g { background: #62c554; }
+
+    .title {
+      flex: 1;
+      text-align: center;
+      font-size: 12.5px;
+      color: var(--ink-2);
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .titlebar-search {
+      flex-shrink: 0;
+      width: 220px;
+      padding: 4px 10px 4px 30px;
+      background-color: var(--paper);
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238a7d68' stroke-width='2.2' stroke-linecap='round'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
+      background-repeat: no-repeat;
+      background-position: 9px center;
+      background-size: 13px 13px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      color: var(--ink-2);
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    .titlebar-search::placeholder {
+      color: var(--ink-3);
+    }
+
+    .titlebar-search:focus {
+      border-color: var(--accent);
+    }
+
+    /* ============================================================
+       BODY GRID — rail (52) · sidebar (240) · editor (1fr) · panel (320)
+       ============================================================ */
+    .body {
+      display: grid;
+      grid-template-columns: 52px 240px 1fr 320px;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    /* ============================================================
+       ACTIVITY RAIL — 6 vertical icons + settings at bottom
+       ============================================================ */
+    .rail {
+      background: var(--paper-2);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 8px 0;
+      gap: 4px;
+    }
+
+    .rail-btn {
+      position: relative;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border: none;
+      background: transparent;
+      border-radius: 6px;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      color: var(--ink-3);
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+
+    .rail-btn:hover {
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.4);
+    }
+
+    .rail-btn.active {
+      color: var(--ink);
+    }
+
+    /* Active rail button gets the accent stripe on the left edge */
+    .rail-btn.active::before {
+      content: "";
+      position: absolute;
+      left: -8px;
+      top: 6px;
+      bottom: 6px;
+      width: 2px;
+      background: var(--accent);
+      border-radius: 0 2px 2px 0;
+    }
+
+    .rail-btn svg {
+      width: 22px;
+      height: 22px;
+      display: block;
+    }
+
+    .rail-spacer {
+      flex: 1;
+    }
+
+    /* ============================================================
+       SIDEBAR — file tree (240px wide)
+       ============================================================ */
+    .sidebar {
+      background: var(--paper-2);
+      border-right: 1px solid var(--line);
+      overflow-y: auto;
+      padding: 8px 0 16px;
+      font-size: 13px;
+    }
+
+    .sidebar-head {
+      padding: 8px 16px 6px;
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--ink-3);
+      text-transform: uppercase;
+    }
+
+    .tree { padding: 0 8px; }
+
+    .tree-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      color: var(--ink-2);
+      white-space: nowrap;
+      cursor: default;
+      user-select: none;
+      transition: background 0.12s ease;
+    }
+
+    .tree-item.indent-0 { padding-left: 14px; }
+    .tree-item.indent-1 { padding-left: 30px; }
+    .tree-item.indent-2 { padding-left: 46px; }
+    .tree-item.indent-3 { padding-left: 62px; }
+
+    .tree-item.folder { color: var(--ink); font-weight: 500; }
+
+    .tree-item.active {
+      background: var(--accent-soft);
+      color: var(--ink);
+    }
+
+    .tree-item:not(.active):hover {
+      background: rgba(255, 255, 255, 0.45);
+    }
+
+    .tree-chevron {
+      width: 12px;
+      height: 12px;
+      color: var(--ink-3);
+      flex-shrink: 0;
+      transition: transform 0.15s ease;
+    }
+
+    .tree-item.folder.open .tree-chevron {
+      transform: rotate(90deg);
+    }
+
+    .tree-icon {
+      width: 14px;
+      height: 14px;
+      color: var(--ink-3);
+      flex-shrink: 0;
+    }
+
+    .tree-item.active .tree-icon {
+      color: var(--accent);
+    }
+
+    /* ============================================================
+       EDITOR — tab strip + code area
+       ============================================================ */
+    .editor {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      overflow: hidden;
+      background: var(--card);
+    }
+
+    .tabs {
+      display: flex;
+      background: var(--paper-2);
+      border-bottom: 1px solid var(--line);
+      padding: 0 8px;
+      gap: 0;
+      overflow-x: auto;
+      flex-shrink: 0;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      font-size: 12.5px;
+      color: var(--ink-2);
+      cursor: default;
+      border-right: 1px solid var(--line);
+      background: var(--paper-2);
+      white-space: nowrap;
+      position: relative;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+
+    .tab:hover:not(.active) { color: var(--ink); }
+
+    .tab.active {
+      background: var(--card);
+      color: var(--ink);
+    }
+
+    .tab.active::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--accent);
+    }
+
+    .tab .tab-icon {
+      width: 13px;
+      height: 13px;
+      color: var(--ink-3);
+      flex-shrink: 0;
+    }
+
+    .tab.active .tab-icon { color: var(--accent); }
+
+    .tab .close {
+      width: 16px;
+      height: 16px;
+      border-radius: 3px;
+      display: grid;
+      place-items: center;
+      opacity: 0.35;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      margin-left: 2px;
+    }
+
+    .tab:hover .close { opacity: 0.7; }
+    .tab .close:hover { background: rgba(0, 0, 0, 0.08); opacity: 1; }
+
+    /* ============================================================
+       CODE AREA — line numbers + syntax highlighted TSX
+       ============================================================ */
+    .code-area {
+      flex: 1;
+      overflow: auto;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.65;
+      padding: 14px 0;
+      min-height: 0;
+    }
+
+    .code-line {
+      display: flex;
+      padding: 0;
+    }
+
+    .ln {
+      width: 56px;
+      padding: 0 14px 0 16px;
+      text-align: right;
+      color: var(--ink-3);
+      user-select: none;
+      flex-shrink: 0;
+    }
+
+    .code {
+      flex: 1;
+      padding-right: 24px;
+      white-space: pre;
+      color: var(--ink);
+    }
+
+    /* Syntax tokens — vintage paper palette */
+    .tk-kw   { color: #8a5a2a; font-weight: 500; }   /* keywords — warm brown */
+    .tk-fn   { color: #3a5a3a; }                      /* function names — forest */
+    .tk-str  { color: #4a6a8a; }                     /* strings — slate blue */
+    .tk-com  { color: var(--ink-3); font-style: italic; } /* comments — muted */
+    .tk-num  { color: #b8862a; }                     /* numbers — amber */
+    .tk-tag  { color: #3a6a4a; font-weight: 500; }   /* JSX tags — valley green */
+    .tk-attr { color: #8a5a2a; }                    /* JSX attrs — warm brown */
+
+    /* ============================================================
+       ACTIVE TAB — theme image background (wired in task 10)
+       ============================================================ */
+    .tab.active {
+      background-color: var(--card);
+      background-image: var(--active-img);
+      background-size: 350% 350%;
+      background-position: var(--active-crop);
+      background-repeat: no-repeat;
+      color: var(--ink);
+      position: relative;
+    }
+    .tab.active::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--accent);
+      z-index: 2;
+    }
+    .tab.active::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        180deg,
+        rgba(253, 250, 242, 0.50) 0%,
+        rgba(253, 250, 242, 0.78) 100%
+      );
+      pointer-events: none;
+      z-index: 1;
+    }
+    .tab.active > * { position: relative; z-index: 3; }
+
+    /* ============================================================
+       AI CHAT PANEL (320px wide)
+       ============================================================ */
+    .panel {
+      background: var(--paper-2);
+      border-left: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--line);
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--ink-3);
+      text-transform: uppercase;
+    }
+
+    .dot-online {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #62c554;
+      box-shadow: 0 0 0 2px rgba(98, 197, 84, 0.18);
+    }
+
+    .chat {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .msg {
+      max-width: 92%;
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      background: var(--ink);
+      color: var(--card);
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.ai {
+      align-self: flex-start;
+      background: var(--card);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      border-bottom-left-radius: 4px;
+    }
+
+    .msg.ai strong { color: var(--accent); font-weight: 600; }
+    .msg.ai code {
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      background: var(--paper);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: var(--ink-2);
+    }
+
+    .chat-input {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      background: var(--card);
+    }
+
+    .chat-input input {
+      flex: 1;
+      padding: 8px 12px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-family: var(--font-sans);
+      font-size: 12.5px;
+      color: var(--ink);
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+    .chat-input input::placeholder { color: var(--ink-3); }
+    .chat-input input:focus { border-color: var(--accent); }
+
+    .chat-input button {
+      padding: 7px 14px;
+      background: var(--ink);
+      color: var(--card);
+      border: none;
+      border-radius: 6px;
+      font-family: var(--font-sans);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.15s ease;
+    }
+    .chat-input button:hover { opacity: 0.85; }
+
+    /* ============================================================
+       STATUS BAR (24px tall)
+       ============================================================ */
+    .statusbar {
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      background: var(--paper-2);
+      border-top: 1px solid var(--line);
+      gap: 16px;
+      font-size: 11.5px;
+      color: var(--ink-2);
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-item svg {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+    }
+
+    .status-spacer { flex: 1; }
+
+    .status-item.branch {
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    /* ============================================================
+       PAGE WRAPPER · HEADER · THEME SWITCHER · CROP PICKER
+       ============================================================ */
+    .page {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 32px 24px 80px;
+    }
+
+    .page-header {
+      margin-bottom: 16px;
+    }
+
+    .page-header h1 {
+      font-family: var(--font-serif);
+      font-size: 32px;
+      font-weight: 400;
+      letter-spacing: -0.005em;
+      margin: 0 0 8px;
+      color: var(--ink);
+    }
+
+    .page-header .sub {
+      font-size: 14px;
+      color: var(--ink-2);
+      max-width: 720px;
+      margin: 0 0 24px;
+      line-height: 1.55;
+    }
+
+    .theme-switcher {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .theme-btn {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 14px 6px 6px;
+      background: var(--card);
+      border: 1px solid var(--card-edge);
+      border-radius: 9px;
+      cursor: pointer;
+      font-family: var(--font-sans);
+      font-size: 13px;
+      color: var(--ink-2);
+      transition: all 0.15s ease;
+      box-shadow: var(--shadow-1);
+    }
+
+    .theme-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-2);
+      border-color: var(--accent);
+    }
+
+    .theme-btn.active {
+      border-color: var(--ink);
+      box-shadow:
+        0 0 0 1.5px var(--ink),
+        var(--shadow-2);
+      background: var(--card);
+    }
+
+    .theme-btn-swatch {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background-color: var(--paper);
+      background-size: 220% 220%;
+      background-position: 50% 50%;
+      border: 1px solid var(--card-edge);
+      flex-shrink: 0;
+    }
+
+    /* ============================================================
+       CROP PICKER — 9 thumbs row
+       ============================================================ */
+    .crop-picker {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 14px;
+      background: var(--card);
+      border: 1px solid var(--card-edge);
+      border-radius: 9px;
+      box-shadow: var(--shadow-1);
+      max-width: max-content;
+    }
+
+    .crop-picker-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--ink-3);
+      text-transform: uppercase;
+    }
+
+    .crop-row {
+      display: flex;
+      gap: 6px;
+    }
+
+    .crop-thumb {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      background-color: var(--paper);
+      background-size: 320% 320%;
+      border: 1px solid var(--card-edge);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      padding: 0;
+    }
+
+    .crop-thumb:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-2);
+      border-color: var(--accent);
+    }
+
+    .crop-thumb.active {
+      border: 1.5px solid var(--ink);
+      box-shadow: 0 0 0 1.5px var(--ink);
+    }
+
+    .crop-reset {
+      font-family: var(--font-sans);
+      font-size: 12px;
+      color: var(--ink-2);
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      transition: background 0.15s ease;
+    }
+    .crop-reset:hover { background: var(--paper-2); }
+
+    .crop-label-text {
+      font-size: 12px;
+      color: var(--ink-3);
+      min-width: 90px;
+    }
+
+    /* ============================================================
+       CAPTION below the IDE
+       ============================================================ */
+    .caption {
+      max-width: 1480px;
+      margin: 24px auto 0;
+      color: var(--ink-3);
+      font-size: 12.5px;
+      font-style: italic;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <!-- ============================================================
+       PAGE WRAPPER
+       ============================================================ -->
+  <div class="page">
+
+    <!-- ============================================================
+         TASK 9 — PAGE HEADER + THEME SWITCHER + CROP PICKER
+         ============================================================ -->
+    <header class="page-header">
+      <h1>Theme Preview</h1>
+      <p class="sub">
+        This is what your Lipi IDE will look like with each theme applied.
+        The illustration only paints the active view tab — everything else
+        stays in the vintage paper neutral so your code stays the focus.
+      </p>
+
+      <div class="theme-switcher" id="themeSwitcher" role="radiogroup" aria-label="Theme selector">
+        <!-- 5 buttons injected by JS (task 10) -->
+      </div>
+
+      <div class="crop-picker" aria-label="Crop selector">
+        <span class="crop-picker-label">Frame</span>
+        <div class="crop-row" id="cropRow" role="radiogroup" aria-label="Crop position">
+          <!-- 9 thumbs injected by JS (task 11) -->
+        </div>
+        <button class="crop-reset" id="resetCrop" type="button">Reset</button>
+        <span class="crop-label-text" id="cropLabel">Center</span>
+      </div>
+    </header>
+
+    <!-- ============================================================
+         IDE WINDOW
+         ============================================================ -->
+  <div class="ide">
+    <!-- ============================================================
+         TASK 2 — TITLE BAR
+         ============================================================ -->
+    <div class="titlebar">
+      <div class="dots">
+        <span class="dot r" title="Close"></span>
+        <span class="dot y" title="Minimize"></span>
+        <span class="dot g" title="Maximize"></span>
+      </div>
+      <div class="title">EditorWorkspace.tsx — lipi</div>
+      <input class="titlebar-search" type="text"
+             placeholder="Search files, symbols, commands…"
+             aria-label="Quick search" />
+    </div>
+
+    <!-- ============================================================
+         BODY — rail / sidebar / editor / panel grid
+         Tasks 3 (rail) and 4 (sidebar) land here.
+         Tasks 5–7 (tabs, editor, panel) and 8 (status bar) follow.
+         ============================================================ -->
+    <div class="body">
+
+      <!-- ============================================================
+           TASK 3 — ACTIVITY RAIL
+           ============================================================ -->
+      <nav class="rail" aria-label="Activity bar">
+        <button class="rail-btn active" title="Explorer" aria-label="Explorer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linejoin="round">
+            <path d="M3 7l4-4h4l4 4h6v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>
+            <line x1="3" y1="10" x2="21" y2="10"/>
+          </svg>
+        </button>
+        <button class="rail-btn" title="Search" aria-label="Search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linecap="round">
+            <circle cx="11" cy="11" r="7"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </button>
+        <button class="rail-btn" title="Source Control" aria-label="Source Control">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linecap="round">
+            <circle cx="6" cy="6" r="2.5"/>
+            <circle cx="6" cy="18" r="2.5"/>
+            <circle cx="18" cy="6" r="2.5"/>
+            <line x1="6" y1="8.5" x2="6" y2="15.5"/>
+            <path d="M18 8.5v7a4 4 0 0 1-4 4H8.5"/>
+          </svg>
+        </button>
+        <button class="rail-btn" title="Run and Debug" aria-label="Run and Debug">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linejoin="round">
+            <polygon points="7 5 19 12 7 19 7 5"/>
+          </svg>
+        </button>
+        <button class="rail-btn" title="Extensions" aria-label="Extensions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.6">
+            <rect x="3" y="3" width="7" height="7" rx="1.2"/>
+            <rect x="14" y="3" width="7" height="7" rx="1.2"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.2"/>
+            <rect x="14" y="14" width="7" height="7" rx="1.2"/>
+          </svg>
+        </button>
+        <span class="rail-spacer"></span>
+        <button class="rail-btn" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.85l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.85-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.85.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 8.92a1.7 1.7 0 0 0-.34-1.85l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.85.34h.04A1.7 1.7 0 0 0 10 3.04V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.85-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.07.27.1.55.1.83v.34c0 .28-.03.56-.1.83a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.1A1.7 1.7 0 0 0 19.4 15z"/>
+          </svg>
+        </button>
+      </nav>
+
+      <!-- Tasks 4–7 land in the next three siblings of the rail. -->
+
+      <!-- ============================================================
+           TASK 4 — SIDEBAR / FILE TREE
+           Realistic Lipi project structure from HANDOFF.md.
+           ============================================================ -->
+      <aside class="sidebar" aria-label="File explorer">
+        <div class="sidebar-head">Explorer</div>
+        <div class="tree">
+          <div class="tree-item folder open indent-0">
+            <svg class="tree-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l4-4h4l4 4h6v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+            lipi
+          </div>
+          <div class="tree-item folder open indent-1">
+            <svg class="tree-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l4-4h4l4 4h6v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+            src
+          </div>
+          <div class="tree-item folder open indent-2">
+            <svg class="tree-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l4-4h4l4 4h6v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+            screens
+          </div>
+          <div class="tree-item folder open indent-3">
+            <svg class="tree-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l4-4h4l4 4h6v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+            EditorWorkspace
+          </div>
+          <div class="tree-item active indent-3" title="EditorWorkspace.tsx">
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>
+            EditorWorkspace.tsx
+          </div>
+          <div class="tree-item indent-3">
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            state / editorStore.ts
+          </div>
+          <div class="tree-item folder open indent-2">
+            <svg class="tree-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l4-4h4l4 4h6v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+            shared
+          </div>
+          <div class="tree-item indent-2">
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            styles / tokens.css
+          </div>
+          <div class="tree-item indent-2">
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            voice / webSpeechSTT.ts
+          </div>
+          <div class="tree-item indent-2">
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            ipc / ai.ts
+          </div>
+          <div class="tree-item folder open indent-1">
+            <svg class="tree-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7l4-4h4l4 4h6v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/></svg>
+            src-tauri
+          </div>
+          <div class="tree-item indent-2">
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            src / lib.rs
+          </div>
+          <div class="tree-item indent-1">
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            package.json
+          </div>
+          <div class="tree-item indent-1">
+            <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            HANDOFF.md
+          </div>
+        </div>
+      </aside>
+
+      <!-- ============================================================
+           TASK 5 + 6 — EDITOR (tab strip + code area)
+           Active tab gets theme image (wired in task 10).
+           Code: realistic EditorWorkspace.tsx content.
+           ============================================================ -->
+      <main class="editor" aria-label="Code editor">
+        <div class="tabs" role="tablist">
+          <div class="tab active" role="tab" aria-selected="true">
+            <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>
+            <span>EditorWorkspace.tsx</span>
+            <span class="close" title="Close">×</span>
+          </div>
+          <div class="tab" role="tab" aria-selected="false">
+            <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>editorStore.ts</span>
+            <span class="close" title="Close">×</span>
+          </div>
+          <div class="tab" role="tab" aria-selected="false">
+            <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>tokens.css</span>
+            <span class="close" title="Close">×</span>
+          </div>
+          <div class="tab" role="tab" aria-selected="false">
+            <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>README.md</span>
+            <span class="close" title="Close">×</span>
+          </div>
+        </div>
+
+        <div class="code-area">
+          <div class="code-line"><span class="ln">1</span><span class="code"><span class="tk-com">// EditorWorkspace — the 3-pane IDE shell</span></span></div>
+          <div class="code-line"><span class="ln">2</span><span class="code"><span class="tk-kw">import</span> { useState, useEffect } <span class="tk-kw">from</span> <span class="tk-str">'react'</span>;</span></div>
+          <div class="code-line"><span class="ln">3</span><span class="code"><span class="tk-kw">import</span> { Monaco } <span class="tk-kw">from</span> <span class="tk-str">'@monaco-editor/react'</span>;</span></div>
+          <div class="code-line"><span class="ln">4</span><span class="code"><span class="tk-kw">import</span> { useEditorStore } <span class="tk-kw">from</span> <span class="tk-str">'./state/editorStore'</span>;</span></div>
+          <div class="code-line"><span class="ln">5</span><span class="code"></span></div>
+          <div class="code-line"><span class="ln">6</span><span class="code"><span class="tk-kw">export</span> <span class="tk-kw">function</span> <span class="tk-fn">EditorWorkspace</span>() {</span></div>
+          <div class="code-line"><span class="ln">7</span><span class="code">  <span class="tk-kw">const</span> { activeFile, openTabs, theme } = <span class="tk-fn">useEditorStore</span>();</span></div>
+          <div class="code-line"><span class="ln">8</span><span class="code">  <span class="tk-kw">const</span> [splitRatio, setSplitRatio] = <span class="tk-fn">useState</span>(<span class="tk-num">0.7</span>);</span></div>
+          <div class="code-line"><span class="ln">9</span><span class="code"></span></div>
+          <div class="code-line"><span class="ln">10</span><span class="code">  <span class="tk-com">// Wire the AI chat panel to the active file</span></span></div>
+          <div class="code-line"><span class="ln">11</span><span class="code">  <span class="tk-fn">useEffect</span>(() =&gt; {</span></div>
+          <div class="code-line"><span class="ln">12</span><span class="code">    <span class="tk-kw">if</span> (!activeFile) <span class="tk-kw">return</span>;</span></div>
+          <div class="code-line"><span class="ln">13</span><span class="code">    <span class="tk-fn">setActiveContext</span>(activeFile.path);</span></div>
+          <div class="code-line"><span class="ln">14</span><span class="code">  }, [activeFile]);</span></div>
+          <div class="code-line"><span class="ln">15</span><span class="code"></span></div>
+          <div class="code-line"><span class="ln">16</span><span class="code">  <span class="tk-kw">return</span> (</span></div>
+          <div class="code-line"><span class="ln">17</span><span class="code">    &lt;<span class="tk-tag">div</span> <span class="tk-attr">className</span>=<span class="tk-str">"editor-workspace"</span>&gt;</span></div>
+          <div class="code-line"><span class="ln">18</span><span class="code">      &lt;<span class="tk-tag">TabStrip</span> <span class="tk-attr">tabs</span>={openTabs} /&gt;</span></div>
+          <div class="code-line"><span class="ln">19</span><span class="code">      &lt;<span class="tk-tag">MonacoEditor</span> <span class="tk-attr">file</span>={activeFile} /&gt;</span></div>
+          <div class="code-line"><span class="ln">20</span><span class="code">      &lt;<span class="tk-tag">AIPanel</span> <span class="tk-attr">context</span>={activeFile} /&gt;</span></div>
+          <div class="code-line"><span class="ln">21</span><span class="code">    &lt;/<span class="tk-tag">div</span>&gt;</span></div>
+          <div class="code-line"><span class="ln">22</span><span class="code">  );</span></div>
+          <div class="code-line"><span class="ln">23</span><span class="code">}</span></div>
+        </div>
+      </main>
+
+      <!-- ============================================================
+           TASK 7 — AI CHAT PANEL
+           ============================================================ -->
+      <aside class="panel" aria-label="AI chat panel">
+        <div class="panel-head">
+          <span class="dot-online" aria-hidden="true"></span>
+          <span>AI Chat</span>
+        </div>
+
+        <div class="chat">
+          <div class="msg user">How do I add a custom theme to Lipi?</div>
+          <div class="msg ai">
+            <strong>Three steps:</strong> drop your illustration into
+            <code>src/shared/assets/themes/</code>, add an entry to the
+            <code>THEMES</code> array in <code>tokens.css</code>, and pick it
+            from <strong>Settings → Theme</strong>. The active tab picks up
+            the new background automatically via the <code>--active-img</code>
+            CSS variable — no other component changes needed.
+          </div>
+        </div>
+
+        <div class="chat-input">
+          <input type="text" placeholder="Ask Lipi anything…" aria-label="Chat input" />
+          <button type="button">Send</button>
+        </div>
+      </aside>
+    </div>
+
+    <!-- ============================================================
+         TASK 8 — STATUS BAR
+         ============================================================ -->
+    <div class="statusbar" role="status">
+      <span class="status-item branch">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><line x1="6" y1="8.5" x2="6" y2="15.5"/><path d="M18 8.5v7a4 4 0 0 1-4 4H8.5"/></svg>
+        main
+      </span>
+      <span class="status-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 13 12 18 17 13"/><polyline points="7 6 12 11 17 6"/></svg>
+        ↓0 ↑0
+      </span>
+      <span class="status-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>
+        0 errors
+      </span>
+
+      <span class="status-spacer"></span>
+
+      <span class="status-item">TypeScript React</span>
+      <span class="status-item">Ln 17, Col 22</span>
+      <span class="status-item">UTF-8</span>
+      <span class="status-item">Spaces: 2</span>
+    </div>
+  </div>
+
+  <p class="caption">
+    Try clicking each theme and crop above — only the active tab picks up
+    the illustration. The rest of the IDE stays in the same warm paper so
+    your code stays the focus.
+  </p>
+
+  </div><!-- /.page -->
+
+  <!-- ============================================================
+       TASKS 10 + 11 — THEME & CROP WIRING (single JS block)
+       ============================================================ -->
+  <script>
+    /* ---- Data: 5 themes ---- */
+    const THEMES = [
+      { id: "hickory-hollow",   name: "Hickory Hollow",   file: "/themes/01-hickory-hollow.png",   accent: "#8a5a2a", accentSoft: "#f0e8d4" },
+      { id: "whispering-pines", name: "Whispering Pines", file: "/themes/02-whispering-pines.jpg", accent: "#3a5a3a", accentSoft: "#d8e4d4" },
+      { id: "marigold-field",   name: "Marigold Field",   file: "/themes/03-marigold-field.jpg",   accent: "#b8862a", accentSoft: "#f4e6c0" },
+      { id: "wildflower-field", name: "Wildflower Field", file: "/themes/04-wildflower-field.png", accent: "#4a6a8a", accentSoft: "#dce4ec" },
+      { id: "quiet-valley",     name: "Quiet Valley",     file: "/themes/05-quiet-valley.png",     accent: "#3a6a4a", accentSoft: "#d4e2d0" }
+    ];
+
+    /* ---- Data: 9 crop positions ---- */
+    const CROP_POSITIONS = [
+      { x: "0%",   y: "0%"   }, { x: "50%",  y: "0%"   }, { x: "100%", y: "0%"   },
+      { x: "0%",   y: "50%"  }, { x: "50%",  y: "50%"  }, { x: "100%", y: "50%"  },
+      { x: "0%",   y: "100%" }, { x: "50%",  y: "100%" }, { x: "100%", y: "100%" }
+    ];
+    const CROP_LABELS = [
+      "Top-left", "Top", "Top-right",
+      "Left",     "Center", "Right",
+      "Bottom-left", "Bottom", "Bottom-right"
+    ];
+
+    /* ---- State ---- */
+    let activeThemeIdx = 0;
+    let activeCrop = 4;
+
+    /* ---- Render the 5 theme switcher buttons ---- */
+    const switcher = document.getElementById("themeSwitcher");
+    THEMES.forEach((t, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "theme-btn" + (i === activeThemeIdx ? " active" : "");
+      btn.dataset.idx = i;
+      btn.setAttribute("role", "radio");
+      btn.setAttribute("aria-checked", i === activeThemeIdx ? "true" : "false");
+      btn.title = `${t.name} · ${t.accent}`;
+      btn.innerHTML = `
+        <span class="theme-btn-swatch"
+              style="background-image: url('${t.file}');"></span>
+        <span>${t.name}</span>
+      `;
+      btn.addEventListener("click", () => selectTheme(i));
+      switcher.appendChild(btn);
+    });
+
+    /* ---- Render the 9 crop thumbs ---- */
+    const cropRow = document.getElementById("cropRow");
+    CROP_POSITIONS.forEach((p, i) => {
+      const thumb = document.createElement("button");
+      thumb.type = "button";
+      thumb.className = "crop-thumb" + (i === activeCrop ? " active" : "");
+      thumb.dataset.idx = i;
+      thumb.setAttribute("role", "radio");
+      thumb.setAttribute("aria-checked", i === activeCrop ? "true" : "false");
+      thumb.title = CROP_LABELS[i];
+      thumb.style.backgroundImage = `url('${THEMES[activeThemeIdx].file}')`;
+      thumb.style.backgroundPosition = `${p.x} ${p.y}`;
+      thumb.addEventListener("click", () => selectCrop(i));
+      cropRow.appendChild(thumb);
+    });
+
+    /* ---- Actions ---- */
+    function selectTheme(idx) {
+      activeThemeIdx = idx;
+      activeCrop = 4; // reset to center when changing theme
+      refreshAll();
+    }
+
+    function selectCrop(idx) {
+      activeCrop = idx;
+      refreshAll();
+    }
+
+    document.getElementById("resetCrop").addEventListener("click", () => {
+      selectCrop(4);
+    });
+
+    /* ---- Single source of truth: writes CSS variables on :root ---- */
+    function refreshAll() {
+      const theme = THEMES[activeThemeIdx];
+      const pos = CROP_POSITIONS[activeCrop];
+      const root = document.documentElement.style;
+
+      root.setProperty("--accent", theme.accent);
+      root.setProperty("--accent-soft", theme.accentSoft);
+      root.setProperty("--active-img", `url('${theme.file}')`);
+      root.setProperty("--active-crop", `${pos.x} ${pos.y}`);
+
+      // Update active classes on theme buttons
+      document.querySelectorAll(".theme-btn").forEach((b, i) => {
+        const active = i === activeThemeIdx;
+        b.classList.toggle("active", active);
+        b.setAttribute("aria-checked", active ? "true" : "false");
+      });
+
+      // Update active classes on crop thumbs + refresh their images
+      document.querySelectorAll(".crop-thumb").forEach((t, i) => {
+        const active = i === activeCrop;
+        t.classList.toggle("active", active);
+        t.setAttribute("aria-checked", active ? "true" : "false");
+        t.style.backgroundImage = `url('${theme.file}')`;
+        t.style.backgroundPosition = `${CROP_POSITIONS[i].x} ${CROP_POSITIONS[i].y}`;
+      });
+
+      // Update the crop label
+      document.getElementById("cropLabel").textContent =
+        `${theme.name} · ${CROP_LABELS[activeCrop]}`;
+    }
+
+    /* ---- Init ---- */
+    refreshAll();
+  </script>
+</body>
+</html>

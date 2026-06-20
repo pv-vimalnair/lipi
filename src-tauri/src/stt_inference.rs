@@ -78,7 +78,7 @@ use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 #[cfg(feature = "m2c-native")]
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 #[cfg(feature = "m2c-native")]
 use crate::stt::SttError;
@@ -107,7 +107,7 @@ use crate::stt::SttError;
 ///      `full` consumes the audio buffer synchronously
 ///      and runs the encoder + decoder.
 ///   5. Walk the output segments with
-///      `state.full_n_segments` + `state.full_get_segment_text`,
+///      `state.full_n_segments` + `state.get_segment(i).to_str()`,
 ///      concatenate them, return the joined string.
 ///
 /// Returns `Err` on:
@@ -214,18 +214,25 @@ pub fn run_inference(audio: &[f32]) -> Result<String, SttError> {
     // `DEFAULT_MAX_DURATION_MS` sessions, there's
     // typically 0 or 1 segments. We loop anyway for
     // safety.
-    let n_segments = state.full_n_segments().map_err(|e| SttError::Inference {
-        message: format!("failed to query segment count: {e}"),
-    })?;
+    let n_segments = state.full_n_segments();
+    if n_segments < 0 {
+        return Err(SttError::Inference {
+            message: format!("whisper returned an invalid segment count: {n_segments}"),
+        });
+    }
     let mut transcript = String::new();
     for i in 0..n_segments {
-        let segment = state.full_get_segment_text(i).map_err(|e| SttError::Inference {
+        let segment = state.get_segment(i).ok_or_else(|| SttError::Inference {
+            message: format!("segment {i} was out of bounds for {n_segments} segments"),
+        })?;
+        let text = segment.to_str().map_err(|e| SttError::Inference {
             message: format!("failed to read segment {i}: {e}"),
         })?;
-        if !transcript.is_empty() && !segment.is_empty() {
+        let text = text.trim();
+        if !transcript.is_empty() && !text.is_empty() {
             transcript.push(' ');
         }
-        transcript.push_str(segment.trim());
+        transcript.push_str(text);
     }
 
     Ok(transcript)
@@ -255,7 +262,7 @@ fn get_or_load_context(model_path: &Path) -> Result<Arc<WhisperContext>, SttErro
         message: format!("context cache mutex poisoned: {e}"),
     })?;
     // Cache hit: same model path, reuse.
-    if let Some((cached_path, ref cached_ctx)) = *guard {
+    if let Some((cached_path, cached_ctx)) = guard.as_ref() {
         if cached_path == model_path {
             return Ok(Arc::clone(cached_ctx));
         }
@@ -268,10 +275,7 @@ fn get_or_load_context(model_path: &Path) -> Result<Arc<WhisperContext>, SttErro
     // at runtime.
     let context = WhisperContext::new_with_params(
         model_path.to_str().ok_or_else(|| SttError::Inference {
-            message: format!(
-                "model path is not valid UTF-8: {}",
-                model_path.display()
-            ),
+            message: format!("model path is not valid UTF-8: {}", model_path.display()),
         })?,
         whisper_rs::WhisperContextParameters::default(),
     )
@@ -301,9 +305,11 @@ fn active_model_path_slot() -> &'static std::sync::Mutex<Option<std::path::PathB
 /// switches models in the settings UI. The inference
 /// path reads it via `current_model_path`.
 pub fn set_active_model_path(path: std::path::PathBuf) -> Result<(), SttError> {
-    let mut guard = active_model_path_slot().lock().map_err(|e| SttError::Inference {
-        message: format!("active-model-path slot mutex poisoned: {e}"),
-    })?;
+    let mut guard = active_model_path_slot()
+        .lock()
+        .map_err(|e| SttError::Inference {
+            message: format!("active-model-path slot mutex poisoned: {e}"),
+        })?;
     // Invalidate the context cache on model switch.
     if guard.as_ref() != Some(&path) {
         if let Ok(mut cache) = context_cache().lock() {
@@ -317,10 +323,7 @@ pub fn set_active_model_path(path: std::path::PathBuf) -> Result<(), SttError> {
 /// Get the active model file path (if set). Returns
 /// `None` if the user hasn't picked a model yet.
 fn current_model_path() -> Option<std::path::PathBuf> {
-    active_model_path_slot()
-        .lock()
-        .ok()
-        .and_then(|g| g.clone())
+    active_model_path_slot().lock().ok().and_then(|g| g.clone())
 }
 
 // --- Tests -------------------------------------------------------------

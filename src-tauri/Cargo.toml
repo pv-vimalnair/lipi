@@ -27,7 +27,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
-# Phase I: `app://lipi.open?path=...` deep-link scheme. The plugin
+# Phase I: `lipi://open?path=...` deep-link scheme. The plugin
 # emits a `deep-link://new-url` event when the OS hands the app a URL
 # (cold start OR warm), and exposes `getCurrent()` for the launch-time
 # URL (which fires before the event in some platform paths). The JS side

@@ -72,10 +72,8 @@ pub fn parse_args(argv: &[String]) -> Result<Args, String> {
         }
     }
 
-    let pubkey_file =
-        pubkey_file.ok_or_else(|| "missing --pubkey-file <path>".to_string())?;
-    let tauri_conf =
-        tauri_conf.unwrap_or_else(|| "src-tauri/tauri.conf.json".to_string());
+    let pubkey_file = pubkey_file.ok_or_else(|| "missing --pubkey-file <path>".to_string())?;
+    let tauri_conf = tauri_conf.unwrap_or_else(|| "src-tauri/tauri.conf.json".to_string());
 
     Ok(Args {
         pubkey_file,
@@ -140,11 +138,7 @@ pub fn short_for_diff(pubkey: &str) -> String {
     if pubkey.len() <= PREFIX + SUFFIX + 3 {
         return pubkey.to_string();
     }
-    format!(
-        "{}…{}",
-        &pubkey[..PREFIX],
-        &pubkey[pubkey.len() - SUFFIX..]
-    )
+    format!("{}…{}", &pubkey[..PREFIX], &pubkey[pubkey.len() - SUFFIX..])
 }
 
 /// The result of patching a `tauri.conf.json` with
@@ -168,10 +162,7 @@ pub struct PatchResult {
 /// are preserved (the JSON is re-serialized, so
 /// the exact formatting changes from the input,
 /// but the structure is identical).
-pub fn patch_tauri_conf(
-    conf_text: &str,
-    new_pubkey: &str,
-) -> Result<PatchResult, String> {
+pub fn patch_tauri_conf(conf_text: &str, new_pubkey: &str) -> Result<PatchResult, String> {
     let mut conf: serde_json::Value =
         serde_json::from_str(conf_text).map_err(|e| format!("parse JSON: {e}"))?;
 
@@ -180,9 +171,7 @@ pub fn patch_tauri_conf(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    let plugins = conf
-        .pointer_mut("/plugins")
-        .and_then(|p| p.as_object_mut());
+    let plugins = conf.pointer_mut("/plugins").and_then(|p| p.as_object_mut());
     match plugins {
         Some(p) => {
             let updater = p
@@ -194,9 +183,7 @@ pub fn patch_tauri_conf(
                     serde_json::Value::String(new_pubkey.to_string()),
                 );
             } else {
-                return Err(
-                    "'plugins.updater' is not a JSON object".to_string()
-                );
+                return Err("'plugins.updater' is not a JSON object".to_string());
             }
         }
         None => {
@@ -211,8 +198,8 @@ pub fn patch_tauri_conf(
         }
     }
 
-    let new_text = serde_json::to_string_pretty(&conf)
-        .map_err(|e| format!("serialize JSON: {e}"))?;
+    let new_text =
+        serde_json::to_string_pretty(&conf).map_err(|e| format!("serialize JSON: {e}"))?;
 
     Ok(PatchResult {
         new_text,
@@ -237,8 +224,7 @@ RWRSN9MMkvCkiBXfnw1xQjN5PPwhH2cOEUgBfvCIRd1UgwCZgpQYNq7x
 
     /// A pubkey file that's missing the
     /// "untrusted comment:" prefix.
-    const INVALID_NO_PREFIX: &str =
-        "RWRSN9MMkvCkiBXfnw1xQjN5PPwhH2cOEUgBfvCIRd1UgwCZgpQYNq7x\n";
+    const INVALID_NO_PREFIX: &str = "RWRSN9MMkvCkiBXfnw1xQjN5PPwhH2cOEUgBfvCIRd1UgwCZgpQYNq7x\n";
 
     /// A pubkey file with an invalid base64 character.
     const INVALID_BASE64: &str = "\
@@ -257,7 +243,10 @@ aGVsbG8=
         let result = validate_pubkey(VALID_PUBKEY_FILE);
         assert!(result.is_ok(), "expected Ok, got: {result:?}");
         let pubkey = result.unwrap();
-        assert_eq!(pubkey, "RWRSN9MMkvCkiBXfnw1xQjN5PPwhH2cOEUgBfvCIRd1UgwCZgpQYNq7x");
+        assert_eq!(
+            pubkey,
+            "RWRSN9MMkvCkiBXfnw1xQjN5PPwhH2cOEUgBfvCIRd1UgwCZgpQYNq7x"
+        );
     }
 
     #[test]
@@ -316,10 +305,7 @@ aGVsbG8=
 
     #[test]
     fn parse_args_extracts_pubkey_file() {
-        let argv = vec![
-            "--pubkey-file".to_string(),
-            "/tmp/test.key.pub".to_string(),
-        ];
+        let argv = vec!["--pubkey-file".to_string(), "/tmp/test.key.pub".to_string()];
         let args = parse_args(&argv).unwrap();
         assert_eq!(args.pubkey_file, "/tmp/test.key.pub");
         assert_eq!(args.tauri_conf, "src-tauri/tauri.conf.json");
@@ -368,8 +354,7 @@ aGVsbG8=
         assert_eq!(result.old_pubkey.as_deref(), Some("OLD_KEY"));
         assert_eq!(result.new_pubkey, "NEW_KEY");
 
-        let updated: serde_json::Value =
-            serde_json::from_str(&result.new_text).unwrap();
+        let updated: serde_json::Value = serde_json::from_str(&result.new_text).unwrap();
         let pubkey = updated
             .pointer("/plugins/updater/pubkey")
             .and_then(|v| v.as_str())
@@ -399,8 +384,7 @@ aGVsbG8=
         assert_eq!(result.old_pubkey, None);
         assert_eq!(result.new_pubkey, "NEW_KEY");
 
-        let updated: serde_json::Value =
-            serde_json::from_str(&result.new_text).unwrap();
+        let updated: serde_json::Value = serde_json::from_str(&result.new_text).unwrap();
         let pubkey = updated
             .pointer("/plugins/updater/pubkey")
             .and_then(|v| v.as_str())

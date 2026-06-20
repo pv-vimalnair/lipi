@@ -123,7 +123,25 @@ async function freshStore() {
     providers: [],
     configuredProviders: undefined,
   });
+  const { useToolSettingsStore } = await import(
+    '@/shared/state/toolSettingsStore'
+  );
+  useToolSettingsStore.setState({
+    disabledToolNames: [],
+    confirmationMode: {},
+    hydrated: false,
+    pendingUndo: false,
+  });
   return useAiStore;
+}
+
+async function allowToolWithoutPrompt(name: string): Promise<void> {
+  const { useToolSettingsStore } = await import(
+    '@/shared/state/toolSettingsStore'
+  );
+  useToolSettingsStore
+    .getState()
+    .setConfirmationMode(name, 'always_allow');
 }
 
 beforeEach(() => {
@@ -526,6 +544,7 @@ describe('aiStore streaming render (5b-4)', () => {
 
   it('ai://done seals the streaming message preserving accumulated content and toolCalls', async () => {
     const useAiStore = await freshStore();
+    await allowToolWithoutPrompt('get_weather');
     await useAiStore.getState().loadProviders();
     await useAiStore.getState().send('Hi');
 
@@ -807,6 +826,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
 
   it('transitions to executingTools and runs the calls when an assistant message has pending tool calls', async () => {
     const useAiStore = await freshStore();
+    await allowToolWithoutPrompt('get_file_contents');
     await useAiStore.getState().loadProviders();
 
     // Register a deterministic executor.
@@ -878,6 +898,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
 
   it('appends a role:tool message per call with the result content and the original call id', async () => {
     const useAiStore = await freshStore();
+    await allowToolWithoutPrompt('get_file_contents');
     await useAiStore.getState().loadProviders();
 
     const { registerToolExecutor } = await import('./aiStore');
@@ -935,6 +956,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
 
   it('starts a follow-up stream with the full thread including the tool result', async () => {
     const useAiStore = await freshStore();
+    await allowToolWithoutPrompt('get_file_contents');
     await useAiStore.getState().loadProviders();
 
     const { registerToolExecutor } = await import('./aiStore');
@@ -1058,6 +1080,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
 
   it('executor errors become kind:error results and a tool result message is still sent to the model', async () => {
     const useAiStore = await freshStore();
+    await allowToolWithoutPrompt('get_file_contents');
     await useAiStore.getState().loadProviders();
 
     const { registerToolExecutor } = await import('./aiStore');
@@ -1803,10 +1826,10 @@ describe('aiStore — per-tool confirmation (5d)', () => {
     ).toBe('always_allow');
   });
 
-  it('does NOT park for tools whose policy is always_allow (default)', async () => {
-    // Default policy: `always_allow`.
-    // The call should execute
-    // immediately, no modal.
+  it('parks by default for tools without an explicit always_allow policy', async () => {
+    // Default policy: `always_confirm`.
+    // The call should wait for the user
+    // instead of executing silently.
     const useAiStore = await freshStore();
     const { registerTool } = await import('./toolRegistry');
     const { registerToolExecutor } = await importStore();
@@ -1822,7 +1845,7 @@ describe('aiStore — per-tool confirmation (5d)', () => {
       return { output: 'ok', kind: 'text' as const, durationMs: 0 };
     });
     // No policy override — default is
-    // `always_allow`.
+    // `always_confirm`.
     await useAiStore.getState().loadProviders();
     const sendPromise = useAiStore.getState().send('go');
     await new Promise((r) => setTimeout(r, 0));
@@ -1844,11 +1867,62 @@ describe('aiStore — per-tool confirmation (5d)', () => {
     });
     captured.done?.({ payload: { requestId } });
     await new Promise((r) => setTimeout(r, 30));
+    expect(executed).toBe(false);
+    expect(useAiStore.getState().pendingConfirmation?.toolName).toBe(
+      'silent_tool',
+    );
+    expect(useAiStore.getState().requestStatus).toEqual({
+      kind: 'awaitingConfirmation',
+    });
+    useAiStore.getState().resolveConfirmation('deny');
+    await sendPromise;
+  });
+
+  it('does NOT park for tools explicitly set to always_allow', async () => {
+    const useAiStore = await freshStore();
+    const { useToolSettingsStore } = await import(
+      '@/shared/state/toolSettingsStore'
+    );
+    const { registerTool } = await import('./toolRegistry');
+    const { registerToolExecutor } = await importStore();
+    registerTool({
+      name: 'silent_tool_opt_in',
+      kind: 'shell',
+      description: 'Silent.',
+      handler: async () => 'ok',
+    });
+    useToolSettingsStore
+      .getState()
+      .setConfirmationMode('silent_tool_opt_in', 'always_allow');
+    let executed = false;
+    registerToolExecutor(async () => {
+      executed = true;
+      return { output: 'ok', kind: 'text' as const, durationMs: 0 };
+    });
+    await useAiStore.getState().loadProviders();
+    const sendPromise = useAiStore.getState().send('go');
+    await new Promise((r) => setTimeout(r, 0));
+    const requestId =
+      (invokeMock.mock.calls
+        .filter((c) => c[0] === 'ai_chat_stream')
+        .pop()?.[1] as { requestId?: string })?.requestId
+      ?? 'req_test_123';
+    captured.chunk?.({
+      payload: {
+        requestId,
+        payload: {
+          kind: 'toolCall',
+          id: 'call_s_allow',
+          name: 'silent_tool_opt_in',
+          input: '{}',
+        },
+      },
+    });
+    captured.done?.({ payload: { requestId } });
+    await new Promise((r) => setTimeout(r, 30));
     await sendPromise;
     expect(executed).toBe(true);
     expect(useAiStore.getState().pendingConfirmation).toBeNull();
-    // Should have transitioned to
-    // streaming for the follow-up.
     expect(useAiStore.getState().requestStatus).toEqual({
       kind: 'streaming',
     });

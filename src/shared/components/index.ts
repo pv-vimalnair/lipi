@@ -20,3 +20,5 @@ export * from './AboutModal';
 export * from './VoiceButton';
 export * from './VoiceAnnouncer';
 export * from './OnboardingTour';
+export * from './ThemeCard';
+export * from './CropPicker';

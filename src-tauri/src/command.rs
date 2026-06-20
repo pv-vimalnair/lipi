@@ -35,24 +35,20 @@
 //! timeout. A 5d+ enhancement may surface this
 //! as a per-tool field in `lipi-tools.json`.
 //!
-//! The timeout is enforced with
-//! `tokio::time::timeout` around the
-//! `output().await` future — we don't try to
-//! kill the underlying process on timeout
-//! (kill semantics across platforms are
-//! fraught, and 5c just needs a hard upper
-//! bound on the wait time). The OS will
-//! eventually clean up the zombie when the
-//! process exits on its own. The `cancelled`
-//! flag tells the JS side the result is
-//! incomplete.
+//! The timeout is enforced around the child's
+//! `wait()` future while retaining the child
+//! handle. If the timeout fires, we explicitly
+//! kill and reap the direct child process before
+//! returning a timeout error.
 
-use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+
+use crate::ipc_policy::validate_custom_shell_policy;
 
 /// Default per-command timeout. 5c MVP value.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -63,7 +59,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// without a separate `kind` field on the
 /// `Error` variant.
 #[derive(Debug, Error, Serialize)]
-#[serde(tag = "kind", content = "message")]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RunCommandError {
     /// The program path is empty (e.g. the user
     /// configured a custom tool with an empty
@@ -75,10 +71,7 @@ pub enum RunCommandError {
     /// included so the user can see "program
     /// not found" etc.
     #[error("failed to spawn `{program}`: {detail}")]
-    Spawn {
-        program: String,
-        detail: String,
-    },
+    Spawn { program: String, detail: String },
     /// Process did not finish within the
     /// timeout. The partial stdout / stderr
     /// are dropped — the JS side only gets the
@@ -96,6 +89,10 @@ pub enum RunCommandError {
         stdout: String,
         stderr: String,
     },
+    /// The call was rejected before spawn by
+    /// the Rust-side IPC policy gate.
+    #[error("command blocked by policy: {detail}")]
+    Policy { detail: String },
 }
 
 /// The public response shape. Always returns
@@ -168,6 +165,26 @@ pub struct RunCommandArgs {
     /// `timeout_secs`.
     #[serde(default)]
     pub max_output_bytes: Option<usize>,
+    /// Rust-side execution policy. Required for
+    /// renderer-originated process spawns so
+    /// `run_command` is not a generic arbitrary
+    /// process launcher.
+    #[serde(default)]
+    pub policy: Option<RunCommandPolicy>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunCommandPolicy {
+    pub kind: RunCommandPolicyKind,
+    pub tool_name: String,
+    pub workspace_root: String,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RunCommandPolicyKind {
+    CustomTool,
 }
 
 /// Cap the per-stream output to a sane upper
@@ -187,10 +204,9 @@ pub const MAX_OUTPUT_BYTES_DEFAULT: usize = 256 * 1024;
 ///
 /// `timeout` defaults to `DEFAULT_TIMEOUT`;
 /// `max_output_bytes` defaults to
-/// `MAX_OUTPUT_BYTES_DEFAULT`. We pass
-/// `tokio::time::timeout` around the
-/// `output().await` future for the wall-clock
-/// cap.
+/// `MAX_OUTPUT_BYTES_DEFAULT`. We retain the
+/// spawned child handle so the timeout branch can
+/// kill and reap the process before returning.
 pub async fn run_command_impl(
     mut cmd: Command,
     timeout: Duration,
@@ -213,28 +229,33 @@ pub async fn run_command_impl(
     cmd.stderr(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::null());
 
-    let output_fut = cmd.output();
+    let mut child = cmd.spawn().map_err(|e| RunCommandError::Spawn {
+        program: program_str.clone(),
+        detail: e.to_string(),
+    })?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_task = tokio::spawn(read_pipe(stdout));
+    let stderr_task = tokio::spawn(read_pipe(stderr));
 
-    let output = match tokio::time::timeout(timeout, output_fut).await {
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(res) => res.map_err(|e| RunCommandError::Spawn {
             program: program_str.clone(),
             detail: e.to_string(),
         })?,
         Err(_) => {
-            // Timeout fired. We can't kill the
-            // process from this scope (the
-            // `Command` was moved into
-            // `output_fut`), so we just report
-            // the timeout. The OS will clean
-            // up the zombie eventually.
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            stdout_task.abort();
+            stderr_task.abort();
             return Err(RunCommandError::Timeout {
                 seconds: timeout.as_secs(),
             });
         }
     };
 
-    let stdout_raw = output.stdout;
-    let stderr_raw = output.stderr;
+    let stdout_raw = stdout_task.await.unwrap_or_default();
+    let stderr_raw = stderr_task.await.unwrap_or_default();
 
     let mut stdout = String::from_utf8_lossy(&stdout_raw).into_owned();
     let mut stderr = String::from_utf8_lossy(&stderr_raw).into_owned();
@@ -249,7 +270,7 @@ pub async fn run_command_impl(
         stderr.push_str("\n<truncated>");
     }
 
-    let exit_code = output.status.code();
+    let exit_code = status.code();
 
     // 5c policy: a non-zero exit is reported
     // as `RunCommandError::NonZeroExit` so
@@ -258,7 +279,7 @@ pub async fn run_command_impl(
     // We still include stdout/stderr in the
     // error so the model has the full
     // picture.
-    if !output.status.success() {
+    if !status.success() {
         return Err(RunCommandError::NonZeroExit {
             code: exit_code,
             stdout,
@@ -274,28 +295,53 @@ pub async fn run_command_impl(
     })
 }
 
+async fn read_pipe<T>(pipe: Option<T>) -> Vec<u8>
+where
+    T: tokio::io::AsyncRead + Unpin,
+{
+    let Some(mut pipe) = pipe else {
+        return Vec::new();
+    };
+    let mut bytes = Vec::new();
+    if pipe.read_to_end(&mut bytes).await.is_err() {
+        return Vec::new();
+    }
+    bytes
+}
+
 /// 5c: public entry point called by the
 /// `#[tauri::command]` wrapper in `lib.rs`.
 /// The JS `toolRegistry` invokes this via
 /// `invoke('run_command', …)`.
-pub async fn run_command(
-    args: RunCommandArgs,
-) -> Result<RunCommandResult, RunCommandError> {
+pub async fn run_command(args: RunCommandArgs) -> Result<RunCommandResult, RunCommandError> {
     if args.program.is_empty() {
         return Err(RunCommandError::Empty);
     }
+    let cwd = match args.policy.as_ref() {
+        Some(policy) => {
+            if policy.tool_name.trim().is_empty() {
+                return Err(RunCommandError::Policy {
+                    detail: "custom tool policy requires toolName".to_string(),
+                });
+            }
+            match policy.kind {
+                RunCommandPolicyKind::CustomTool => validate_custom_shell_policy(
+                    &args.program,
+                    args.cwd.as_deref(),
+                    &policy.workspace_root,
+                )
+                .map_err(|detail| RunCommandError::Policy { detail })?,
+            }
+        }
+        None => {
+            return Err(RunCommandError::Policy {
+                detail: "run_command requires an execution policy".to_string(),
+            });
+        }
+    };
     let mut cmd = Command::new(&args.program);
     cmd.args(&args.args);
-    if let Some(cwd) = &args.cwd {
-        // We trust the JS side to pass a
-        // valid path; if the path is
-        // malformed, `tokio::process::Command`
-        // will fail at `output()` time with
-        // a `NotFound` (NOTDIR) error which
-        // we map to `RunCommandError::Spawn`.
-        let path = PathBuf::from(cwd);
-        cmd.current_dir(path);
-    }
+    cmd.current_dir(cwd);
     let timeout = args
         .timeout_secs
         .map(Duration::from_secs)
@@ -309,8 +355,22 @@ pub async fn run_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env::temp_dir;
+    use std::fs;
+    use std::path::{Path, PathBuf};
     use std::process::Stdio;
+    use std::time::SystemTime;
     use tokio::process::Command;
+
+    fn unique_marker_path(label: &str) -> PathBuf {
+        let mut p = temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        p.push(format!("lipi-command-{label}-{nanos}.txt"));
+        p
+    }
 
     /// On Unix, `true` is a no-op builtin that
     /// exits 0 with empty output. On Windows,
@@ -385,13 +445,39 @@ mod tests {
         }
     }
 
+    fn delayed_marker_command(marker: &Path) -> Command {
+        #[cfg(unix)]
+        {
+            let marker = marker.to_string_lossy().replace('\'', "'\\''");
+            let mut c = Command::new("sh");
+            c.args(["-c", &format!("sleep 2; printf done > '{marker}'")]);
+            c.stdin(Stdio::null());
+            c
+        }
+        #[cfg(windows)]
+        {
+            let marker = marker.to_string_lossy().replace('\'', "''");
+            let mut c = Command::new("powershell");
+            c.args([
+                "-NoProfile",
+                "-Command",
+                &format!("Start-Sleep -Seconds 2; Set-Content -LiteralPath '{marker}' -Value done"),
+            ]);
+            c.stdin(Stdio::null());
+            c
+        }
+    }
+
     #[tokio::test]
     async fn success_path_returns_captured_stdout() {
-        let result =
-            run_command_impl(echo_command(), DEFAULT_TIMEOUT, MAX_OUTPUT_BYTES_DEFAULT)
-                .await
-                .expect("echo should succeed");
-        assert!(result.stdout.contains("hello world"), "got: {:?}", result.stdout);
+        let result = run_command_impl(echo_command(), DEFAULT_TIMEOUT, MAX_OUTPUT_BYTES_DEFAULT)
+            .await
+            .expect("echo should succeed");
+        assert!(
+            result.stdout.contains("hello world"),
+            "got: {:?}",
+            result.stdout
+        );
         assert!(result.stderr.is_empty());
         assert_eq!(result.exit_code, Some(0));
         assert!(!result.cancelled);
@@ -403,7 +489,11 @@ mod tests {
             .await
             .expect_err("non-zero exit should error");
         match err {
-            RunCommandError::NonZeroExit { code, stdout, stderr } => {
+            RunCommandError::NonZeroExit {
+                code,
+                stdout,
+                stderr,
+            } => {
                 #[cfg(unix)]
                 assert_eq!(code, Some(7));
                 #[cfg(windows)]
@@ -431,6 +521,26 @@ mod tests {
             RunCommandError::Timeout { seconds } => assert_eq!(seconds, 1),
             other => panic!("expected Timeout, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn timeout_kills_child_before_late_side_effect() {
+        let marker = unique_marker_path("timeout-kills");
+        let err = run_command_impl(
+            delayed_marker_command(&marker),
+            Duration::from_secs(1),
+            MAX_OUTPUT_BYTES_DEFAULT,
+        )
+        .await
+        .expect_err("delayed marker command should time out");
+        assert!(matches!(err, RunCommandError::Timeout { seconds: 1 }));
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(
+            !marker.exists(),
+            "timed-out command should have been killed before writing marker"
+        );
+        let _ = fs::remove_file(marker);
     }
 
     #[tokio::test]
@@ -485,10 +595,7 @@ mod tests {
         #[cfg(unix)]
         let cmd = {
             let mut c = Command::new("sh");
-            c.args([
-                "-c",
-                "head -c 4096 < /dev/zero | tr '\\0' 'x'",
-            ]);
+            c.args(["-c", "head -c 4096 < /dev/zero | tr '\\0' 'x'"]);
             c.stdin(Stdio::null());
             c
         };
@@ -516,5 +623,72 @@ mod tests {
         // bytes of slack for `String::truncate`
         // round-down to a UTF-8 boundary.
         assert!(result.stdout.len() <= 1024 + "<truncated>".len() + 8);
+    }
+
+    #[tokio::test]
+    async fn public_run_command_requires_policy() {
+        let err = run_command(RunCommandArgs {
+            program: "npm".to_string(),
+            args: vec!["--version".to_string()],
+            cwd: None,
+            timeout_secs: None,
+            max_output_bytes: None,
+            policy: None,
+        })
+        .await
+        .expect_err("missing policy should be blocked");
+        assert!(matches!(err, RunCommandError::Policy { .. }));
+    }
+
+    #[tokio::test]
+    async fn public_run_command_rejects_shell_policy_program() {
+        let root = temp_dir();
+        let err = run_command(RunCommandArgs {
+            program: if cfg!(windows) {
+                "powershell".to_string()
+            } else {
+                "sh".to_string()
+            },
+            args: vec![],
+            cwd: Some(root.to_string_lossy().to_string()),
+            timeout_secs: None,
+            max_output_bytes: None,
+            policy: Some(RunCommandPolicy {
+                kind: RunCommandPolicyKind::CustomTool,
+                tool_name: "bad_shell".to_string(),
+                workspace_root: root.to_string_lossy().to_string(),
+            }),
+        })
+        .await
+        .expect_err("shell wrapper should be blocked");
+        match err {
+            RunCommandError::Policy { detail } => assert!(detail.contains("shell")),
+            other => panic!("expected policy error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_command_error_serializes_flat_camel_case() {
+        let policy_json = serde_json::to_value(RunCommandError::Policy {
+            detail: "blocked".to_string(),
+        })
+        .expect("policy error should serialize");
+        assert_eq!(policy_json["kind"], "policy");
+        assert_eq!(policy_json["detail"], "blocked");
+        assert!(
+            policy_json.get("message").is_none(),
+            "Tauri error payload should expose typed fields directly"
+        );
+
+        let exit_json = serde_json::to_value(RunCommandError::NonZeroExit {
+            code: Some(7),
+            stdout: "out".to_string(),
+            stderr: "err".to_string(),
+        })
+        .expect("non-zero exit error should serialize");
+        assert_eq!(exit_json["kind"], "nonZeroExit");
+        assert_eq!(exit_json["code"], 7);
+        assert_eq!(exit_json["stdout"], "out");
+        assert_eq!(exit_json["stderr"], "err");
     }
 }

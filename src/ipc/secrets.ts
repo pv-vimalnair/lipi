@@ -62,6 +62,7 @@ function asSecretError(err: unknown): SecretError {
  * providers.
  */
 export type ProviderId = string;
+export type RendererReadableProviderId = 'wispr';
 
 /**
  * Save (or overwrite) the API key for the given
@@ -125,15 +126,17 @@ export async function secretsDeleteApiKey(
 }
 
 /**
- * M2b: read the raw API key for the given provider from
- * the OS keychain.
+ * M2b: read the raw Wispr API key from the OS keychain.
  *
  * The AI provider keys (openai / anthropic / openrouter)
  * should NOT be read with this — they're consumed by the
  * Rust AI proxy and Decision #17 explicitly says the JS
  * side never sees the value. This command exists for
- * providers whose calls originate in the WebView (today:
- * Wispr Flow, whose WebSocket is opened from JS).
+ * providers whose calls originate in the WebView. Today
+ * that is Wispr Flow only, whose WebSocket is opened from
+ * JS. Rust also enforces this allowlist, so direct renderer
+ * IPC calls cannot fetch OpenAI / Anthropic / OpenRouter
+ * keys.
  *
  * Returns `null` if the provider has no key in the
  * keychain. Throws `SecretError` on keychain errors.
@@ -150,7 +153,7 @@ export async function secretsDeleteApiKey(
  *     and drops it on `stop()`.
  */
 export async function secretsGetApiKey(
-  provider: ProviderId,
+  provider: RendererReadableProviderId,
 ): Promise<string | null> {
   try {
     return await invoke<string | null>('secrets_get_api_key', { provider });

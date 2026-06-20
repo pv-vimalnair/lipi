@@ -48,6 +48,60 @@
   color: var(--color-text-primary);
   border-bottom: 1px solid var(--color-bg-base);
   margin-bottom: -1px;
+  /* Theme image painted onto the active tab. The illustration
+   * is the same asset used in the Settings picker; the crop
+   * position comes from --theme-img-crop (set by the picker
+   * in Appearance → Theme). The image is sized to "cover" so
+   * it fills the small tab area regardless of aspect ratio,
+   * and the rest of the tab UI overlays the image via the
+   * ::before wash + z-indexed children (see below). */
+  background-image: var(--theme-img, none);
+  background-size: cover;
+  background-position: var(--theme-img-crop, center);
+  background-repeat: no-repeat;
+  position: relative;
+}
+
+/* Wash overlay — darkens the lower 2/3 of the tab so the
+ * file name stays legible regardless of which illustration
+ * is painted. The gradient stops are tuned for the
+ * 30px-tall tab: the top stays bright (so the 2px accent
+ * stripe stays vivid), the bottom goes ~85% opaque so the
+ * dark editor background barely bleeds through. */
+.tab[data-active]::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(11, 13, 16, 0.35) 0%,
+    rgba(11, 13, 16, 0.85) 100%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Accent stripe on top — picks up the per-theme accent from
+ * the picker (Hickory Hollow → warm brown, Whispering Pines
+ * → forest green, etc.). Sits above the wash overlay so the
+ * stripe stays vivid. */
+.tab[data-active]::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--theme-accent, var(--color-accent));
+  z-index: 2;
+}
+
+/* Children of the active tab need a z-index above the wash
+ * overlay (z-index: 0) so the file name, dirty dot, and close
+ * button remain crisp against the illustration. */
+.tab[data-active] > * {
+  position: relative;
+  z-index: 1;
 }
 
 .dot {
@@ -60,7 +114,11 @@
 }
 
 .dot[data-dirty] {
-  background-color: var(--color-accent);
+  /* The dirty dot picks up the per-theme accent when set, so
+   * a Hickory Hollow session has warm-brown dots and a
+   * Whispering Pines session has forest-green dots. Falls
+   * back to the project default accent for safety. */
+  background-color: var(--theme-accent, var(--color-accent));
 }
 
 .name {

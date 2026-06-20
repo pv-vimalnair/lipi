@@ -80,6 +80,8 @@ pub enum TerminalError {
     AlreadyClosed(String),
     #[error("pty error: {0}")]
     Pty(String),
+    #[error("blocked by policy: {0}")]
+    Policy(String),
 }
 
 /// Opaque sink for the reader thread to report output and exit
@@ -151,10 +153,12 @@ struct Session {
 
 impl Session {
     fn write_stdin(&self, data: &[u8]) -> Result<(), TerminalError> {
-        let mut w = self.writer.lock().map_err(|e| {
-            TerminalError::Pty(format!("writer mutex poisoned: {e}"))
-        })?;
-        w.write_all(data).map_err(|e| TerminalError::Io(e.to_string()))?;
+        let mut w = self
+            .writer
+            .lock()
+            .map_err(|e| TerminalError::Pty(format!("writer mutex poisoned: {e}")))?;
+        w.write_all(data)
+            .map_err(|e| TerminalError::Io(e.to_string()))?;
         w.flush().map_err(|e| TerminalError::Io(e.to_string()))?;
         Ok(())
     }
@@ -228,10 +232,7 @@ pub fn open(
     opts: OpenOptions,
     sink: Arc<dyn EventSink>,
 ) -> Result<OpenResult, TerminalError> {
-    let shell = opts
-        .shell
-        .clone()
-        .unwrap_or_else(default_shell);
+    let shell = opts.shell.clone().unwrap_or_else(default_shell);
 
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -338,16 +339,25 @@ pub fn open(
         // session can still be `close`d from the JS side
         // (writer drop will signal EOF), and after the
         // reader thread is done we set the exit status.
-        let mut child_slot = session.child.lock().map_err(|e| {
-            TerminalError::Pty(format!("child mutex poisoned: {e}"))
-        })?;
+        let mut child_slot = session
+            .child
+            .lock()
+            .map_err(|e| TerminalError::Pty(format!("child mutex poisoned: {e}")))?;
         child_slot.take()
     }
     .ok_or_else(|| TerminalError::AlreadyClosed(id_for_thread.clone()))?;
 
     std::thread::Builder::new()
         .name(format!("lipi-term-{id_for_thread}"))
-        .spawn(move || reader_loop(reader, child, id_for_thread, sink_for_thread, state_for_thread))
+        .spawn(move || {
+            reader_loop(
+                reader,
+                child,
+                id_for_thread,
+                sink_for_thread,
+                state_for_thread,
+            )
+        })
         .map_err(|e| TerminalError::Pty(format!("failed to spawn reader thread: {e}")))?;
 
     Ok(OpenResult {
@@ -413,10 +423,7 @@ pub fn resize(
 /// continues until the shell exits (which happens because
 /// we dropped the writer) and then it self-removes from the
 /// map (a no-op since we already removed the entry).
-pub fn close(
-    state: &Arc<TerminalState>,
-    session_id: &str,
-) -> Result<(), TerminalError> {
+pub fn close(state: &Arc<TerminalState>, session_id: &str) -> Result<(), TerminalError> {
     // Take the session out of the map so the reader thread
     // (which also touches the map to clean up) can't race
     // with us. If the session is already gone, the close
@@ -526,10 +533,7 @@ mod tests {
     }
     impl EventSink for TestSink {
         fn emit_output(&self, _session_id: &str, data: Vec<u8>) {
-            self.events
-                .lock()
-                .unwrap()
-                .push(TestEvent::Output(data));
+            self.events.lock().unwrap().push(TestEvent::Output(data));
         }
         fn emit_exit(&self, _session_id: &str, code: Option<i32>) {
             self.events.lock().unwrap().push(TestEvent::Exit(code));
@@ -543,9 +547,7 @@ mod tests {
 
     fn find_substring(haystack: &[TestEvent], needle: &[u8]) -> bool {
         haystack.iter().any(|e| match e {
-            TestEvent::Output(data) => data
-                .windows(needle.len())
-                .any(|w| w == needle),
+            TestEvent::Output(data) => data.windows(needle.len()).any(|w| w == needle),
             TestEvent::Exit(_) => false,
         })
     }

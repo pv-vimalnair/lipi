@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lipi — Your voice. Your IDE.</title>
+  <meta name="description" content="The cross-platform AI-powered IDE that listens. Voice-to-code on mobile, full IDE on desktop, your API keys, your control.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ============ Top Nav ============ -->
+  <header class="nav" id="nav">
+    <div class="nav__inner">
+      <a href="#" class="nav__logo" aria-label="Lipi home">
+        <span class="nav__logo-mark" aria-hidden="true"></span>
+        <span class="nav__logo-text">Lipi</span>
+      </a>
+
+      <nav class="nav__links" aria-label="Primary">
+        <a href="#products">Products</a>
+        <a href="#platforms">Platforms</a>
+        <a href="#voice">Voice</a>
+        <a href="#developers">Developers</a>
+        <a href="#blog">Blog</a>
+        <a href="#privacy">Privacy</a>
+      </nav>
+
+      <div class="nav__cta">
+        <a href="#download" class="btn btn--ghost">
+          <span>Download</span>
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6"/>
+          </svg>
+        </a>
+        <a href="#contact" class="btn btn--dark">
+          <span>Contact</span>
+          <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6"/>
+          </svg>
+        </a>
+      </div>
+
+      <button class="nav__toggle" id="navToggle" aria-label="Toggle menu" aria-expanded="false">
+        <span class="nav__toggle-bar" aria-hidden="true"></span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============ Hero ============ -->
+    <section class="hero">
+      <!-- Decor layer (pixel blocks + pixel icons) -->
+      <div class="hero__decor" aria-hidden="true">
+        <div class="pixel-block pixel-block--1"></div>
+        <div class="pixel-block pixel-block--2"></div>
+        <div class="pixel-block pixel-block--3"></div>
+        <div class="pixel-block pixel-block--4"></div>
+
+        <div class="pixel-lego pixel-lego--a">
+          <span></span><span></span>
+          <span></span><span></span>
+        </div>
+        <div class="pixel-lego pixel-lego--b">
+          <span></span><span></span><span></span>
+          <span></span><span></span><span></span>
+        </div>
+
+        <!-- Microphone pixel icon -->
+        <svg class="pixel-icon pixel-icon--mic" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="6" y="2" width="4" height="1" fill="currentColor"/>
+          <rect x="5" y="3" width="6" height="1" fill="currentColor"/>
+          <rect x="5" y="4" width="6" height="3" fill="currentColor"/>
+          <rect x="6" y="7" width="4" height="1" fill="currentColor"/>
+          <rect x="7" y="8" width="2" height="2" fill="currentColor"/>
+          <rect x="3" y="9" width="10" height="1" fill="currentColor"/>
+          <rect x="4" y="10" width="1" height="2" fill="currentColor"/>
+          <rect x="11" y="10" width="1" height="2" fill="currentColor"/>
+          <rect x="4" y="12" width="8" height="1" fill="currentColor"/>
+        </svg>
+
+        <!-- Code brackets pixel icon -->
+        <svg class="pixel-icon pixel-icon--code" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="3" y="2" width="1" height="1" fill="currentColor"/>
+          <rect x="2" y="3" width="1" height="1" fill="currentColor"/>
+          <rect x="3" y="4" width="1" height="1" fill="currentColor"/>
+          <rect x="2" y="5" width="1" height="1" fill="currentColor"/>
+          <rect x="3" y="6" width="1" height="1" fill="currentColor"/>
+          <rect x="2" y="7" width="1" height="1" fill="currentColor"/>
+          <rect x="3" y="8" width="1" height="1" fill="currentColor"/>
+          <rect x="12" y="2" width="1" height="1" fill="currentColor"/>
+          <rect x="13" y="3" width="1" height="1" fill="currentColor"/>
+          <rect x="12" y="4" width="1" height="1" fill="currentColor"/>
+          <rect x="13" y="5" width="1" height="1" fill="currentColor"/>
+          <rect x="12" y="6" width="1" height="1" fill="currentColor"/>
+          <rect x="13" y="7" width="1" height="1" fill="currentColor"/>
+          <rect x="12" y="8" width="1" height="1" fill="currentColor"/>
+          <rect x="6" y="7" width="1" height="1" fill="currentColor"/>
+          <rect x="7" y="7" width="2" height="1" fill="currentColor"/>
+          <rect x="9" y="7" width="1" height="1" fill="currentColor"/>
+          <rect x="6" y="8" width="4" height="1" fill="currentColor"/>
+        </svg>
+
+        <!-- Chat bubble pixel icon -->
+        <svg class="pixel-icon pixel-icon--chat" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="3" y="2" width="10" height="1" fill="currentColor"/>
+          <rect x="2" y="3" width="12" height="1" fill="currentColor"/>
+          <rect x="2" y="4" width="12" height="1" fill="currentColor"/>
+          <rect x="2" y="5" width="12" height="1" fill="currentColor"/>
+          <rect x="2" y="6" width="12" height="1" fill="currentColor"/>
+          <rect x="2" y="7" width="12" height="1" fill="currentColor"/>
+          <rect x="3" y="8" width="10" height="1" fill="currentColor"/>
+          <rect x="4" y="9" width="3" height="1" fill="currentColor"/>
+          <rect x="2" y="4" width="1" height="3" fill="currentColor"/>
+          <rect x="13" y="4" width="1" height="3" fill="currentColor"/>
+          <rect x="5" y="5" width="1" height="1" fill="currentColor"/>
+          <rect x="7" y="5" width="1" height="1" fill="currentColor"/>
+          <rect x="9" y="5" width="1" height="1" fill="currentColor"/>
+        </svg>
+
+        <!-- Lock pixel icon -->
+        <svg class="pixel-icon pixel-icon--lock" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="5" y="2" width="1" height="1" fill="currentColor"/>
+          <rect x="10" y="2" width="1" height="1" fill="currentColor"/>
+          <rect x="5" y="3" width="1" height="1" fill="currentColor"/>
+          <rect x="6" y="3" width="4" height="1" fill="currentColor"/>
+          <rect x="10" y="3" width="1" height="1" fill="currentColor"/>
+          <rect x="5" y="4" width="1" height="1" fill="currentColor"/>
+          <rect x="6" y="4" width="4" height="1" fill="currentColor"/>
+          <rect x="10" y="4" width="1" height="1" fill="currentColor"/>
+          <rect x="5" y="5" width="1" height="1" fill="currentColor"/>
+          <rect x="10" y="5" width="1" height="1" fill="currentColor"/>
+          <rect x="3" y="6" width="10" height="1" fill="currentColor"/>
+          <rect x="3" y="7" width="10" height="1" fill="currentColor"/>
+          <rect x="3" y="8" width="10" height="6" fill="currentColor"/>
+          <rect x="4" y="9" width="8" height="4" fill="var(--color-bg)"/>
+          <rect x="7" y="10" width="2" height="2" fill="currentColor"/>
+          <rect x="6" y="12" width="4" height="1" fill="currentColor"/>
+        </svg>
+      </div>
+
+      <!-- Headline + side description grid -->
+      <div class="hero__grid">
+        <h1 class="hero__headline">
+          <span class="hero__headline-line">Your voice.</span>
+          <span class="hero__headline-line hero__headline-accent">Your IDE.</span>
+        </h1>
+
+        <div class="hero__side">
+          <p class="hero__desc">
+            Lipi is the cross-platform AI-powered IDE that listens. Speak code on mobile, ship on desktop, keep your keys in your own keychain.
+          </p>
+          <div class="hero__cta">
+            <a href="#download" class="btn btn--dark btn--pill btn--lg">
+              <span>Download Lipi</span>
+              <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 6l6 6-6 6"/>
+              </svg>
+            </a>
+            <span class="hero__cta-meta">v0.6 · Win / Mac / Linux / iOS / Android</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Placeholder for the rest of the page (Phases 2-4 will fill this in) -->
+    <section style="min-height: 80vh; background: var(--color-bg-soft); display: grid; place-items: center;">
+      <p style="font-family: var(--font-mono); font-size: var(--fs-sm); letter-spacing: var(--tracking-wide); text-transform: uppercase; color: var(--color-text-muted);">
+        ↓ Phase 2 — Trust strip + Featured news + Do-it-all grid
+      </p>
+    </section>
+  </main>
+
+  <script src="script.js" defer></script>
+</body>
+</html>

@@ -21,6 +21,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import {
   SearchError,
+  workspaceSearchCancel,
   workspaceSearch,
   type SearchOptions,
 } from './workspaceSearch';
@@ -64,6 +65,7 @@ describe('workspaceSearch IPC', () => {
       caseInsensitive: true,
       extraIgnores: ['build'],
       maxResults: 50,
+      searchId: 'search-1',
     });
     expect(invokeMock).toHaveBeenCalledWith('workspace_search', {
       opts: {
@@ -72,7 +74,16 @@ describe('workspaceSearch IPC', () => {
         caseInsensitive: true,
         extraIgnores: ['build'],
         maxResults: 50,
+        searchId: 'search-1',
       },
+    });
+  });
+
+  it('invokes workspace_search_cancel with the search id', async () => {
+    invokeMock.mockResolvedValueOnce(true);
+    await expect(workspaceSearchCancel('search-1')).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledWith('workspace_search_cancel', {
+      searchId: 'search-1',
     });
   });
 
@@ -95,6 +106,18 @@ describe('workspaceSearch IPC', () => {
       workspaceSearch({ query: '', rootPath: '/a' }),
     ).rejects.toMatchObject({
       payload: { kind: 'InvalidQuery' },
+    });
+  });
+
+  it('throws SearchError on a typed Cancelled payload', async () => {
+    invokeMock.mockRejectedValueOnce({
+      kind: 'Cancelled',
+      detail: 'search-1',
+    });
+    await expect(
+      workspaceSearch({ query: 'x', rootPath: '/a', searchId: 'search-1' }),
+    ).rejects.toMatchObject({
+      payload: { kind: 'Cancelled', detail: 'search-1' },
     });
   });
 

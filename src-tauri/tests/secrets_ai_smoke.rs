@@ -73,9 +73,7 @@ fn install_mock() {
     // parallel-race fix is the `TEST_LOCK` above
     // (this `install_mock` is necessary but not
     // sufficient on its own).
-    let _ = keyring::set_default_credential_builder(Box::new(
-        MockCredentialBuilder {},
-    ));
+    let _ = keyring::set_default_credential_builder(Box::new(MockCredentialBuilder {}));
 }
 
 #[test]

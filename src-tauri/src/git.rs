@@ -85,9 +85,7 @@ pub enum GitError {
 impl From<gix::open::Error> for GitError {
     fn from(err: gix::open::Error) -> Self {
         match err {
-            gix::open::Error::NotARepository { .. } => {
-                GitError::NotARepository(err.to_string())
-            }
+            gix::open::Error::NotARepository { .. } => GitError::NotARepository(err.to_string()),
             other => GitError::Git(other.to_string()),
         }
     }
@@ -141,11 +139,7 @@ pub fn open_repo(path: &Path) -> Result<RepoHandle, GitError> {
     let repo = gix::open(path)?;
     let workdir = repo
         .workdir()
-        .ok_or_else(|| {
-            GitError::NotARepository(
-                "bare repository (no working tree)".to_string(),
-            )
-        })?
+        .ok_or_else(|| GitError::NotARepository("bare repository (no working tree)".to_string()))?
         .to_string_lossy()
         .into_owned();
     Ok(RepoHandle { workdir })
@@ -251,8 +245,7 @@ pub fn status(handle: &RepoHandle) -> Result<RepoStatus, GitError> {
                 // a real change; ignore.
             }
             gix::status::Item::TreeIndex(change) => {
-                let path =
-                    workdir.join(gix::path::from_bstr(change.location()));
+                let path = workdir.join(gix::path::from_bstr(change.location()));
                 let path_str = path.to_string_lossy().into_owned();
                 let (kind, special) = map_tree_index_change(&change);
                 if let Some(special) = special {
@@ -313,10 +306,7 @@ fn is_unborn(repo: &gix::Repository) -> bool {
 ///
 /// Per Decision #26 (HANDOFF), gix is pinned to 0.78; this function
 /// compiles against 0.78's `Platform::with_hidden` + `Walk::count`.
-fn ahead_behind(
-    repo: &gix::Repository,
-    branch: Option<&str>,
-) -> (u32, u32) {
+fn ahead_behind(repo: &gix::Repository, branch: Option<&str>) -> (u32, u32) {
     let Some(branch) = branch else {
         return (0, 0);
     };
@@ -371,10 +361,7 @@ where
 /// branch. Returns `None` on any failure (no upstream, detached HEAD,
 /// config missing, ODB failure). Caller treats `None` as "no upstream
 /// configured; report 0/0".
-fn upstream_id(
-    repo: &gix::Repository,
-    branch: &str,
-) -> Option<gix::ObjectId> {
+fn upstream_id(repo: &gix::Repository, branch: &str) -> Option<gix::ObjectId> {
     // rev_parse_single handles `@{u}` natively. If the user has a
     // tracking branch set, this resolves to the upstream tip.
     repo.rev_parse_single(format!("{branch}@{{u}}").as_str())
@@ -386,10 +373,7 @@ fn upstream_id(
 /// Returns `Ok(None)` when the path doesn't exist in HEAD
 /// (untracked, staged-add, or wrong path) or when the entry is not
 /// a regular blob (submodule, symlink target).
-fn read_from_head(
-    repo: &gix::Repository,
-    rel_path: &Path,
-) -> Result<Option<Vec<u8>>, GitError> {
+fn read_from_head(repo: &gix::Repository, rel_path: &Path) -> Result<Option<Vec<u8>>, GitError> {
     let tree_id = match repo.head_tree_id() {
         Ok(id) => id.detach(),
         // Unborn HEAD: nothing to read.
@@ -413,9 +397,7 @@ fn read_from_head(
         Ok(None) => return Ok(None),
         Err(e) => return Err(GitError::Git(e.to_string())),
     };
-    let object = entry
-        .object()
-        .map_err(|e| GitError::Git(e.to_string()))?;
+    let object = entry.object().map_err(|e| GitError::Git(e.to_string()))?;
     match object.try_into_blob() {
         Ok(blob) => Ok(Some(blob.data.clone())),
         // Submodule / symlink: not a regular file. UI will show
@@ -441,10 +423,7 @@ fn read_from_worktree(workdir: &Path, rel_path: &Path) -> std::io::Result<Option
 /// considered binary if it contains a NUL byte in the first 8 KB —
 /// the same heuristic as the `fs::read_file` binary detection.
 fn is_binary(bytes: &[u8]) -> bool {
-    bytes
-        .iter()
-        .take(8 * 1024)
-        .any(|&b| b == 0)
+    bytes.iter().take(8 * 1024).any(|&b| b == 0)
 }
 
 /// Lossily decode bytes to a `String`, truncating to `MAX_DIFF_BYTES`.
@@ -475,15 +454,12 @@ pub fn diff(handle: &RepoHandle, path: &Path) -> Result<FileDiff, GitError> {
     let rel_for_lookup = Path::new(&rel_str);
 
     let head_bytes = read_from_head(&repo, rel_for_lookup)?;
-    let wt_bytes = read_from_worktree(workdir, rel_for_lookup)
-        .map_err(|e| GitError::Git(e.to_string()))?;
+    let wt_bytes =
+        read_from_worktree(workdir, rel_for_lookup).map_err(|e| GitError::Git(e.to_string()))?;
 
     let is_new = head_bytes.is_none() && wt_bytes.is_some();
     let is_deleted = head_bytes.is_some() && wt_bytes.is_none();
-    let is_binary = head_bytes
-        .as_deref()
-        .map(is_binary)
-        .unwrap_or(false)
+    let is_binary = head_bytes.as_deref().map(is_binary).unwrap_or(false)
         || wt_bytes.as_deref().map(is_binary).unwrap_or(false);
 
     // Build the (old, new) pair. For binary files we keep the bytes
@@ -605,9 +581,7 @@ pub struct CommitResult {
 /// STT will emit real newlines).
 pub fn validate_commit_message(msg: &str) -> Result<(), GitError> {
     if msg.is_empty() {
-        return Err(GitError::Git(
-            "commit message cannot be empty".to_string(),
-        ));
+        return Err(GitError::Git("commit message cannot be empty".to_string()));
     }
     if msg.len() > 512 {
         return Err(GitError::Git(format!(
@@ -689,9 +663,7 @@ pub fn stage_all(handle: &RepoHandle) -> Result<(), GitError> {
         }
     }
     if !any_changes {
-        return Err(GitError::Git(
-            "no changes to commit".to_string(),
-        ));
+        return Err(GitError::Git("no changes to commit".to_string()));
     }
 
     // Shell out to `git add -A`. We intentionally
@@ -722,7 +694,10 @@ pub fn stage_all(handle: &RepoHandle) -> Result<(), GitError> {
     if !status.success() {
         return Err(GitError::Git(format!(
             "git add -A failed with exit code {}",
-            status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".to_string())
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".to_string())
         )));
     }
     Ok(())
@@ -801,9 +776,7 @@ pub fn commit(handle: &RepoHandle, message: &str) -> Result<CommitResult, GitErr
     Ok(CommitResult { sha, short_sha })
 }
 
-fn map_summary(
-    summary: gix::status::index_worktree::iter::Summary,
-) -> ChangeKind {
+fn map_summary(summary: gix::status::index_worktree::iter::Summary) -> ChangeKind {
     use gix::status::index_worktree::iter::Summary as S;
     match summary {
         S::Added => ChangeKind::Untracked, // index doesn't have it
@@ -820,9 +793,7 @@ fn map_summary(
 /// Map a tree-index change (HEAD vs. index, staged changes) to our
 /// `ChangeKind`. Returns `(kind, special)` — `special` is `Some` only
 /// when the kind is `Conflict` and we want to override the default.
-fn map_tree_index_change(
-    change: &gix::diff::index::Change,
-) -> (ChangeKind, Option<ChangeKind>) {
+fn map_tree_index_change(change: &gix::diff::index::Change) -> (ChangeKind, Option<ChangeKind>) {
     use gix::diff::index::ChangeRef as C;
     match change {
         C::Addition { .. } => (ChangeKind::Added, None),
@@ -1144,11 +1115,7 @@ mod tests {
         );
         // Wire branch.<name>.{remote,merge} so @{u} resolves to the
         // synthetic ref. We use the local config to scope the change.
-        run(
-            "git",
-            &["config", "branch.main.remote", "origin"],
-            &dir,
-        );
+        run("git", &["config", "branch.main.remote", "origin"], &dir);
         run(
             "git",
             &["config", "branch.main.merge", "refs/heads/main"],
@@ -1165,7 +1132,11 @@ mod tests {
         );
         run(
             "git",
-            &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
             &dir,
         );
         // Sanity: `git rev-parse main@{u}` should return HEAD~1.
@@ -1303,7 +1274,11 @@ mod tests {
         );
         // After commit, status should be clean.
         let s = status(&h).unwrap();
-        assert!(s.is_clean, "expected clean after commit, got {:?}", s.changed_files);
+        assert!(
+            s.is_clean,
+            "expected clean after commit, got {:?}",
+            s.changed_files
+        );
         fs::remove_dir_all(dir).ok();
     }
 

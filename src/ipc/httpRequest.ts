@@ -68,6 +68,13 @@ export interface HttpRequestArgs {
    *  with a `<truncated>` marker so the
    *  model still gets something useful. */
   maxBodyBytes?: number;
+  /** Per-tool host allowlist. HTTP custom tools pass this
+   *  from `lipi-tools.json` or derive it from a static URL
+   *  template host. */
+  allowedHosts?: string[];
+  /** Explicit opt-in for localhost/private/link-local targets.
+   *  Defaults to false in Rust. */
+  allowPrivateNetwork?: boolean;
 }
 
 /**

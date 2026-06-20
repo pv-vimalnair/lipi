@@ -54,6 +54,9 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
  * finds the right `tsconfig.json`.
  */
 export interface RunStdioArgs {
+  /** Language-server kind. Required by the
+   *  Rust-side spawn policy gate. */
+  serverKind: LspServerKind;
   /** Program path. On Windows this can be a bare
    *  executable name (resolved via `PATH`) or an
    *  absolute path. The most common call is

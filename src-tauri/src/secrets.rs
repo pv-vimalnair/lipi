@@ -73,6 +73,11 @@ pub(crate) const MAX_PROVIDER_LEN: usize = 64;
 /// `validate_key` upper bound).
 pub(crate) const MAX_KEY_LEN: usize = 512;
 
+/// The only provider whose raw key may cross the
+/// Rust -> renderer boundary. AI-provider keys stay
+/// Rust-side and are consumed by the chat proxy.
+pub(crate) const RENDERER_READABLE_PROVIDER: &str = "wispr";
+
 /// Error type for the secrets module. Serialised to
 /// camelCase JSON for the frontend (`secretError` /
 /// `invalidInput` / `keychainUnavailable` / `platform`).
@@ -88,27 +93,21 @@ pub enum SecretError {
     /// The provider id or the key value was empty,
     /// too long, or non-ASCII.
     #[error("invalid input: {detail}")]
-    InvalidInput {
-        detail: String,
-    },
+    InvalidInput { detail: String },
 
     /// The keyring backend is unavailable. On Linux,
     /// this is the most common error (no Secret
     /// Service running). On Windows / macOS, it
     /// usually means a sandbox / permissions issue.
     #[error("keychain unavailable: {detail}")]
-    KeychainUnavailable {
-        detail: String,
-    },
+    KeychainUnavailable { detail: String },
 
     /// Generic platform error that doesn't fit the
     /// other categories (e.g. I/O failure reading
     /// the credential store, or an unexpected
     /// keyring crate error variant).
     #[error("keychain error: {detail}")]
-    Platform {
-        detail: String,
-    },
+    Platform { detail: String },
 }
 
 impl From<keyring::Error> for SecretError {
@@ -121,26 +120,30 @@ impl From<keyring::Error> for SecretError {
             keyring::Error::NoEntry => {
                 // The crate doesn't carry data on NoEntry;
                 // the message is fine for the user.
-                SecretError::Platform { detail: "no entry".to_string() }
+                SecretError::Platform {
+                    detail: "no entry".to_string(),
+                }
             }
             // `Ambiguous` means a third-party tool
             // wrote two credentials with the same
             // service+user. We surface this as a
             // platform error; the user can fix it
             // by deleting the duplicate via the OS UI.
-            keyring::Error::Ambiguous(_) => {
-                SecretError::Platform { detail: "ambiguous entry".to_string() }
-            }
+            keyring::Error::Ambiguous(_) => SecretError::Platform {
+                detail: "ambiguous entry".to_string(),
+            },
             // `BadEncoding` means the stored secret
             // isn't valid UTF-8. We never store binary
             // secrets (only API key strings), so this
             // is a configuration error.
-            keyring::Error::BadEncoding(_) => {
-                SecretError::Platform { detail: "bad encoding".to_string() }
-            }
+            keyring::Error::BadEncoding(_) => SecretError::Platform {
+                detail: "bad encoding".to_string(),
+            },
             // Everything else is treated as "the
             // keychain is not available right now."
-            other => SecretError::KeychainUnavailable { detail: other.to_string() },
+            other => SecretError::KeychainUnavailable {
+                detail: other.to_string(),
+            },
         }
     }
 }
@@ -312,6 +315,23 @@ pub(crate) fn validate_provider(provider: &str) -> Result<(), SecretError> {
     Ok(())
 }
 
+/// Validate a provider id for the public raw-key IPC.
+///
+/// `get_api_key` stays generic because the Rust AI proxy
+/// needs to read OpenAI / Anthropic / OpenRouter keys
+/// internally. The renderer-facing command is narrower:
+/// today only Wispr opens its provider connection from
+/// JS, so only `wispr` may receive a raw key value.
+pub(crate) fn validate_renderer_readable_provider(provider: &str) -> Result<(), SecretError> {
+    validate_provider(provider)?;
+    if provider != RENDERER_READABLE_PROVIDER {
+        return Err(SecretError::InvalidInput {
+            detail: format!("raw key access is only allowed for {RENDERER_READABLE_PROVIDER}"),
+        });
+    }
+    Ok(())
+}
+
 /// Validate an API key. We require a non-empty key
 /// with at most 512 chars. The 512 cap is generous
 /// (real keys are usually 40-100 chars) and prevents
@@ -375,9 +395,8 @@ pub(crate) fn validate_stronghold_input(
 /// `Arc<Entry>`) and writes are both rare and
 /// short. `Mutex` is simpler and the lock
 /// contention is negligible for 3 providers.
-fn entry_cache() -> &'static std::sync::Mutex<
-    std::collections::HashMap<String, std::sync::Arc<keyring::Entry>>,
-> {
+fn entry_cache(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<keyring::Entry>>> {
     use std::sync::OnceLock;
     static CACHE: OnceLock<
         std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<keyring::Entry>>>,
@@ -390,9 +409,9 @@ fn entry_cache() -> &'static std::sync::Mutex<
 /// a new provider inserts into the cache; subsequent
 /// calls clone the `Arc`.
 fn entry_for(provider: &str) -> Result<std::sync::Arc<keyring::Entry>, SecretError> {
-    let mut cache = entry_cache()
-        .lock()
-        .map_err(|e| SecretError::Platform { detail: format!("entry cache lock poisoned: {e}") })?;
+    let mut cache = entry_cache().lock().map_err(|e| SecretError::Platform {
+        detail: format!("entry cache lock poisoned: {e}"),
+    })?;
     if let Some(entry) = cache.get(provider) {
         return Ok(entry.clone());
     }
@@ -425,9 +444,7 @@ pub fn set_api_key(
     // the Stronghold variant.
     #[cfg(feature = "mobile")]
     {
-        if crate::voice_platform::current_os_family()
-            == crate::voice_platform::OsFamily::Android
-        {
+        if crate::voice_platform::current_os_family() == crate::voice_platform::OsFamily::Android {
             let path = snapshot_path.ok_or_else(|| SecretError::Platform {
                 detail: "snapshot_path is required for Stronghold backend".to_string(),
             })?;
@@ -466,9 +483,7 @@ pub fn has_api_key(
 ) -> Result<bool, SecretError> {
     #[cfg(feature = "mobile")]
     {
-        if crate::voice_platform::current_os_family()
-            == crate::voice_platform::OsFamily::Android
-        {
+        if crate::voice_platform::current_os_family() == crate::voice_platform::OsFamily::Android {
             let path = snapshot_path.ok_or_else(|| SecretError::Platform {
                 detail: "snapshot_path is required for Stronghold backend".to_string(),
             })?;
@@ -502,9 +517,7 @@ pub fn get_api_key(
 ) -> Result<Option<String>, SecretError> {
     #[cfg(feature = "mobile")]
     {
-        if crate::voice_platform::current_os_family()
-            == crate::voice_platform::OsFamily::Android
-        {
+        if crate::voice_platform::current_os_family() == crate::voice_platform::OsFamily::Android {
             let path = snapshot_path.ok_or_else(|| SecretError::Platform {
                 detail: "snapshot_path is required for Stronghold backend".to_string(),
             })?;
@@ -512,6 +525,19 @@ pub fn get_api_key(
         }
     }
     get_api_key_keyring(provider)
+}
+
+/// Read a raw API key for renderer-owned provider calls.
+///
+/// This deliberately allowlists only Wispr. The AI provider
+/// keys are still readable by Rust through `get_api_key`,
+/// but the public IPC bridge must not return them to JS.
+pub fn get_renderer_api_key(
+    provider: &str,
+    snapshot_path: Option<&std::path::Path>,
+) -> Result<Option<String>, SecretError> {
+    validate_renderer_readable_provider(provider)?;
+    get_api_key(provider, snapshot_path)
 }
 
 /// Keyring-only `get_api_key` (the original
@@ -538,9 +564,7 @@ pub fn delete_api_key(
 ) -> Result<(), SecretError> {
     #[cfg(feature = "mobile")]
     {
-        if crate::voice_platform::current_os_family()
-            == crate::voice_platform::OsFamily::Android
-        {
+        if crate::voice_platform::current_os_family() == crate::voice_platform::OsFamily::Android {
             let path = snapshot_path.ok_or_else(|| SecretError::Platform {
                 detail: "snapshot_path is required for Stronghold backend".to_string(),
             })?;
@@ -594,7 +618,7 @@ mod tests {
         install_mock();
         // Use a unique provider per test so they
         // don't collide in the in-process mock store.
-        let provider = "openai";
+        let provider = "openai-has-test";
         // Clean up any prior state.
         let _ = delete_api_key(provider, None);
         assert!(!has_api_key(provider, None).unwrap());
@@ -608,7 +632,7 @@ mod tests {
     #[test]
     fn set_then_get_returns_the_key() {
         install_mock();
-        let provider = "anthropic";
+        let provider = "anthropic-get-test";
         let _ = delete_api_key(provider, None);
         let key = "sk-ant-test-abcdef";
         set_api_key(provider, key, None).unwrap();
@@ -618,9 +642,40 @@ mod tests {
     }
 
     #[test]
+    fn renderer_get_api_key_allows_wispr() {
+        install_mock();
+        let provider = RENDERER_READABLE_PROVIDER;
+        let _ = delete_api_key(provider, None);
+        let key = "wispr-test-key";
+        set_api_key(provider, key, None).unwrap();
+        let read = get_renderer_api_key(provider, None).unwrap();
+        assert_eq!(read.as_deref(), Some(key));
+        delete_api_key(provider, None).unwrap();
+    }
+
+    #[test]
+    fn renderer_get_api_key_rejects_ai_provider_even_when_key_exists() {
+        install_mock();
+        let provider = "openai-renderer-reject-test";
+        let _ = delete_api_key(provider, None);
+        set_api_key(provider, "sk-test-raw-read-blocked", None).unwrap();
+        let err = get_renderer_api_key(provider, None).unwrap_err();
+        assert!(
+            matches!(err, SecretError::InvalidInput { ref detail } if detail.contains("wispr")),
+            "expected InvalidInput explaining the Wispr allowlist, got {err:?}"
+        );
+        assert_eq!(
+            get_api_key(provider, None).unwrap().as_deref(),
+            Some("sk-test-raw-read-blocked"),
+            "Rust-internal AI proxy access should remain available"
+        );
+        delete_api_key(provider, None).unwrap();
+    }
+
+    #[test]
     fn delete_is_idempotent() {
         install_mock();
-        let provider = "openrouter";
+        let provider = "openrouter-delete-test";
         // No key exists; delete is a no-op.
         delete_api_key(provider, None).unwrap();
         delete_api_key(provider, None).unwrap();

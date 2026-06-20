@@ -3,8 +3,8 @@
  * text-search command. See
  * `src-tauri/src/workspace_search.rs` for the
  * Rust side and the design notes (no ripgrep
- * sidecar, hand-rolled walker, no cancellation
- * in v1).
+ * sidecar, hand-rolled walker, cancellable via
+ * a per-request search id).
  *
  * The JS side just relays the options and
  * result; the heavy lifting is in Rust.
@@ -25,6 +25,9 @@ export interface SearchOptions {
   /** Max number of matches to return. Defaults
    *  to 1_000 in Rust if omitted. */
   maxResults?: number;
+  /** Optional unique id that can be cancelled through
+   *  `workspaceSearchCancel`. */
+  searchId?: string;
 }
 
 export interface SearchMatch {
@@ -47,7 +50,7 @@ export interface SearchResult {
 /** Tauri error shape serialised from
  *  `src-tauri/src/workspace_search.rs::SearchError`. */
 export interface SearchErrorPayload {
-  kind: 'NotFound' | 'NotADirectory' | 'InvalidQuery' | 'Io';
+  kind: 'NotFound' | 'NotADirectory' | 'InvalidQuery' | 'Io' | 'Cancelled';
   detail: string;
 }
 
@@ -87,4 +90,10 @@ export async function workspaceSearch(
   } catch (err) {
     throw asSearchError(err);
   }
+}
+
+/** Request cancellation of a running workspace search.
+ *  Returns true when the cancellation token was recorded. */
+export async function workspaceSearchCancel(searchId: string): Promise<boolean> {
+  return await invoke<boolean>('workspace_search_cancel', { searchId });
 }

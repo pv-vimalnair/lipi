@@ -147,7 +147,8 @@ fn print_usage() {
          \nThe production private key is read from TAURI_PROD_LICENSE_KEY_HEX (32 hex chars).\n\
          \nThe trial duration constant is {} seconds ({} days) but trials are\n\
          \nauto-generated; this CLI only issues monthly / yearly licenses.",
-        TRIAL_DURATION_SECS, TRIAL_DURATION_SECS / 86_400,
+        TRIAL_DURATION_SECS,
+        TRIAL_DURATION_SECS / 86_400,
     );
 }
 
@@ -172,7 +173,10 @@ fn validate_machine(machine: &str) -> Result<(), String> {
             machine.len()
         ));
     }
-    if !machine.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+    if !machine
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    {
         return Err("machine fingerprint must be 64 lowercase hex chars".to_string());
     }
     Ok(())

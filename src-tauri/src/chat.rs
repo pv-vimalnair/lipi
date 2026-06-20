@@ -429,9 +429,8 @@ fn build_anthropic_messages(messages: &[&ChatMessage]) -> Vec<AnthropicMessage> 
                         // object; the model's
                         // follow-up handling is
                         // its own problem.
-                        let input: serde_json::Value =
-                            serde_json::from_str(&c.arguments)
-                                .unwrap_or_else(|_| serde_json::json!({}));
+                        let input: serde_json::Value = serde_json::from_str(&c.arguments)
+                            .unwrap_or_else(|_| serde_json::json!({}));
                         blocks.push(serde_json::json!({
                             "type": "tool_use",
                             "id": c.id,
@@ -464,10 +463,7 @@ fn build_anthropic_messages(messages: &[&ChatMessage]) -> Vec<AnthropicMessage> 
                 // array of content blocks for
                 // multi-block results; we use the
                 // simple string form for the MVP).
-                let tool_use_id = m
-                    .tool_call_id
-                    .clone()
-                    .unwrap_or_else(|| "".to_string());
+                let tool_use_id = m.tool_call_id.clone().unwrap_or_else(|| "".to_string());
                 out.push(AnthropicMessage {
                     role: "user".to_string(),
                     content: vec![serde_json::json!({
@@ -842,8 +838,7 @@ impl<R: AsyncReadExt + Unpin> SseStream<R> {
                 if name.first() == Some(&b' ') {
                     name.remove(0);
                 }
-                self.event_name =
-                    String::from_utf8_lossy(&name).into_owned();
+                self.event_name = String::from_utf8_lossy(&name).into_owned();
                 continue;
             }
             // Other field names (`id:`, `retry:`)
@@ -955,9 +950,7 @@ pub(crate) enum OpenAiChunkUpdate {
 /// updates we successfully extracted, plus
 /// the parse error so the adapter can
 /// decide what to do.
-pub(crate) fn parse_openai_chunk(
-    data: &str,
-) -> (Vec<OpenAiChunkUpdate>, Option<String>) {
+pub(crate) fn parse_openai_chunk(data: &str) -> (Vec<OpenAiChunkUpdate>, Option<String>) {
     #[derive(Deserialize)]
     struct ChunkShape {
         #[serde(default)]
@@ -1007,10 +1000,7 @@ pub(crate) fn parse_openai_chunk(
                         index: tc.index,
                         id: tc.id,
                         name: tc.function.as_ref().and_then(|f| f.name.clone()),
-                        arguments: tc
-                            .function
-                            .as_ref()
-                            .and_then(|f| f.arguments.clone()),
+                        arguments: tc.function.as_ref().and_then(|f| f.arguments.clone()),
                     });
                     let _ = tc.type_; // reserved
                 }
@@ -1034,10 +1024,7 @@ pub(crate) enum AnthropicDeltaUpdate {
     /// append `partial_json` to the
     /// in-progress tool at the chunk's
     /// `index`.
-    ToolInput {
-        index: u32,
-        partial_json: String,
-    },
+    ToolInput { index: u32, partial_json: String },
 }
 
 /// Parse a single Anthropic `content_block_delta`
@@ -1065,17 +1052,16 @@ pub(crate) fn parse_anthropic_content_block_delta(
     match serde_json::from_str::<AnthropicDelta>(data) {
         Ok(parsed) => {
             let update = match parsed.delta.type_.as_deref() {
-                Some("text_delta") => parsed
-                    .delta
-                    .text
-                    .map(AnthropicDeltaUpdate::Text),
-                Some("input_json_delta") => parsed
-                    .delta
-                    .partial_json
-                    .map(|pj| AnthropicDeltaUpdate::ToolInput {
-                        index: parsed.index,
-                        partial_json: pj,
-                    }),
+                Some("text_delta") => parsed.delta.text.map(AnthropicDeltaUpdate::Text),
+                Some("input_json_delta") => {
+                    parsed
+                        .delta
+                        .partial_json
+                        .map(|pj| AnthropicDeltaUpdate::ToolInput {
+                            index: parsed.index,
+                            partial_json: pj,
+                        })
+                }
                 _ => None,
             };
             (update, None)
@@ -1129,15 +1115,10 @@ pub(crate) fn parse_anthropic_content_block_start(
     match serde_json::from_str::<ContentBlockStart>(data) {
         Ok(parsed) => {
             let start = match parsed.content_block {
-                Some(cb) if cb.type_.as_deref() == Some("tool_use") => {
-                    Some(AnthropicBlockStart {
-                        index: parsed.index,
-                        tool: Some((
-                            cb.id.unwrap_or_default(),
-                            cb.name.unwrap_or_default(),
-                        )),
-                    })
-                }
+                Some(cb) if cb.type_.as_deref() == Some("tool_use") => Some(AnthropicBlockStart {
+                    index: parsed.index,
+                    tool: Some((cb.id.unwrap_or_default(), cb.name.unwrap_or_default())),
+                }),
                 _ => None,
             };
             (start, None)
@@ -1257,7 +1238,9 @@ pub async fn stream_chat_openai(
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .build()
-        .map_err(|e| ChatError::HttpClient { detail: e.to_string() })?;
+        .map_err(|e| ChatError::HttpClient {
+            detail: e.to_string(),
+        })?;
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
@@ -1266,7 +1249,9 @@ pub async fn stream_chat_openai(
         .json(&body)
         .send()
         .await
-        .map_err(|e| ChatError::HttpTransport { detail: e.to_string() })?;
+        .map_err(|e| ChatError::HttpTransport {
+            detail: e.to_string(),
+        })?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -1313,9 +1298,9 @@ pub async fn stream_chat_openai(
     // an `AsyncRead`. Then wrap that in our
     // `SseStream`.
     use tokio_util::io::StreamReader;
-    let reader = StreamReader::new(byte_stream.map(|r| {
-        r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-    }));
+    let reader = StreamReader::new(
+        byte_stream.map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
+    );
     let mut sse = SseStream::new(reader);
 
     // In-progress tool calls, keyed by the
@@ -1349,7 +1334,10 @@ pub async fn stream_chat_openai(
                     input: tool.input,
                 });
             }
-            on_chunk(ChatDelta::Done { cancelled: true, stop_reason: None });
+            on_chunk(ChatDelta::Done {
+                cancelled: true,
+                stop_reason: None,
+            });
             return Ok(());
         }
         match sse.next().await {
@@ -1442,7 +1430,10 @@ pub async fn stream_chat_openai(
                         input: tool.input,
                     });
                 }
-                on_chunk(ChatDelta::Done { cancelled: false, stop_reason: None });
+                on_chunk(ChatDelta::Done {
+                    cancelled: false,
+                    stop_reason: None,
+                });
                 return Ok(());
             }
             Ok(None) => {
@@ -1458,7 +1449,10 @@ pub async fn stream_chat_openai(
                         input: tool.input,
                     });
                 }
-                on_chunk(ChatDelta::Done { cancelled: false, stop_reason: None });
+                on_chunk(ChatDelta::Done {
+                    cancelled: false,
+                    stop_reason: None,
+                });
                 return Ok(());
             }
             Err(e) => {
@@ -1649,7 +1643,9 @@ pub async fn stream_chat_anthropic(
     let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .build()
-        .map_err(|e| ChatError::HttpClient { detail: e.to_string() })?;
+        .map_err(|e| ChatError::HttpClient {
+            detail: e.to_string(),
+        })?;
     let resp = client
         .post(&url)
         .header("x-api-key", api_key)
@@ -1659,7 +1655,9 @@ pub async fn stream_chat_anthropic(
         .json(&body)
         .send()
         .await
-        .map_err(|e| ChatError::HttpTransport { detail: e.to_string() })?;
+        .map_err(|e| ChatError::HttpTransport {
+            detail: e.to_string(),
+        })?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -1687,9 +1685,9 @@ pub async fn stream_chat_anthropic(
 
     let byte_stream = resp.bytes_stream();
     use tokio_util::io::StreamReader;
-    let reader = StreamReader::new(byte_stream.map(|r| {
-        r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-    }));
+    let reader = StreamReader::new(
+        byte_stream.map(|r| r.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))),
+    );
     let mut sse = SseStream::new(reader);
 
     // The `stop_reason` lives in the
@@ -1746,8 +1744,7 @@ pub async fn stream_chat_anthropic(
                         // — text is already handled
                         // by `content_block_delta`
                         // with `type: "text_delta"`.
-                        let (start, parse_err) =
-                            parse_anthropic_content_block_start(&data);
+                        let (start, parse_err) = parse_anthropic_content_block_start(&data);
                         if let Some(s) = start {
                             if let Some((id, name)) = s.tool {
                                 in_progress_tools.insert(
@@ -1782,8 +1779,7 @@ pub async fn stream_chat_anthropic(
                         // `input_json_delta` (and
                         // `None` for unknown future
                         // types).
-                        let (update, parse_err) =
-                            parse_anthropic_content_block_delta(&data);
+                        let (update, parse_err) = parse_anthropic_content_block_delta(&data);
                         match update {
                             Some(AnthropicDeltaUpdate::Text(text)) => {
                                 if !text.is_empty() {
@@ -1794,9 +1790,7 @@ pub async fn stream_chat_anthropic(
                                 index,
                                 partial_json,
                             }) => {
-                                if let Some(tool) =
-                                    in_progress_tools.get_mut(&index)
-                                {
+                                if let Some(tool) = in_progress_tools.get_mut(&index) {
                                     tool.input.push_str(&partial_json);
                                 }
                                 // If no tool is
@@ -1838,9 +1832,7 @@ pub async fn stream_chat_anthropic(
                         }
                         match serde_json::from_str::<ContentBlockStop>(&data) {
                             Ok(parsed) => {
-                                if let Some(tool) =
-                                    in_progress_tools.remove(&parsed.index)
-                                {
+                                if let Some(tool) = in_progress_tools.remove(&parsed.index) {
                                     on_chunk(ChatDelta::ToolCall {
                                         id: tool.id,
                                         name: tool.name,
@@ -2195,7 +2187,8 @@ mod tests {
         // The `event:` line is per-event. After a
         // blank-line boundary, the next event
         // starts with an empty `event_name`.
-        let bytes = b"event: content_block_delta\ndata: first\n\nevent: message_stop\ndata: second\n\n";
+        let bytes =
+            b"event: content_block_delta\ndata: first\n\nevent: message_stop\ndata: second\n\n";
         let events = collect_all(bytes).await;
         assert_eq!(events.len(), 2);
         assert_eq!(
@@ -2235,7 +2228,8 @@ mod tests {
         // Same `data:` rule applies to `event:`:
         // a single space after the colon is
         // stripped.
-        let bytes = b"event: content_block_delta\ndata: x\n\nevent:content_block_delta\ndata: y\n\n";
+        let bytes =
+            b"event: content_block_delta\ndata: x\n\nevent:content_block_delta\ndata: y\n\n";
         let events = collect_all(bytes).await;
         assert_eq!(events.len(), 2);
         assert_eq!(
@@ -2371,16 +2365,24 @@ mod tests {
         let (updates, err) = parse_openai_chunk(data);
         assert!(err.is_none());
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[0], OpenAiChunkUpdate::Tool {
-            index: 0, id: Some("call_a".to_string()),
-            name: Some("get_weather".to_string()),
-            arguments: Some(String::new()),
-        });
-        assert_eq!(updates[1], OpenAiChunkUpdate::Tool {
-            index: 1, id: Some("call_b".to_string()),
-            name: Some("get_time".to_string()),
-            arguments: Some(String::new()),
-        });
+        assert_eq!(
+            updates[0],
+            OpenAiChunkUpdate::Tool {
+                index: 0,
+                id: Some("call_a".to_string()),
+                name: Some("get_weather".to_string()),
+                arguments: Some(String::new()),
+            }
+        );
+        assert_eq!(
+            updates[1],
+            OpenAiChunkUpdate::Tool {
+                index: 1,
+                id: Some("call_b".to_string()),
+                name: Some("get_time".to_string()),
+                arguments: Some(String::new()),
+            }
+        );
     }
 
     #[test]
@@ -2523,7 +2525,9 @@ mod tests {
     /// shape as 5b-1 (5b-4 didn't break it).
     #[test]
     fn text_delta_serialises_to_expected_camelcase_shape() {
-        let delta = ChatDelta::Delta { text: "Hi".to_string() };
+        let delta = ChatDelta::Delta {
+            text: "Hi".to_string(),
+        };
         let json: serde_json::Value = serde_json::to_value(&delta).unwrap();
         assert_eq!(json, serde_json::json!({ "kind": "delta", "text": "Hi" }));
     }
@@ -2626,10 +2630,7 @@ mod tests {
             tool_call_id: None,
         };
         let json: serde_json::Value = serde_json::to_value(&msg).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({"role": "user", "content": "hi"})
-        );
+        assert_eq!(json, serde_json::json!({"role": "user", "content": "hi"}));
     }
 
     /// Round-trip: serialise then deserialise
@@ -2714,7 +2715,10 @@ mod tests {
         assert_eq!(json["role"], "assistant");
         let blocks = json["content"].as_array().unwrap();
         assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0], serde_json::json!({"type": "text", "text": "Reading..."}));
+        assert_eq!(
+            blocks[0],
+            serde_json::json!({"type": "text", "text": "Reading..."})
+        );
         assert_eq!(blocks[1]["type"], "tool_use");
         assert_eq!(blocks[1]["id"], "toolu_abc");
         assert_eq!(blocks[1]["name"], "get_file_contents");
@@ -2804,9 +2808,7 @@ mod tests {
         assert_eq!(t["function"]["name"], "get_file_contents");
         assert!(t["function"]["description"].as_str().unwrap().len() > 0);
         assert_eq!(t["function"]["parameters"]["type"], "object");
-        let required = t["function"]["parameters"]["required"]
-            .as_array()
-            .unwrap();
+        let required = t["function"]["parameters"]["required"].as_array().unwrap();
         assert_eq!(required, &vec![serde_json::json!("path")]);
     }
 
@@ -2822,9 +2824,7 @@ mod tests {
         assert_eq!(t["name"], "get_file_contents");
         assert!(t["description"].as_str().unwrap().len() > 0);
         assert_eq!(t["input_schema"]["type"], "object");
-        let required = t["input_schema"]["required"]
-            .as_array()
-            .unwrap();
+        let required = t["input_schema"]["required"].as_array().unwrap();
         assert_eq!(required, &vec![serde_json::json!("path")]);
     }
 

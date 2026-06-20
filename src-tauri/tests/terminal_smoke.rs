@@ -28,12 +28,9 @@
 use std::sync::{Arc, Mutex};
 
 use lipi_lib::{
-    terminal_close_rs as terminal_close,
-    terminal_default_shell as default_shell,
-    terminal_open_rs as terminal_open,
-    terminal_resize_rs as terminal_resize,
-    terminal_write_rs as terminal_write,
-    EventSink, OpenOptions, TerminalState,
+    terminal_close_rs as terminal_close, terminal_default_shell as default_shell,
+    terminal_open_rs as terminal_open, terminal_resize_rs as terminal_resize,
+    terminal_write_rs as terminal_write, EventSink, OpenOptions, TerminalState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,13 +62,8 @@ impl EventSink for TestSink {
     }
 }
 
-fn wait_for_substring(
-    sink: &TestSink,
-    needle: &[u8],
-    timeout_ms: u64,
-) -> bool {
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(timeout_ms);
+fn wait_for_substring(sink: &TestSink, needle: &[u8], timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     while std::time::Instant::now() < deadline {
         let events = sink.snapshot();
         for ev in &events {
@@ -151,10 +143,7 @@ fn resize_on_live_session_succeeds() {
 
     let r = terminal_resize(&state, &open.session_id, 40, 120);
     let _ = terminal_close(&state, &open.session_id);
-    assert!(
-        r.is_ok(),
-        "resize on a live session should succeed: {r:?}"
-    );
+    assert!(r.is_ok(), "resize on a live session should succeed: {r:?}");
 }
 
 #[test]
@@ -173,7 +162,10 @@ fn write_to_unknown_session_returns_not_found() {
     // enum tag means the wire form is "notFound", not
     // "NotFound". The TS side matches on the camelCase
     // spelling (see src/ipc/terminal.ts -> TerminalErrorPayload).
-    assert!(s.contains("notFound"), "expected notFound payload, got: {s}");
+    assert!(
+        s.contains("notFound"),
+        "expected notFound payload, got: {s}"
+    );
 }
 
 #[test]
@@ -217,8 +209,7 @@ fn exit_event_fires_when_shell_exits_via_eof() {
 
     let _ = terminal_close(&state, &open.session_id);
 
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(3_000);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3_000);
     let mut saw_exit = false;
     while std::time::Instant::now() < deadline {
         if sink
@@ -260,7 +251,11 @@ fn two_sessions_have_distinct_ids() {
 
     let a = match terminal_open(
         &state,
-        OpenOptions { rows: 24, cols: 80, shell: None },
+        OpenOptions {
+            rows: 24,
+            cols: 80,
+            shell: None,
+        },
         sink_a.clone(),
     ) {
         Ok(o) => o,
@@ -271,7 +266,11 @@ fn two_sessions_have_distinct_ids() {
     };
     let b = match terminal_open(
         &state,
-        OpenOptions { rows: 24, cols: 80, shell: None },
+        OpenOptions {
+            rows: 24,
+            cols: 80,
+            shell: None,
+        },
         sink_b.clone(),
     ) {
         Ok(o) => o,
@@ -282,7 +281,10 @@ fn two_sessions_have_distinct_ids() {
         }
     };
 
-    assert_ne!(a.session_id, b.session_id, "two opens must yield distinct ids");
+    assert_ne!(
+        a.session_id, b.session_id,
+        "two opens must yield distinct ids"
+    );
 
     let _ = terminal_close(&state, &a.session_id);
     let _ = terminal_close(&state, &b.session_id);
@@ -296,7 +298,11 @@ fn write_to_one_session_does_not_leak_to_another() {
 
     let a = match terminal_open(
         &state,
-        OpenOptions { rows: 24, cols: 80, shell: None },
+        OpenOptions {
+            rows: 24,
+            cols: 80,
+            shell: None,
+        },
         sink_a.clone(),
     ) {
         Ok(o) => o,
@@ -307,7 +313,11 @@ fn write_to_one_session_does_not_leak_to_another() {
     };
     let b = match terminal_open(
         &state,
-        OpenOptions { rows: 24, cols: 80, shell: None },
+        OpenOptions {
+            rows: 24,
+            cols: 80,
+            shell: None,
+        },
         sink_b.clone(),
     ) {
         Ok(o) => o,
@@ -322,12 +332,10 @@ fn write_to_one_session_does_not_leak_to_another() {
     // on A's sink, and NOT on B's sink.
     let marker = b"lipi-multi-a-7842";
     let cmd = format!("echo {}\r\n", String::from_utf8_lossy(marker));
-    terminal_write(&state, &a.session_id, cmd.as_bytes())
-        .expect("write to a");
+    terminal_write(&state, &a.session_id, cmd.as_bytes()).expect("write to a");
 
     // Give the shell a moment to respond.
-    let deadline = std::time::Instant::now()
-        + std::time::Duration::from_millis(2_000);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2_000);
     let mut saw_on_a = false;
     let mut saw_on_b = false;
     while std::time::Instant::now() < deadline && !saw_on_a {
@@ -372,7 +380,11 @@ fn close_one_session_does_not_affect_the_other() {
 
     let a = match terminal_open(
         &state,
-        OpenOptions { rows: 24, cols: 80, shell: None },
+        OpenOptions {
+            rows: 24,
+            cols: 80,
+            shell: None,
+        },
         sink_a.clone(),
     ) {
         Ok(o) => o,
@@ -383,7 +395,11 @@ fn close_one_session_does_not_affect_the_other() {
     };
     let b = match terminal_open(
         &state,
-        OpenOptions { rows: 24, cols: 80, shell: None },
+        OpenOptions {
+            rows: 24,
+            cols: 80,
+            shell: None,
+        },
         sink_b.clone(),
     ) {
         Ok(o) => o,

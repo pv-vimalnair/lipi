@@ -1,0 +1,766 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lipi — Design System Refresh: Current vs. ChatEase</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-page: #fafafb;
+    --surface: #ffffff;
+    --line: #ececf2;
+    --line-strong: #d8d8e0;
+    --text: #14171e;
+    --muted: #6b7080;
+    --soft: #f4f4f8;
+    --primary: #2563eb;
+    --primary-soft: rgba(37, 99, 235, 0.10);
+    --lavender-1: #e8e4f3;
+    --lavender-2: #f4ecf5;
+    --lavender-3: #e4e0f0;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', system-ui, sans-serif;
+    background: var(--bg-page);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+
+  .container { max-width: 1400px; margin: 0 auto; padding: 56px 40px 96px; }
+
+  /* Header */
+  .head { margin-bottom: 64px; max-width: 880px; }
+  .head .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--primary); background: var(--primary-soft);
+    padding: 6px 12px; border-radius: 999px; margin-bottom: 18px;
+  }
+  .head h1 { font-size: 40px; line-height: 1.1; margin: 0 0 16px; font-weight: 600; letter-spacing: -0.02em; }
+  .head p { font-size: 17px; color: var(--muted); margin: 0; max-width: 720px; }
+  .head .meta { display: flex; gap: 32px; margin-top: 24px; font-size: 13px; color: var(--muted); }
+  .head .meta b { color: var(--text); font-weight: 600; }
+
+  /* Section title */
+  .section-title { display: flex; align-items: center; gap: 12px; margin: 56px 0 24px; }
+  .section-title h2 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .section-title .num {
+    width: 28px; height: 28px; border-radius: 8px;
+    background: var(--soft); color: var(--text);
+    display: grid; place-items: center; font-size: 13px; font-weight: 600;
+  }
+  .section-title .sub { color: var(--muted); font-size: 14px; margin-left: auto; }
+
+  /* Palette grid */
+  .palette-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+  }
+  .palette-col {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 20px;
+  }
+  .palette-col h3 {
+    margin: 0 0 4px; font-size: 16px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .palette-col .sub { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+  .palette-col .swatch-row {
+    display: grid; grid-template-columns: 32px 1fr 90px;
+    gap: 12px; align-items: center;
+    padding: 8px 0;
+    border-top: 1px solid var(--line);
+  }
+  .palette-col .swatch-row:first-of-type { border-top: none; }
+  .palette-col .swatch { width: 32px; height: 32px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.06); }
+  .palette-col .swatch-info { min-width: 0; }
+  .palette-col .swatch-info .name { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text); font-weight: 500; }
+  .palette-col .swatch-info .role { font-size: 12px; color: var(--muted); }
+  .palette-col .swatch-hex { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); text-align: right; }
+
+  .palette-col.dark { background: #1a1d24; border-color: #2a2e38; }
+  .palette-col.dark h3, .palette-col.dark .swatch-info .name { color: #e6e8eb; }
+  .palette-col.dark .sub, .palette-col.dark .swatch-info .role, .palette-col.dark .swatch-hex { color: #8a8f9a; }
+  .palette-col.dark .swatch-row { border-top-color: #2a2e38; }
+  .palette-col.dark .swatch { border-color: rgba(255,255,255,0.08); }
+
+  .palette-col.proposed { background: linear-gradient(160deg, #e8e4f3 0%, #f4ecf5 50%, #e4e0f0 100%); }
+  .palette-col.proposed h3 { color: #14171e; }
+
+  .group-label {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 14px 0 4px; grid-column: 1 / -1;
+  }
+  .group-label:first-child { margin-top: 0; }
+  .palette-col.dark .group-label { color: #8a8f9a; }
+
+  /* IDE shell mock */
+  .ide-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+  }
+  .ide-col { display: flex; flex-direction: column; gap: 10px; }
+  .ide-col .ide-label { display: flex; align-items: center; gap: 10px; }
+  .ide-col .ide-label .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .ide-col .ide-label .dot.dark { background: #6b7080; }
+  .ide-col .ide-label .dot.light { background: #2563eb; }
+  .ide-col .ide-label h3 { font-size: 14px; font-weight: 600; margin: 0; }
+  .ide-col .ide-label .sub { font-size: 12px; color: var(--muted); }
+
+  .ide-shell {
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    box-shadow: 0 4px 24px rgba(15, 15, 18, 0.06);
+  }
+
+  /* === Dark IDE === */
+  .ide-dark {
+    background: #0b0d10;
+    color: #e6e8eb;
+    font-family: 'Outfit', system-ui, sans-serif;
+    font-size: 12px;
+  }
+  .ide-dark .titlebar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 14px;
+    background: #14171c;
+    border-bottom: 1px solid #232831;
+  }
+  .ide-dark .traffic { display: flex; gap: 6px; }
+  .ide-dark .traffic span { width: 11px; height: 11px; border-radius: 50%; background: #353c47; }
+  .ide-dark .traffic span:nth-child(1) { background: #e35b5b; }
+  .ide-dark .traffic span:nth-child(2) { background: #e0a458; }
+  .ide-dark .traffic span:nth-child(3) { background: #4caf82; }
+  .ide-dark .title { font-size: 12px; color: #aab1bb; }
+  .ide-dark .title b { color: #e6e8eb; font-weight: 500; }
+  .ide-dark .body { display: grid; grid-template-columns: 200px 1fr 240px; height: 380px; }
+  .ide-dark .sidebar { background: #14171c; border-right: 1px solid #232831; padding: 12px; }
+  .ide-dark .sidebar h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #6e7682; margin: 0 0 8px; font-weight: 600; }
+  .ide-dark .tree { font-size: 12px; line-height: 1.7; color: #aab1bb; }
+  .ide-dark .tree .folder { color: #e6e8eb; }
+  .ide-dark .tree .active { background: #232831; border-radius: 4px; padding: 2px 6px; margin: 0 -6px; color: #e6e8eb; }
+  .ide-dark .editor { background: #0b0d10; padding: 12px 16px; }
+  .ide-dark .tabs { display: flex; gap: 4px; border-bottom: 1px solid #232831; padding-bottom: 6px; margin-bottom: 10px; }
+  .ide-dark .tab { padding: 4px 10px; border-radius: 4px 4px 0 0; font-size: 11px; color: #6e7682; }
+  .ide-dark .tab.active { background: #1a1e25; color: #e6e8eb; }
+  .ide-dark .code { font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.7; color: #aab1bb; }
+  .ide-dark .code .kw { color: #c586c0; }
+  .ide-dark .code .fn { color: #dcdcaa; }
+  .ide-dark .code .str { color: #ce9178; }
+  .ide-dark .code .com { color: #6e7682; font-style: italic; }
+  .ide-dark .code .num { color: #b5cea8; }
+  .ide-dark .chat { background: #14171c; border-left: 1px solid #232831; padding: 12px; }
+  .ide-dark .chat h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #6e7682; margin: 0 0 8px; font-weight: 600; }
+  .ide-dark .msg { background: #1a1e25; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; font-size: 11px; line-height: 1.5; color: #e6e8eb; }
+  .ide-dark .msg.user { background: #1f3a6b; }
+  .ide-dark .input { background: #1a1e25; border: 1px solid #232831; border-radius: 6px; padding: 8px 10px; font-size: 11px; color: #6e7682; }
+  .ide-dark .statusbar {
+    display: flex; gap: 14px; padding: 6px 14px;
+    background: #14171c; border-top: 1px solid #232831;
+    font-size: 10px; color: #6e7682;
+  }
+
+  /* === Light IDE (proposed) === */
+    .ide-light {
+    /* Apple-style: white-only base, translucent white panels on top */
+    background: linear-gradient(180deg, #FFFFFF 0%, #F8F9FC 100%);
+    color: #14171e;
+    font-family: 'Outfit', system-ui, sans-serif;
+    font-size: 12px;
+  }
+  .ide-light .titlebar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 16px;
+    background: rgba(255, 255, 255, 0.45);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.4);
+    position: relative;
+  }
+  .ide-light .titlebar::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.35) 0%, transparent 100%);
+    pointer-events: none;
+  }
+  .ide-light .traffic { display: flex; gap: 6px; }
+  .ide-light .traffic span { width: 11px; height: 11px; border-radius: 50%; }
+  .ide-light .traffic span:nth-child(1) { background: #ff5f57; }
+  .ide-light .traffic span:nth-child(2) { background: #febc2e; }
+  .ide-light .traffic span:nth-child(3) { background: #28c840; }
+  .ide-light .title { font-size: 12px; color: #5c5c66; }
+  .ide-light .title b { color: #14171e; font-weight: 600; }
+    .ide-light .body { display: grid; grid-template-columns: 200px 1fr 240px; height: 380px; gap: 12px; padding: 12px; }
+  /* === Liquid Glass panels — proper 3-layer composition === */
+  .ide-light .panel {
+    position: relative;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    /* Squircle-ish (more generous than standard rounded) */
+    border-radius: 24px;
+    /* Glass edge: subtle border, almost invisible */
+    border: 0.5px solid rgba(255, 255, 255, 0.65);
+    /* Layer 3: outer drop shadow (gel casts light shadow) */
+    box-shadow:
+      0 12px 32px rgba(15, 15, 18, 0.08),
+      0 2px 6px rgba(15, 15, 18, 0.04),
+      /* Layer 1: highlight (top inner edge) */
+      inset 0 1px 0 rgba(255, 255, 255, 0.75),
+      /* Layer 2: shadow (bottom inner edge) */
+      inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+    padding: 14px;
+    overflow: hidden;
+  }
+  /* Specular highlight overlay — the "shine" Apple puts on the top of glass */
+  .ide-light .panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 50%;
+    background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.45) 0%,
+      rgba(255, 255, 255, 0) 100%);
+    border-radius: 24px 24px 0 0;
+    pointer-events: none;
+  }
+  .ide-light .panel > * { position: relative; z-index: 1; }
+  .ide-light .sidebar h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #8e8e96; margin: 0 0 10px; font-weight: 600; }
+  .ide-light .tree { font-size: 12px; line-height: 1.8; color: #5c5c66; }
+  .ide-light .tree .folder { color: #14171e; font-weight: 500; }
+  .ide-light .tree .active {
+    background: rgba(37, 99, 235, 0.14); color: #2563eb;
+    backdrop-filter: blur(10px);
+    border-radius: 6px; padding: 2px 8px; margin: 0 -8px;
+    font-weight: 500;
+  }
+  .ide-light .editor h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #8e8e96; margin: 0 0 10px; font-weight: 600; }
+  .ide-light .tabs { display: flex; gap: 2px; margin-bottom: 10px; padding: 2px; background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(10px); border-radius: 8px; }
+  .ide-light .tab { padding: 4px 10px; border-radius: 6px; font-size: 11px; color: #5c5c66; }
+  .ide-light .tab.active { background: rgba(255, 255, 255, 0.9); color: #14171e; box-shadow: 0 1px 2px rgba(15,15,18,0.06); }
+  .ide-light .code { font-family: 'JetBrains Mono', monospace; font-size: 11px; line-height: 1.8; color: #14171e; }
+  .ide-light .code .kw { color: #c026d3; }
+  .ide-light .code .fn { color: #2563eb; }
+  .ide-light .code .str { color: #059669; }
+  .ide-light .code .com { color: #8e8e96; font-style: italic; }
+  .ide-light .code .num { color: #d97706; }
+  .ide-light .chat h4 { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #8e8e96; margin: 0 0 10px; font-weight: 600; }
+  .ide-light .msg { background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(10px); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; font-size: 11px; line-height: 1.5; color: #14171e; border: 1px solid rgba(255,255,255,0.5); }
+  .ide-light .msg.user { background: #2563eb; color: white; border-color: transparent; box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3); }
+  /* Code blocks inside chat — dark like Apple Copilot for contrast */
+  .ide-light .msg pre { background: #14171e; color: #e6e8eb; border-radius: 8px; padding: 8px 10px; margin: 6px 0; font-size: 10.5px; line-height: 1.6; overflow-x: auto; }
+  .ide-light .msg pre .kw { color: #c586c0; }
+  .ide-light .msg pre .fn { color: #dcdcaa; }
+  .ide-light .msg pre .str { color: #ce9178; }
+  .ide-light .msg pre .com { color: #6e7682; }
+  .ide-light .input {
+    background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: 12px; padding: 10px 12px; font-size: 11px; color: #8e8e96;
+  }
+  .ide-light .statusbar {
+    display: flex; gap: 14px; padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.45);
+    backdrop-filter: blur(40px) saturate(180%);
+    -webkit-backdrop-filter: blur(40px) saturate(180%);
+    font-size: 10px; color: #5c5c66;
+    border-top: 0.5px solid rgba(255, 255, 255, 0.4);
+  }
+
+  /* Diff table */
+  .diff {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .diff table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .diff th, .diff td { text-align: left; padding: 10px 16px; }
+  .diff th { background: var(--soft); font-weight: 600; color: var(--text); border-bottom: 1px solid var(--line); }
+  .diff td { border-bottom: 1px solid var(--line); }
+  .diff tr:last-child td { border-bottom: none; }
+  .diff .tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+  .diff .val { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted); }
+  .diff .val.new { color: #059669; }
+  .diff .val.old { color: #b91c1c; text-decoration: line-through; opacity: 0.7; }
+  .diff .group-row td { background: #fbfbfd; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+
+  /* Notes */
+  .notes {
+    margin-top: 32px; padding: 20px 24px;
+    background: var(--primary-soft);
+    border-radius: 16px;
+    border: 1px solid rgba(37, 99, 235, 0.18);
+    font-size: 14px; color: #14171e; line-height: 1.6;
+  }
+  .notes b { font-weight: 600; }
+  .notes ul { margin: 8px 0 0; padding-left: 20px; }
+  .notes li { margin: 4px 0; }
+
+  .small { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- HEADER -->
+  <header class="head">
+    <span class="eyebrow">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></</svg>
+      Design System Refresh — Proposal
+    </span>
+    <h1>Lipi × Apple Liquid Glass</h1>
+    <p>Apple's new <strong>Liquid Glass</strong> design system (WWDC25, iOS 26 / macOS Tahoe 26). A digital meta-material with three layers — <em>specular highlight</em>, <em>shadow</em>, <em>refractive illumination</em> — that reacts to movement. This is the same design system that runs on Apple TV, iPad, iPhone, and Mac in 2025. We can ship the <strong>full look in Lipi</strong> (squircle corners, specular shine, gel translucency, soft shadows) with <code style="font-family:'JetBrains Mono',monospace;background:#f4f4f8;padding:1px 6px;border-radius:4px;font-size:13px">backdrop-filter</code> + CSS. The actual light-bending refraction needs SVG displacement maps, which is <strong>Chromium-only</strong> — so the full effect is gated behind a future WebGL/Chrome path.</p>
+    <div class="meta">
+      <span><b>Scope</b> · tokens.css + ~10 surface classes</span>
+      <span><b>Renderers</b> · WebView2 + WKWebView (full look)</span>
+      <span><b>Refraction</b> · Chrome-only (future, WebGL)</span>
+      <span><b>Risk</b> · low (CSS only, no logic)</span>
+    </div>
+  </header>
+
+  <!-- SECTION 1: PALETTE -->
+  <div class="section-title">
+    <span class="num">1</span>
+    <h2>The 3-layer composition</h2>
+    <span class="sub">how Liquid Glass is built · per Apple WWDC25 §219</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:32px">
+    <div style="background:linear-gradient(180deg,rgba(255,255,255,0.5) 0%,transparent 100%);border:0.5px solid rgba(255,255,255,0.6);border-radius:20px;padding:20px;box-shadow:inset 0 1px 0 rgba(255,255,255,0.7)">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#2563eb;margin-bottom:8px">Layer 1</div>
+      <div style="font-size:18px;font-weight:600;color:#14171e;margin-bottom:8px">Highlight</div>
+      <p style="font-size:13px;color:#5c5c66;margin:0;line-height:1.5">Bright <em>specular</em> shine on the top edge — gives the gel/glass its "wet" look. Reacts to movement and light direction. In CSS: a top-half <code style="font-family:'JetBrains Mono',monospace;background:rgba(0,0,0,0.04);padding:1px 4px;border-radius:3px;font-size:11px">linear-gradient(rgba(255,255,255,0.45), transparent)</code> + <code style="font-family:'JetBrains Mono',monospace;background:rgba(0,0,0,0.04);padding:1px 4px;border-radius:3px;font-size:11px">inset 0 1px 0 rgba(255,255,255,0.7)</code>.</p>
+    </div>
+    <div style="background:rgba(255,255,255,0.55);border:0.5px solid rgba(255,255,255,0.6);border-radius:20px;padding:20px;box-shadow:0 12px 32px rgba(15,15,18,0.08),inset 0 -1px 0 rgba(0,0,0,0.04)">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#2563eb;margin-bottom:8px">Layer 2</div>
+      <div style="font-size:18px;font-weight:600;color:#14171e;margin-bottom:8px">Shadow</div>
+      <p style="font-size:13px;color:#5c5c66;margin:0;line-height:1.5">Soft outer drop + inner bottom shadow — creates the sense that the glass is <em>floating</em> above content. The shadow is light and diffuse, never harsh. In CSS: <code style="font-family:'JetBrains Mono',monospace;background:rgba(0,0,0,0.04);padding:1px 4px;border-radius:3px;font-size:11px">0 12px 32px rgba(15,15,18,0.08)</code>.</p>
+    </div>
+    <div style="background:rgba(255,255,255,0.55);backdrop-filter:blur(20px);border:0.5px solid rgba(255,255,255,0.6);border-radius:20px;padding:20px;box-shadow:inset 0 1px 0 rgba(255,255,255,0.7)">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#2563eb;margin-bottom:8px">Layer 3</div>
+      <div style="font-size:18px;font-weight:600;color:#14171e;margin-bottom:8px">Illumination</div>
+      <p style="font-size:13px;color:#5c5c66;margin:0;line-height:1.5">The translucent body itself — content beneath is <em>refracted</em> (bent via Snell's law, not just blurred) and tinted. We use <code style="font-family:'JetBrains Mono',monospace;background:rgba(0,0,0,0.04);padding:1px 4px;border-radius:3px;font-size:11px">backdrop-filter: blur(30px) saturate(180%)</code> in our renderers. Full refraction = future WebGL.</p>
+    </div>
+  </div>
+
+  <div class="section-title">
+    <span class="num">2</span>
+    <h2>Color palette & tokens</h2>
+    <span class="sub">Liquid Glass tokens · 18 changed, 7 new</span>
+  </div>
+
+  <div class="palette-grid">
+
+    <!-- CURRENT (DARK) -->
+    <div class="palette-col dark">
+      <h3>Current — dark</h3>
+      <div class="sub">IDE-feel, high contrast, sharp edges</div>
+
+      <div class="group-label">Backgrounds</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#0b0d10"></div>
+        <div class="swatch-info"><div class="name">--color-bg-base</div><div class="role">app background</div></div>
+        <div class="swatch-hex">#0b0d10</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#14171c"></div>
+        <div class="swatch-info"><div class="name">--color-bg-elevated</div><div class="role">panels, cards</div></div>
+        <div class="swatch-hex">#14171c</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#1a1e25"></div>
+        <div class="swatch-info"><div class="name">--color-bg-pane</div><div class="role">editor, code</div></div>
+        <div class="swatch-hex">#1a1e25</div>
+      </div>
+
+      <div class="group-label">Text</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#e6e8eb"></div>
+        <div class="swatch-info"><div class="name">--color-text-primary</div><div class="role">headings, body</div></div>
+        <div class="swatch-hex">#e6e8eb</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#aab1bb"></div>
+        <div class="swatch-info"><div class="name">--color-text-secondary</div><div class="role">labels, meta</div></div>
+        <div class="swatch-hex">#aab1bb</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#6e7682"></div>
+        <div class="swatch-info"><div class="name">--color-text-muted</div><div class="role">placeholders</div></div>
+        <div class="swatch-hex">#6e7682</div>
+      </div>
+
+      <div class="group-label">Accent</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#4f8cff"></div>
+        <div class="swatch-info"><div class="name">--color-accent</div><div class="role">links, focus, primary</div></div>
+        <div class="swatch-hex">#4f8cff</div>
+      </div>
+
+      <div class="group-label">Radii</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:#2a313c;border:1px dashed #4f8cff;border-radius:4px"></div>
+        <div class="swatch-info"><div class="name">--radius-sm / -md / -lg</div><div class="role">4 / 6 / 10 px</div></div>
+        <div class="swatch-hex">sharp</div>
+      </div>
+    </div>
+
+    <!-- PROPOSED (LIQUID GLASS) -->
+    <div class="palette-col proposed">
+      <h3>Proposed — Liquid Glass</h3>
+      <div class="sub">3-layer glass system · squircle + specular + shadow</div>
+
+      <div class="group-label">Glass surfaces (translucent body)</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:rgba(255,255,255,0.55);backdrop-filter:blur(2px);border:0.5px solid rgba(255,255,255,0.65);border-radius:8px"></div>
+        <div class="swatch-info"><div class="name">--glass-bg</div><div class="role">panels, sidebars, title bar</div></div>
+        <div class="swatch-hex">rgba(255,255,255,0.55)</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:rgba(255,255,255,0.72);border:0.5px solid rgba(255,255,255,0.65);border-radius:8px"></div>
+        <div class="swatch-info"><div class="name">--glass-bg-strong</div><div class="role">elevated surfaces, modals</div></div>
+        <div class="swatch-hex">rgba(255,255,255,0.72)</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:rgba(255,255,255,0.4);border:0.5px solid rgba(255,255,255,0.5);border-radius:8px"></div>
+        <div class="swatch-info"><div class="name">--glass-bg-subtle</div><div class="role">hover states, chip backgrounds</div></div>
+        <div class="swatch-hex">rgba(255,255,255,0.4)</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:rgba(37,99,235,0.14);border:0.5px solid rgba(37,99,235,0.2);border-radius:8px"></div>
+        <div class="swatch-info"><div class="name">--glass-bg-tinted</div><div class="role">selected, active accent state</div></div>
+        <div class="swatch-hex">rgba(37,99,235,0.14)</div>
+      </div>
+
+      <div class="group-label">Glass edge (squircle border + inner highlights)</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:linear-gradient(180deg,rgba(255,255,255,0.45) 0%,transparent 100%);border:0.5px solid rgba(255,255,255,0.65);border-radius:8px;box-shadow:inset 0 1px 0 rgba(255,255,255,0.7)"></div>
+        <div class="swatch-info"><div class="name">--glass-highlight</div><div class="role">top inner edge specular (layer 1)</div></div>
+        <div class="swatch-hex">inset 0 1px 0 white</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:rgba(255,255,255,0.55);border:0.5px solid rgba(255,255,255,0.65);border-radius:8px;box-shadow:inset 0 -1px 0 rgba(0,0,0,0.04)"></div>
+        <div class="swatch-info"><div class="name">--glass-depth</div><div class="role">bottom inner shadow (layer 2)</div></div>
+        <div class="swatch-hex">inset 0 -1px 0 bk</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:rgba(255,255,255,0.55);border:0.5px solid rgba(255,255,255,0.65);border-radius:8px;box-shadow:0 12px 32px rgba(15,15,18,0.08)"></div>
+        <div class="swatch-info"><div class="name">--glass-outer-shadow</div><div class="role">floating drop shadow (layer 2 outer)</div></div>
+        <div class="swatch-hex">0 12px 32px</div>
+      </div>
+
+      <div class="group-label">Glass blur (layer 3 — illumination)</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:linear-gradient(45deg,#fbbf24,#ec4899,#3b82f6);filter:blur(2px);position:relative">
+          <div style="position:absolute;inset:2px;border-radius:6px;background:rgba(255,255,255,0.5);backdrop-filter:blur(8px) saturate(180%)"></div>
+        </div>
+        <div class="swatch-info"><div class="name">--glass-blur / --glass-blur-subtle</div><div class="role">backdrop-filter (Chrome/Safari/Firefox)</div></div>
+        <div class="swatch-hex">blur(30px) saturate(180%)</div>
+      </div>
+
+      <div class="group-label">Geometry (squircle)</div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:rgba(255,255,255,0.55);border:0.5px solid rgba(255,255,255,0.65);border-radius:14px"></div>
+        <div class="swatch-info"><div class="name">--radius-glass</div><div class="role">panels, sidebars, cards (squircle feel)</div></div>
+        <div class="swatch-hex">24px</div>
+      </div>
+      <div class="swatch-row">
+        <div class="swatch" style="background:rgba(255,255,255,0.55);border:0.5px solid rgba(255,255,255,0.65);border-radius:8px"></div>
+        <div class="swatch-info"><div class="name">--radius-control</div><div class="role">buttons, inputs (less squircle, more chip)</div></div>
+        <div class="swatch-hex">12px</div>
+      </div>
+    </div>
+  </div>
+  <p class="small" style="margin-top:12px">* <code style="font-family:'JetBrains Mono',monospace">--color-bg-base</code> would use a 3-stop linear-gradient: <code style="font-family:'JetBrains Mono',monospace">linear-gradient(160deg, #E8E4F3 0%, #F4ECF5 50%, #E4E0F0 100%)</code> — see full diff below.</p>
+
+  <!-- SECTION 2: IDE SHELL MOCK -->
+  <div class="section-title">
+    <span class="num">3</span>
+    <h2>IDE shell — side by side</h2>
+    <span class="sub">same 3-pane layout · proper Liquid Glass</span>
+  </div>
+
+  <div class="ide-grid">
+
+    <!-- DARK -->
+    <div class="ide-col">
+      <div class="ide-label">
+        <span class="dot dark"></span>
+        <h3>Current</h3>
+        <span class="sub">dark · sharp · high contrast</span>
+      </div>
+      <div class="ide-shell ide-dark">
+        <div class="titlebar">
+          <div class="traffic"><span></span><span></span><span></span></div>
+          <div class="title">lipi — <b>src/screens/EditorWorkspace/index.tsx</b></div>
+        </div>
+        <div class="body">
+          <div class="sidebar">
+            <h4>Explorer</h4>
+            <div class="tree">
+              <div class="folder">▼ src</div>
+              <div style="padding-left:14px">▼ screens</div>
+              <div style="padding-left:28px">▼ EditorWorkspace</div>
+              <div style="padding-left:42px"><span class="active">index.tsx</span></div>
+              <div style="padding-left:42px">Editor.tsx</div>
+              <div style="padding-left:42px">Tabs.tsx</div>
+              <div style="padding-left:28px">▶ SettingsProvider</div>
+              <div style="padding-left:28px">▶ Welcome</div>
+            </div>
+          </div>
+          <div class="editor">
+            <div class="tabs">
+              <div class="tab active">index.tsx</div>
+              <div class="tab">Editor.tsx</div>
+              <div class="tab">Tabs.tsx</div>
+            </div>
+            <div class="code"><span class="kw">export const</span> <span class="fn">EditorWorkspace</span> = () =&gt; {<br>&nbsp;&nbsp;<span class="kw">const</span> { active } = <span class="fn">useEditor</span>();<br>&nbsp;&nbsp;<span class="kw">return</span> (<br>&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">Pane</span> <span style="color:#9cdcfe">dir</span>=<span class="str">"row"</span>&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">FileTree</span> /&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">MonacoEditor</span> <span style="color:#9cdcfe">file</span>={active} /&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">ChatPanel</span> /&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;&lt;/<span class="fn">Pane</span>&gt;<br>&nbsp;&nbsp;);<br>};</div>
+          </div>
+          <div class="chat">
+            <h4>AI Chat</h4>
+            <div class="msg">Refactor the FileTree to support virtualized rendering for large workspaces.</div>
+            <div class="msg user">Add a code-split on the chat panel.</div>
+            <div class="input">Ask Mavis...</div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>⎇ main</span>
+          <span>TypeScript</span>
+          <span>UTF-8</span>
+          <span style="margin-left:auto">Ln 24, Col 18</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- LIGHT (PROPOSED) -->
+    <div class="ide-col">
+      <div class="ide-label">
+        <span class="dot light"></span>
+        <h3>Proposed — Liquid Glass</h3>
+        <span class="sub">3-layer glass · squircle · specular</span>
+      </div>
+      <div class="ide-shell ide-light">
+        <div class="titlebar">
+          <div class="traffic"><span></span><span></span><span></span></div>
+          <div class="title">lipi — <b>src/screens/EditorWorkspace/index.tsx</b></div>
+        </div>
+        <div class="body">
+          <div class="panel sidebar">
+            <h4>Explorer</h4>
+            <div class="tree">
+              <div class="folder">▼ src</div>
+              <div style="padding-left:14px">▼ screens</div>
+              <div style="padding-left:28px">▼ EditorWorkspace</div>
+              <div style="padding-left:42px"><span class="active">index.tsx</span></div>
+              <div style="padding-left:42px">Editor.tsx</div>
+              <div style="padding-left:42px">Tabs.tsx</div>
+              <div style="padding-left:28px">▶ SettingsProvider</div>
+              <div style="padding-left:28px">▶ Welcome</div>
+            </div>
+          </div>
+          <div class="panel editor">
+            <h4>Editor</h4>
+            <div class="tabs">
+              <div class="tab active">index.tsx</div>
+              <div class="tab">Editor.tsx</div>
+              <div class="tab">Tabs.tsx</div>
+            </div>
+            <div class="code"><span class="kw">export const</span> <span class="fn">EditorWorkspace</span> = () =&gt; {<br>&nbsp;&nbsp;<span class="kw">const</span> { active } = <span class="fn">useEditor</span>();<br>&nbsp;&nbsp;<span class="kw">return</span> (<br>&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">Pane</span> <span style="color:#7c3aed">dir</span>=<span class="str">"row"</span>&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">FileTree</span> /&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">MonacoEditor</span> <span style="color:#7c3aed">file</span>={active} /&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&lt;<span class="fn">ChatPanel</span> /&gt;<br>&nbsp;&nbsp;&nbsp;&nbsp;&lt;/<span class="fn">Pane</span>&gt;<br>&nbsp;&nbsp;);<br>};</div>
+          </div>
+          <div class="panel chat">
+            <h4>AI Chat</h4>
+            <div class="msg">Try <code style="background:rgba(0,0,0,0.06);padding:1px 5px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:10px">React.lazy</code>:<pre><span class="com">// split heavy panels</span>
+<span class="kw">const</span> <span class="fn">ChatPanel</span> = <span class="fn">lazy</span>(() =&gt;
+  <span class="fn">import</span>(<span class="str">'./ChatPanel'</span>));</pre></div>
+            <div class="msg user">Apply this to the editor too.</div>
+            <div class="input">Ask Mavis...</div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>⎇ main</span>
+          <span>TypeScript</span>
+          <span>UTF-8</span>
+          <span style="margin-left:auto">Ln 24, Col 18</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- SECTION 3: TOKEN DIFF -->
+  <div class="section-title">
+    <span class="num">4</span>
+    <h2>Exact token changes</h2>
+    <span class="sub">tokens.css · proper Liquid Glass system</span>
+  </div>
+
+  <div class="diff">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:30%">Token</th>
+          <th style="width:35%">Current</th>
+          <th style="width:35%">Proposed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="group-row"><td colspan="3">Glass surfaces (translucent body)</td></tr>
+        <tr>
+          <td class="tok">--glass-bg</td>
+          <td class="val old">—</td>
+          <td class="val new">rgba(255, 255, 255, 0.55)</td>
+        </tr>
+        <tr>
+          <td class="tok">--glass-bg-strong</td>
+          <td class="val old">—</td>
+          <td class="val new">rgba(255, 255, 255, 0.72)</td>
+        </tr>
+        <tr>
+          <td class="tok">--glass-bg-subtle</td>
+          <td class="val old">—</td>
+          <td class="val new">rgba(255, 255, 255, 0.4)</td>
+        </tr>
+        <tr>
+          <td class="tok">--glass-bg-tinted</td>
+          <td class="val old">—</td>
+          <td class="val new">rgba(37, 99, 235, 0.14) (selected/active)</td>
+        </tr>
+
+        <tr class="group-row"><td colspan="3">Glass edge (squircle + inner highlights)</td></tr>
+        <tr>
+          <td class="tok">--glass-border</td>
+          <td class="val old">—</td>
+          <td class="val new">0.5px solid rgba(255, 255, 255, 0.65)</td>
+        </tr>
+        <tr>
+          <td class="tok">--glass-highlight</td>
+          <td class="val old">—</td>
+          <td class="val new">inset 0 1px 0 rgba(255, 255, 255, 0.7) (top)</td>
+        </tr>
+        <tr>
+          <td class="tok">--glass-depth</td>
+          <td class="val old">—</td>
+          <td class="val new">inset 0 -1px 0 rgba(0, 0, 0, 0.04) (bottom)</td>
+        </tr>
+        <tr>
+          <td class="tok">--glass-outer-shadow</td>
+          <td class="val old">—</td>
+          <td class="val new">0 12px 32px rgba(15, 15, 18, 0.08)</td>
+        </tr>
+        <tr>
+          <td class="tok">--glass-specular</td>
+          <td class="val old">—</td>
+          <td class="val new">linear-gradient(180deg, rgba(255,255,255,0.45), transparent) ::before overlay</td>
+        </tr>
+
+        <tr class="group-row"><td colspan="3">Glass blur (illumination — layer 3)</td></tr>
+        <tr>
+          <td class="tok">--glass-blur</td>
+          <td class="val old">—</td>
+          <td class="val new">blur(30px) saturate(180%)</td>
+        </tr>
+        <tr>
+          <td class="tok">--glass-blur-subtle</td>
+          <td class="val old">—</td>
+          <td class="val new">blur(15px) saturate(180%)</td>
+        </tr>
+
+        <tr class="group-row"><td colspan="3">Geometry (squircle)</td></tr>
+        <tr>
+          <td class="tok">--radius-glass</td>
+          <td class="val old">—</td>
+          <td class="val new">24px (panels, sidebars, cards)</td>
+        </tr>
+        <tr>
+          <td class="tok">--radius-control</td>
+          <td class="val old">—</td>
+          <td class="val new">12px (buttons, inputs)</td>
+        </tr>
+        <tr>
+          <td class="tok">--radius-pill</td>
+          <td class="val old">999px</td>
+          <td class="val new">999px (unchanged)</td>
+        </tr>
+
+        <tr class="group-row"><td colspan="3">Updated for light theme</td></tr>
+        <tr>
+          <td class="tok">--color-bg-base</td>
+          <td class="val old">#0b0d10</td>
+          <td class="val new">linear-gradient(180deg, #FFFFFF 0%, #F8F9FC 100%)</td>
+        </tr>
+        <tr>
+          <td class="tok">--color-bg-pane</td>
+          <td class="val old">#1a1e25</td>
+          <td class="val new">#FFFFFF (Monaco needs solid for code)</td>
+        </tr>
+        <tr>
+          <td class="tok">--color-text-primary</td>
+          <td class="val old">#e6e8eb</td>
+          <td class="val new">#14171E</td>
+        </tr>
+        <tr>
+          <td class="tok">--color-text-secondary</td>
+          <td class="val old">#aab1bb</td>
+          <td class="val new">#5C5C66</td>
+        </tr>
+        <tr>
+          <td class="tok">--color-text-muted</td>
+          <td class="val old">#6e7682</td>
+          <td class="val new">#8E8E96</td>
+        </tr>
+        <tr>
+          <td class="tok">--color-accent</td>
+          <td class="val old">#4f8cff</td>
+          <td class="val new">#2563EB</td>
+        </tr>
+        <tr>
+          <td class="tok">--color-accent-soft</td>
+          <td class="val old">rgba(79,140,255,0.18)</td>
+          <td class="val new">rgba(37,99,235,0.14)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- NOTES -->
+  <div class="notes">
+    <b>What we can ship now (in Lipi's renderers)</b>
+    <ul>
+      <li>All 3 layers of the Liquid Glass composition: <b>specular highlight</b> (top inner edge + ::before gradient), <b>shadow</b> (outer drop + bottom inner edge), <b>illumination</b> (translucent body + <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">backdrop-filter</code>).</li>
+      <li>Squircle-feel rounded corners (24px on panels, 12px on controls).</li>
+      <li>Tintable glass: <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">--glass-bg-tinted</code> for selected/active states (Apple's "regular" variant).</li>
+      <li>WebView2 (Windows) and WKWebView (macOS/iOS) both support <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">backdrop-filter: blur() saturate()</code> — full coverage for Lipi's targets.</li>
+    </ul>
+
+    <b style="display:block;margin-top:14px">What we'd need later (not for this phase)</b>
+    <ul>
+      <li><b>Real refraction</b> (light-bending the background) requires SVG <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">&lt;feDisplacementMap&gt;</code> as <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">backdrop-filter: url(#filter)</code>. <b>Chromium-only</b> — not WebView2, not WKWebView. Future phase: WebGL refraction layer (Three.js shader with normal map).</li>
+      <li><b>Specular animation</b> (the highlight reacting to mouse movement) needs a tiny JS hook. Trivial, can ship later.</li>
+      <li><b>Light/dark auto-adaptation</b> via <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">prefers-color-scheme</code> media query on the glass tokens. Ships now, easy.</li>
+    </ul>
+
+    <b style="display:block;margin-top:14px">Implementation footprint</b>
+    <ul>
+      <li><b>tokens.css:</b> ~15 lines changed, ~13 new tokens (the glass system).</li>
+      <li><b>Component CSS:</b> ~10-12 surface classes (panels, title bar, status bar, sidebars, modals, dropdowns) get a <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">.glass-surface</code> mixin or direct Liquid Glass treatment.</li>
+      <li><b>Monaco:</b> switch built-in theme from <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">vs-dark</code> to <code style="font-family:'JetBrains Mono',monospace;background:rgba(255,255,255,0.5);padding:1px 5px;border-radius:4px">vs</code> so code matches the light glass surroundings.</li>
+      <li><b>Code blocks in chat:</b> stay dark for code readability (matches Apple's own pattern in their apps).</li>
+    </ul>
+  </div>
+
+  <p class="small" style="margin-top:24px">Mock for review. Not committed. Once you sign off (or push back), I'll update <code style="font-family:'JetBrains Mono',monospace;background:#f4f4f8;padding:1px 6px;border-radius:4px">tokens.css</code>, add the glass system to the ~12 surface classes, switch the Monaco theme, run the build + tests, and commit it as one phase with its own HANDOFF + CHANGELOG entry.</p>
+
+</div>
+</body>
+</html>

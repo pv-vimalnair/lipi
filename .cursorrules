@@ -17,10 +17,11 @@
 
 ## Build commands
 - npm run typecheck     # npx tsc -b, must be 0 errors
-- npm test              # npx vitest run, 1243/1243 expected
+- npm run lint          # npm run typecheck, must be 0 errors
+- npm test              # npx vitest run, 1293/1293 expected
 - npm run build         # vite production build
 - cd src-tauri && cargo check               # 0 errors, 0 warnings
-- cd src-tauri && cargo test --lib          # 380/380 expected
+- cd src-tauri && cargo test --lib          # 413/413 expected
 - cd src-tauri && cargo test --tests        # 24/24 expected
 - cd src-tauri && cargo check --features mobile
 - cd src-tauri && cargo check --features m2c-native --lib   # needs libclang + cmake
@@ -32,7 +33,7 @@
 4. No new dependencies without owner confirmation (npm + cargo).
 5. Tests for every new feature. Vitest (JS) + #[cfg(test)] mod tests (Rust).
 6. State in Zustand (src/screens/<X>/state/<X>Store.ts or src/shared/state/), not Context, not useState for cross-component.
-7. Update HANDOFF.md + CHANGELOG.md for every phase. Decisions are numbered; new ones go in the next slot after the last used (currently #180).
+7. Update HANDOFF.md + CHANGELOG.md for every phase. Decisions are numbered; new ones go in the next slot after the last used (currently #189).
 
 ## Architecture thumb-rules
 - Tauri commands are thin one-liners in src-tauri/src/lib.rs; logic in src-tauri/src/<feature>.rs.

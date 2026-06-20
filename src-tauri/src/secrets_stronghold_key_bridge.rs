@@ -14,9 +14,8 @@
 //! Until the JNI is wired:
 //! - On `target_os = "android"`, `load_key_from_keystore()`
 //!   returns a `SecretError::Platform` with a "not yet
-//!   implemented" message. The Stronghold facade catches
-//!   this and falls back to the v1 `PLACEHOLDER_KEY` (see
-//!   `secrets_stronghold::keyprovider`).
+//!   implemented" message. The Stronghold facade propagates
+//!   that error and fails closed.
 //! - On other mobile targets (iOS — though iOS uses
 //!   `keyring` 3.x's `apple-native` feature, not Stronghold),
 //!   the function returns a "not supported on this target"
@@ -36,11 +35,10 @@
 //!    - `env.CallStaticObjectMethod(cls, methodId)`.
 //!    - Cast the returned `jbyteArray` to `Vec<u8>`.
 //!    - Wrap in `Zeroizing` and return.
-//! 3. Update `secrets_stronghold::keyprovider()` to call
-//!    `load_key_from_keystore()` and SHA-256 the result.
-//! 4. Remove the `PLACEHOLDER_KEY` constant from
-//!    `secrets_stronghold.rs` (or keep it as a documented
-//!    fallback for broken-Keystore devices).
+//! 3. Keep `secrets_stronghold::keyprovider()` wired to
+//!    `load_key_from_keystore()` + SHA-256 derivation.
+//! 4. Keep the fail-closed behavior for broken-Keystore
+//!    devices until a user-password fallback is designed.
 //! 5. Add a real-device end-to-end test (the
 //!    `StrongholdKeyBridgeTest.kt` Robolectric test plus
 //!    a device smoke test).
@@ -68,9 +66,9 @@ const LOAD_KEY_SIGNATURE: &str = "()[B";
 const GCM_IV_LENGTH_BYTES: usize = 12;
 
 /// Length of the zero plaintext the bridge encrypts to
-/// derive the snapshot key. Must match the `PLACEHOLDER_KEY`
-/// length and the `KeyProvider::try_from(Zeroizing<Vec<u8>>)`
-/// required length.
+/// derive the snapshot key. The SHA-256 digest of the
+/// returned bridge material provides the 32-byte
+/// `KeyProvider` input.
 #[allow(dead_code)] // used to compute EXPECTED_RETURN_LENGTH
 const ZERO_PLAINTEXT_LENGTH_BYTES: usize = 32;
 
@@ -95,7 +93,7 @@ const EXPECTED_RETURN_LENGTH: usize =
 ///
 /// **Stub status**: returns `SecretError::Platform` on all
 /// targets until the JNI is wired. The Stronghold facade
-/// catches this and falls back to the v1 `PLACEHOLDER_KEY`.
+/// propagates this error and fails closed.
 #[allow(dead_code)] // called by the future keyprovider() swap
 pub fn load_key_from_keystore() -> Result<Zeroizing<Vec<u8>>, SecretError> {
     #[cfg(target_os = "android")]
@@ -115,7 +113,7 @@ pub fn load_key_from_keystore() -> Result<Zeroizing<Vec<u8>>, SecretError> {
             detail: format!(
                 "StrongholdKeyBridge: Android Keystore derivation \
                  not supported on this target (D-186 follow-up). \
-                 The v1 PLACEHOLDER_KEY is used as a fallback. \
+                 Stronghold secrets are unavailable until the bridge is wired. \
                  See docs/plugins/lipi-stronghold-key-bridge/README.md."
             ),
         })
@@ -157,8 +155,8 @@ fn load_key_from_keystore_android() -> Result<Zeroizing<Vec<u8>>, SecretError> {
     //
     //   Ok(Zeroizing::new(buf))
     //
-    // Until this is wired, the Stronghold facade falls back
-    // to PLACEHOLDER_KEY (preserving the v1 behavior).
+    // Until this is wired, the Stronghold facade propagates
+    // this error and fails closed.
     let _ = (CLASS_NAME, LOAD_KEY_SIGNATURE, EXPECTED_RETURN_LENGTH);
     Err(SecretError::Platform {
         detail: "StrongholdKeyBridge: JNI not yet wired \
@@ -199,6 +197,10 @@ mod tests {
         assert!(
             detail.contains("D-186"),
             "error message should reference D-186: {detail}"
+        );
+        assert!(
+            !detail.contains("PLACEHOLDER_KEY") && !detail.contains("fallback"),
+            "bridge errors must not advertise a placeholder fallback: {detail}"
         );
     }
 

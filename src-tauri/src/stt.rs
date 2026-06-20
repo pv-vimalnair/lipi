@@ -67,8 +67,8 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use tauri::{AppHandle, Emitter};
+use thiserror::Error;
 
 /// Where we read the user's "active model" preference from. The
 /// model files themselves live in the same dir under
@@ -226,9 +226,7 @@ pub fn model_by_id(id: &str) -> Result<&'static SttModelDescriptor, SttError> {
     CURATED_MODELS
         .iter()
         .find(|m| m.id == id)
-        .ok_or_else(|| SttError::UnknownModel {
-            id: id.to_string(),
-        })
+        .ok_or_else(|| SttError::UnknownModel { id: id.to_string() })
 }
 
 /// Resolve the on-disk path for a model's binary file. This
@@ -237,7 +235,10 @@ pub fn model_by_id(id: &str) -> Result<&'static SttModelDescriptor, SttError> {
 /// (`create_dir_all`).
 pub fn model_path(app_data_dir: &Path, id: &str) -> Result<PathBuf, SttError> {
     let _ = model_by_id(id)?; // validates id is in the allowlist
-    Ok(app_data_dir.join("stt").join(MODELS_SUBDIR).join(format!("{id}.bin")))
+    Ok(app_data_dir
+        .join("stt")
+        .join(MODELS_SUBDIR)
+        .join(format!("{id}.bin")))
 }
 
 /// Resolve the path of the `active_model.json` file. This is
@@ -266,10 +267,7 @@ pub fn read_active_model_id(app_data_dir: &Path) -> Option<String> {
 /// existing file. We write atomically (tmp file + rename) so
 /// a crash mid-write doesn't leave a half-empty preference
 /// file.
-pub fn write_active_model_id(
-    app_data_dir: &Path,
-    id: &str,
-) -> Result<(), SttError> {
+pub fn write_active_model_id(app_data_dir: &Path, id: &str) -> Result<(), SttError> {
     let path = active_model_path(app_data_dir);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -408,10 +406,7 @@ mod tests {
 
         // Overwrite.
         write_active_model_id(&dir, "ggml-tiny.en").unwrap();
-        assert_eq!(
-            read_active_model_id(&dir).as_deref(),
-            Some("ggml-tiny.en")
-        );
+        assert_eq!(read_active_model_id(&dir).as_deref(), Some("ggml-tiny.en"));
 
         std::fs::remove_dir_all(dir).ok();
     }
@@ -516,11 +511,7 @@ mod tests {
 /// "downloaded" but writes nothing). The JS side still emits
 /// the progress event locally to drive the UI.
 #[cfg(not(feature = "m2c-native"))]
-pub async fn install_model(
-    app: &AppHandle,
-    app_data_dir: &Path,
-    id: &str,
-) -> Result<(), SttError> {
+pub async fn install_model(app: &AppHandle, app_data_dir: &Path, id: &str) -> Result<(), SttError> {
     let model = model_by_id(id)?;
     // Emit a single "done" progress event so the JS side's
     // progress bar disappears and the model appears in the
@@ -546,11 +537,7 @@ pub async fn install_model(
 /// exist; the JS side just updates its local list). Real
 /// path: deletes the file.
 #[cfg(not(feature = "m2c-native"))]
-pub async fn remove_model(
-    _app: &AppHandle,
-    app_data_dir: &Path,
-    id: &str,
-) -> Result<(), SttError> {
+pub async fn remove_model(_app: &AppHandle, app_data_dir: &Path, id: &str) -> Result<(), SttError> {
     let path = model_path(app_data_dir, id)?;
     if path.exists() {
         std::fs::remove_file(&path)?;
@@ -587,11 +574,7 @@ pub async fn set_active_model(
 // build time, and the public surface is identical).
 
 #[cfg(feature = "m2c-native")]
-pub async fn install_model(
-    app: &AppHandle,
-    app_data_dir: &Path,
-    id: &str,
-) -> Result<(), SttError> {
+pub async fn install_model(app: &AppHandle, app_data_dir: &Path, id: &str) -> Result<(), SttError> {
     use futures_util::StreamExt;
     use std::io::Write;
 
@@ -663,11 +646,7 @@ pub async fn install_model(
 }
 
 #[cfg(feature = "m2c-native")]
-pub async fn remove_model(
-    _app: &AppHandle,
-    app_data_dir: &Path,
-    id: &str,
-) -> Result<(), SttError> {
+pub async fn remove_model(_app: &AppHandle, app_data_dir: &Path, id: &str) -> Result<(), SttError> {
     let path = model_path(app_data_dir, id)?;
     if path.exists() {
         std::fs::remove_file(&path)?;

@@ -36,26 +36,23 @@
 //!    inside a 50 MB log file would be useless. We skip
 //!    them silently.
 //!
-//! 5. **Synchronous**: the command reads each file in
-//!    sequence on Tauri's worker thread. Tauri commands
-//!    are allowed to block; the JS side awaits a
-//!    Promise. We could parallelise with rayon, but the
-//!    common case is "search a folder, get 20 results in
-//!    200 ms" and parallelising adds measurable complexity
-//!    to the cancellation story (which v1 doesn't have).
+//! 5. **Synchronous, but cancellable**: the command reads
+//!    each file in sequence on Tauri's worker thread. The
+//!    JS side passes a unique `searchId`, and
+//!    `workspace_search_cancel` records that id in a
+//!    process-local cancellation set. The walker checks the
+//!    token between directories, files, and lines.
 //!
 //! ## Cancellation
 //!
-//! Not implemented in v1. A search of a 10 GB
-//! `node_modules` that the user forgot to ignore takes
-//! ~30 s on a fast disk. That's a UX problem worth solving
-//! in a follow-up — likely with a tokio task + a
-//! `CancellationToken` that the JS side can flip via
-//! `workspace_search_cancel`. Documented as a known
-//! limitation; not blocking the v1 ship.
+//! Implemented without a runtime dependency: each search id
+//! is unique and one-shot, so cancelling is a set insert and
+//! cleanup is a set removal when the search exits.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -113,14 +110,14 @@ pub enum SearchError {
     InvalidQuery(String),
     #[error("io error: {0}")]
     Io(String),
+    #[error("search cancelled: {0}")]
+    Cancelled(String),
 }
 
 impl From<std::io::Error> for SearchError {
     fn from(err: std::io::Error) -> Self {
         match err.kind() {
-            std::io::ErrorKind::NotFound => {
-                SearchError::NotFound(err.to_string())
-            }
+            std::io::ErrorKind::NotFound => SearchError::NotFound(err.to_string()),
             _ => SearchError::Io(err.to_string()),
         }
     }
@@ -185,6 +182,11 @@ pub struct SearchOptions {
     /// may override for a "find next" operation.
     #[serde(default)]
     pub max_results: Option<usize>,
+    /// Optional request id used by the frontend to cancel
+    /// a long-running search. When omitted, the search
+    /// still runs normally but cannot be cancelled.
+    #[serde(default)]
+    pub search_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,11 +195,59 @@ enum Match {
     No,
 }
 
+static CANCELLED_SEARCHES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn cancelled_searches() -> &'static Mutex<HashSet<String>> {
+    CANCELLED_SEARCHES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn search_is_cancelled(search_id: Option<&str>) -> bool {
+    let Some(search_id) = search_id else {
+        return false;
+    };
+    cancelled_searches()
+        .lock()
+        .map(|set| set.contains(search_id))
+        .unwrap_or(false)
+}
+
+fn clear_cancelled_search(search_id: Option<&str>) {
+    let Some(search_id) = search_id else {
+        return;
+    };
+    if let Ok(mut set) = cancelled_searches().lock() {
+        set.remove(search_id);
+    }
+}
+
+fn check_cancelled(search_id: Option<&str>) -> Result<(), SearchError> {
+    if search_is_cancelled(search_id) {
+        Err(SearchError::Cancelled(
+            search_id.unwrap_or_default().to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn workspace_search_cancel(search_id: String) -> bool {
+    let search_id = search_id.trim();
+    if search_id.is_empty() {
+        return false;
+    }
+    cancelled_searches()
+        .lock()
+        .map(|mut set| set.insert(search_id.to_string()))
+        .unwrap_or(false)
+}
+
 /// Search the workspace rooted at `root_path` for
 /// `query`. Returns a flat list of matches plus
 /// diagnostics (files scanned, truncated flag).
 #[tauri::command]
 pub fn workspace_search(opts: SearchOptions) -> Result<SearchResult, SearchError> {
+    let search_id = opts.search_id.as_deref();
     if opts.query.is_empty() {
         return Err(SearchError::InvalidQuery(
             "query must not be empty".to_string(),
@@ -205,15 +255,11 @@ pub fn workspace_search(opts: SearchOptions) -> Result<SearchResult, SearchError
     }
     let root = PathBuf::from(&opts.root_path);
     let meta = fs::metadata(&root).map_err(|err| match err.kind() {
-        std::io::ErrorKind::NotFound => {
-            SearchError::NotFound(root.display().to_string())
-        }
+        std::io::ErrorKind::NotFound => SearchError::NotFound(root.display().to_string()),
         _ => SearchError::Io(err.to_string()),
     })?;
     if !meta.is_dir() {
-        return Err(SearchError::NotADirectory(
-            root.display().to_string(),
-        ));
+        return Err(SearchError::NotADirectory(root.display().to_string()));
     }
 
     let max_results = opts.max_results.unwrap_or(MAX_RESULTS);
@@ -226,54 +272,10 @@ pub fn workspace_search(opts: SearchOptions) -> Result<SearchResult, SearchError
     let mut stack: Vec<PathBuf> = vec![root];
     let ignore_table = IgnoreTable::new(&DEFAULT_IGNORES, &opts.extra_ignores);
 
-    while let Some(dir) = stack.pop() {
-        if files_scanned as usize >= MAX_FILES_SCANNED {
-            truncated = true;
-            break;
-        }
-        if matches.len() >= max_results {
-            truncated = true;
-            break;
-        }
-
-        let entries = match fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue, // permission denied etc. — skip silently
-        };
-        // Sort: dirs first, then files, both
-        // alphabetically. Matches `fs::read_dir`'s
-        // typical iteration order on most
-        // platforms and gives stable output for
-        // tests.
-        let mut dirs = Vec::new();
-        let mut files = Vec::new();
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let name = entry.file_name().to_string_lossy().to_string();
-            if ignore_table.is_ignored(&name) {
-                continue;
-            }
-            let path = entry.path();
-            let m = match entry.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            if m.is_dir() {
-                dirs.push(path);
-            } else {
-                files.push((path, m.len()));
-            }
-        }
-        dirs.sort();
-        files.sort_by(|a, b| a.0.cmp(&b.0));
-
-        for d in dirs {
-            stack.push(d);
-        }
-        for (path, size) in files {
+    let search_result = (|| {
+        check_cancelled(search_id)?;
+        while let Some(dir) = stack.pop() {
+            check_cancelled(search_id)?;
             if files_scanned as usize >= MAX_FILES_SCANNED {
                 truncated = true;
                 break;
@@ -282,23 +284,76 @@ pub fn workspace_search(opts: SearchOptions) -> Result<SearchResult, SearchError
                 truncated = true;
                 break;
             }
-            if size > MAX_READ_BYTES {
-                continue;
+
+            let entries = match fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(_) => continue, // permission denied etc. — skip silently
+            };
+            // Sort: dirs first, then files, both
+            // alphabetically. Matches `fs::read_dir`'s
+            // typical iteration order on most
+            // platforms and gives stable output for
+            // tests.
+            let mut dirs = Vec::new();
+            let mut files = Vec::new();
+            for entry in entries {
+                check_cancelled(search_id)?;
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                let name = entry.file_name().to_string_lossy().to_string();
+                if ignore_table.is_ignored(&name) {
+                    continue;
+                }
+                let path = entry.path();
+                let m = match entry.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if m.is_dir() {
+                    dirs.push(path);
+                } else {
+                    files.push((path, m.len()));
+                }
             }
-            files_scanned += 1;
-            if scan_file(&path, &needles, &mut matches, max_results) {
-                // `scan_file` stopped at the cap.
-                truncated = true;
-                break;
+            dirs.sort();
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+
+            for d in dirs {
+                check_cancelled(search_id)?;
+                stack.push(d);
+            }
+            for (path, size) in files {
+                check_cancelled(search_id)?;
+                if files_scanned as usize >= MAX_FILES_SCANNED {
+                    truncated = true;
+                    break;
+                }
+                if matches.len() >= max_results {
+                    truncated = true;
+                    break;
+                }
+                if size > MAX_READ_BYTES {
+                    continue;
+                }
+                files_scanned += 1;
+                if scan_file(&path, &needles, &mut matches, max_results, search_id)? {
+                    // `scan_file` stopped at the cap.
+                    truncated = true;
+                    break;
+                }
             }
         }
-    }
 
-    Ok(SearchResult {
-        matches,
-        files_scanned,
-        truncated,
-    })
+        Ok(SearchResult {
+            matches,
+            files_scanned,
+            truncated,
+        })
+    })();
+    clear_cancelled_search(search_id);
+    search_result
 }
 
 /// Per-needle matcher. We accept up to two needles —
@@ -337,13 +392,14 @@ fn scan_file(
     needles: &Needles,
     out: &mut Vec<SearchMatch>,
     max_results: usize,
-) -> bool {
+    search_id: Option<&str>,
+) -> Result<bool, SearchError> {
     let bytes = match fs::read(path) {
         Ok(b) => b,
-        Err(_) => return false,
+        Err(_) => return Ok(false),
     };
     if !looks_like_text(&bytes) {
-        return false;
+        return Ok(false);
     }
     // Lossy conversion: invalid UTF-8 is replaced
     // with U+FFFD, which keeps the line/column
@@ -354,8 +410,9 @@ fn scan_file(
     let insensitive_needle = needles.insensitive.as_str();
 
     for (i, line) in text.lines().enumerate() {
+        check_cancelled(search_id)?;
         if out.len() >= max_results {
-            return true; // hit the cap — tell the caller
+            return Ok(true); // hit the cap — tell the caller
         }
         let m = if needles.insensitive.is_empty() {
             find_in_line(line, &needles.raw, false)
@@ -371,7 +428,7 @@ fn scan_file(
             });
         }
     }
-    false
+    Ok(false)
 }
 
 fn find_in_line(haystack: &str, needle: &str, case_insensitive: bool) -> Match {
@@ -379,10 +436,7 @@ fn find_in_line(haystack: &str, needle: &str, case_insensitive: bool) -> Match {
         return Match::No;
     }
     let column = if case_insensitive {
-        haystack
-            .to_lowercase()
-            .find(needle)
-            .map(|i| (i + 1) as u32)
+        haystack.to_lowercase().find(needle).map(|i| (i + 1) as u32)
     } else {
         haystack.find(needle).map(|i| (i + 1) as u32)
     };
@@ -397,28 +451,86 @@ fn find_in_line(haystack: &str, needle: &str, case_insensitive: bool) -> Match {
 /// `workspace_search` call from the default ignore
 /// list plus the caller's `extra_ignores`.
 struct IgnoreTable {
-    names: Vec<String>,
+    patterns: Vec<IgnorePattern>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IgnorePattern {
+    Exact(String),
+    Glob(String),
 }
 
 impl IgnoreTable {
     fn new(defaults: &[&str], extra: &[String]) -> Self {
-        let mut names: Vec<String> =
-            defaults.iter().map(|s| s.to_string()).collect();
+        let mut patterns: Vec<IgnorePattern> = defaults
+            .iter()
+            .filter(|s| !s.is_empty())
+            .map(|s| IgnorePattern::from((*s).to_string()))
+            .collect();
         for e in extra {
-            if !e.is_empty() && !names.contains(e) {
-                names.push(e.clone());
+            if !e.is_empty() {
+                let pattern = IgnorePattern::from(e.clone());
+                if !patterns.contains(&pattern) {
+                    patterns.push(pattern);
+                }
             }
         }
-        IgnoreTable { names }
+        IgnoreTable { patterns }
     }
     fn is_ignored(&self, name: &str) -> bool {
-        // Exact-name match. Globs (e.g. `*.min.js`)
-        // are not supported in v1 — adding them
-        // would need a globset dep. The default
-        // list is all exact names, so this is
-        // enough for the common case.
-        self.names.iter().any(|n| n == name)
+        self.patterns.iter().any(|pattern| pattern.matches(name))
     }
+}
+
+impl From<String> for IgnorePattern {
+    fn from(value: String) -> Self {
+        if value.contains('*') || value.contains('?') {
+            IgnorePattern::Glob(value)
+        } else {
+            IgnorePattern::Exact(value)
+        }
+    }
+}
+
+impl IgnorePattern {
+    fn matches(&self, name: &str) -> bool {
+        match self {
+            IgnorePattern::Exact(exact) => exact == name,
+            IgnorePattern::Glob(glob) => glob_matches(glob, name),
+        }
+    }
+}
+
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let text: Vec<char> = text.chars().collect();
+    let mut previous = vec![false; text.len() + 1];
+    previous[0] = true;
+
+    for pc in pattern {
+        let mut current = vec![false; text.len() + 1];
+        match pc {
+            '*' => {
+                current[0] = previous[0];
+                for j in 1..=text.len() {
+                    current[j] = current[j - 1] || previous[j];
+                }
+            }
+            '?' => {
+                for j in 1..=text.len() {
+                    current[j] = previous[j - 1];
+                }
+            }
+            literal => {
+                for j in 1..=text.len() {
+                    current[j] = previous[j - 1] && literal == text[j - 1];
+                }
+            }
+        }
+        previous = current;
+    }
+
+    previous[text.len()]
 }
 
 #[cfg(test)]
@@ -455,6 +567,7 @@ mod tests {
             extra_ignores: vec![],
             case_insensitive: false,
             max_results: None,
+            search_id: None,
         }
     }
 
@@ -467,6 +580,7 @@ mod tests {
             extra_ignores: vec![],
             case_insensitive: false,
             max_results: None,
+            search_id: None,
         };
         let err = workspace_search(opts).unwrap_err();
         assert!(matches!(err, SearchError::InvalidQuery(_)));
@@ -481,6 +595,7 @@ mod tests {
             extra_ignores: vec![],
             case_insensitive: false,
             max_results: None,
+            search_id: None,
         };
         let err = workspace_search(opts).unwrap_err();
         assert!(matches!(err, SearchError::NotFound(_)));
@@ -496,6 +611,7 @@ mod tests {
             extra_ignores: vec![],
             case_insensitive: false,
             max_results: None,
+            search_id: None,
         };
         let err = workspace_search(opts).unwrap_err();
         assert!(matches!(err, SearchError::NotADirectory(_)));
@@ -513,6 +629,41 @@ mod tests {
         assert_eq!(res.matches[0].line_text, "foo bar");
         assert_eq!(res.files_scanned, 1);
         assert!(!res.truncated);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn search_with_uncancelled_id_runs_normally() {
+        let dir = unique_tmpdir("uncancelled");
+        write(&dir, "a.txt", "needle\n");
+        let mut opts = opts_for(&dir, "needle");
+        opts.search_id = Some("uncancelled-search".to_string());
+        let res = workspace_search(opts).unwrap();
+        assert_eq!(res.matches.len(), 1);
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn workspace_search_cancel_rejects_empty_id() {
+        assert!(!workspace_search_cancel("   ".to_string()));
+    }
+
+    #[test]
+    fn pre_cancelled_search_returns_cancelled_error() {
+        let dir = unique_tmpdir("pre-cancelled");
+        write(&dir, "a.txt", "needle\n");
+        let search_id = "pre-cancelled-search";
+        assert!(workspace_search_cancel(search_id.to_string()));
+
+        let mut opts = opts_for(&dir, "needle");
+        opts.search_id = Some(search_id.to_string());
+        let err = workspace_search(opts).unwrap_err();
+        assert!(matches!(err, SearchError::Cancelled(id) if id == search_id));
+
+        let mut retry = opts_for(&dir, "needle");
+        retry.search_id = Some(search_id.to_string());
+        let res = workspace_search(retry).unwrap();
+        assert_eq!(res.matches.len(), 1);
         fs::remove_dir_all(dir).ok();
     }
 
@@ -565,6 +716,43 @@ mod tests {
         let res = workspace_search(opts).unwrap();
         assert_eq!(res.files_scanned, 1);
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn honours_extra_ignore_file_globs() {
+        let dir = unique_tmpdir("extra-ignore-file-glob");
+        write(&dir, "app.min.js", "needle");
+        write(&dir, "app.js", "needle");
+        let mut opts = opts_for(&dir, "needle");
+        opts.extra_ignores = vec!["*.min.js".to_string()];
+        let res = workspace_search(opts).unwrap();
+        assert_eq!(res.files_scanned, 1);
+        assert_eq!(res.matches.len(), 1);
+        assert!(res.matches[0].path.ends_with("app.js"));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn honours_extra_ignore_directory_globs() {
+        let dir = unique_tmpdir("extra-ignore-dir-glob");
+        write(&dir, "generated-cache/x.txt", "needle");
+        write(&dir, "src/x.txt", "needle");
+        let mut opts = opts_for(&dir, "needle");
+        opts.extra_ignores = vec!["generated-*".to_string()];
+        let res = workspace_search(opts).unwrap();
+        assert_eq!(res.files_scanned, 1);
+        assert_eq!(res.matches.len(), 1);
+        assert!(res.matches[0].path.contains("src"));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn glob_matcher_supports_star_and_question_mark() {
+        assert!(glob_matches("*.rs", "main.rs"));
+        assert!(glob_matches("file-?.txt", "file-a.txt"));
+        assert!(glob_matches("generated-*", "generated-cache"));
+        assert!(!glob_matches("file-?.txt", "file-ab.txt"));
+        assert!(!glob_matches("*.rs", "main.ts"));
     }
 
     #[test]

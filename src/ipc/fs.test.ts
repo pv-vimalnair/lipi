@@ -24,6 +24,7 @@ import {
   pickFolder,
   readDir,
   readFile,
+  readWorkspaceFile,
   renameEntry,
   writeFile,
 } from './fs';
@@ -60,6 +61,30 @@ describe('fs IPC wrappers', () => {
         path: '/x/a.txt',
       });
       expect(out.content).toBe('hi');
+    });
+  });
+
+  describe('readWorkspaceFile', () => {
+    it('invokes fs_read_workspace_file with workspace root and relative path', async () => {
+      invokeMock.mockResolvedValueOnce({ content: 'hi', encoding: 'utf-8' });
+      const out = await readWorkspaceFile('/workspace', 'src/a.txt');
+      expect(invokeMock).toHaveBeenCalledWith('fs_read_workspace_file', {
+        workspaceRoot: '/workspace',
+        path: 'src/a.txt',
+      });
+      expect(out.content).toBe('hi');
+    });
+
+    it('surfaces OutsideWorkspace as an FsError', async () => {
+      invokeMock.mockRejectedValueOnce({
+        kind: 'OutsideWorkspace',
+        detail: '../secret.txt',
+      });
+      await expect(
+        readWorkspaceFile('/workspace', '../secret.txt'),
+      ).rejects.toMatchObject({
+        payload: { kind: 'OutsideWorkspace', detail: '../secret.txt' },
+      });
     });
   });
 

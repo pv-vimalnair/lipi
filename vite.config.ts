@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
+const emitSourceMaps = process.env.LIPI_BUILD_SOURCEMAPS === '1';
+
 // Tauri convention: dev server on 1420, fixed port so the Tauri shell can
 // attach predictably. `clearScreen: false` keeps Tauri's `tauri dev`
 // output visible. The `@/` path alias mirrors the source layout and keeps
@@ -46,15 +48,27 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
-    sourcemap: true,
+    sourcemap: emitSourceMaps,
+    chunkSizeWarningLimit: 1200,
     rollupOptions: {
       output: {
-        manualChunks: {
-          monaco: ['monaco-editor'],
-          'monaco-ts': ['monaco-editor/esm/vs/language/typescript/ts.worker'],
-          'monaco-json': ['monaco-editor/esm/vs/language/json/json.worker'],
-          'monaco-css': ['monaco-editor/esm/vs/language/css/css.worker'],
-          'monaco-html': ['monaco-editor/esm/vs/language/html/html.worker'],
+        manualChunks(id) {
+          if (id.includes('monaco-editor/esm/vs/language/typescript/ts.worker')) {
+            return 'monaco-ts';
+          }
+          if (id.includes('monaco-editor/esm/vs/language/json/json.worker')) {
+            return 'monaco-json';
+          }
+          if (id.includes('monaco-editor/esm/vs/language/css/css.worker')) {
+            return 'monaco-css';
+          }
+          if (id.includes('monaco-editor/esm/vs/language/html/html.worker')) {
+            return 'monaco-html';
+          }
+          if (id.includes('monaco-editor')) {
+            return 'monaco';
+          }
+          return undefined;
         },
       },
     },

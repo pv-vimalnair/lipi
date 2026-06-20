@@ -1,0 +1,126 @@
+/**
+ * CropPicker.module.css — 9-thumb picker + reset button +
+ * current-crop-name readout.
+ *
+ * Layout: a single horizontal flex row, label on the left,
+ * thumbs in the middle, reset + crop name on the right.
+ * Adapts to small viewports by wrapping (the row's flex-wrap
+ * lets it break into multiple lines on mobile widths).
+ */
+
+.wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-pane);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.label {
+  /* Per the surrounding Settings sections (Tools, Activity
+   * Log, etc.), small uppercase labels use the project's
+   * token scale for size and weight — no raw px. */
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  grid-template-rows: repeat(3, auto);
+  /* Tight gap so the 3x3 reads as a single control, not 9
+   * separate buttons. */
+  gap: 2px;
+  /* 3 rows × thumb-size + 2 gaps. We set the dimensions
+   * explicitly so the grid has a stable size — the rows are
+   * tightly packed and the wrap shrinks to fit. */
+  width: calc(3 * 32px + 2 * 2px);
+  height: calc(3 * 32px + 2 * 2px);
+  flex-shrink: 0;
+}
+
+.thumb {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-base);
+  background-size: 320% 320%;
+  background-repeat: no-repeat;
+  cursor: pointer;
+  /* The focus ring matches ThemeCard's — same outline-offset
+   * + accent color so the picker feels unified with the rest
+   * of the theme UI. */
+  outline: none;
+  transition: border-color var(--motion-fast) var(--easing-standard),
+              transform var(--motion-fast) var(--easing-standard);
+}
+
+.thumb:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-1px);
+}
+
+.thumb:focus-visible {
+  /* Subtle outline that doesn't fight the small thumb size. */
+  box-shadow:
+    0 0 0 2px var(--color-bg-base),
+    0 0 0 4px var(--color-accent);
+}
+
+/* Active thumb — same shape as ThemeCard's active border but
+ * smaller (1.5px outline ring vs the card's 1px border + ring).
+ * Keeps the picker readable at the smaller thumb size. */
+.thumb.active {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 0 0 1.5px var(--color-accent);
+}
+
+.reset {
+  /* Per Rule 4 we re-use the project's button vocabulary for
+   * sizing/padding via the tokens; styling is intentionally
+   * minimal so this picker doesn't pull in the Button primitive
+   * (which has its own padding/variant API that would be more
+   * code than this row needs). The disabled state dims the
+   * button when the crop is already center. */
+  padding: 4px var(--space-3);
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--easing-standard),
+              opacity var(--motion-fast) var(--easing-standard);
+  flex-shrink: 0;
+}
+
+.reset:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.reset:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cropName {
+  /* min-width keeps the layout stable when switching between
+   * "Top-left" (8 chars) and "Bottom-right" (12 chars). */
+  min-width: 88px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  /* flex-shrink: 0 so the readout doesn't get squeezed when
+   * the row wraps. */
+  flex-shrink: 0;
+}

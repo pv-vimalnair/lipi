@@ -27,6 +27,7 @@ import { useAboutStore, aboutSelectors } from '@/shared/state/aboutStore';
 import { useFirstRunStore } from '@/shared/state/firstRunStore';
 import { useTourStore } from '@/shared/state/tourStore';
 import { useLicenseStore } from '@/shared/state/licenseStore';
+import { setupThemePersistence, useThemeStore } from '@/shared/state/themeStore';
 import {
   useWorkspaceStore,
   workspaceSelectors,
@@ -236,7 +237,7 @@ function AppRoot() {
   useOpenFolderShortcut();
   useMenuEvents();
   useWorkspaceSync();
-  // Phase I: subscribe to `app://lipi.open?path=...` URLs the OS
+  // Phase I: subscribe to `lipi://open?path=...` URLs the OS
   // hands the app. Mounted here (not inside ScreenRoot) so the
   // listener is alive for the full app lifetime, including the
   // hydration window before the workspace store has been read.
@@ -255,6 +256,18 @@ function AppRoot() {
     // on first call, so the user always sees a
     // non-null status after this resolves.
     useLicenseStore.getState().hydrate();
+    // Phase 4: hydrate the theme store + wire the
+    // side effects (localStorage persist + CSS-variable
+    // apply). `hydrate()` reads `lipi:theme:v1` and
+    // seeds the store; `setupThemePersistence()`
+    // subscribes the store to localStorage writes
+    // and pushes --theme-img / --theme-img-crop /
+    // --theme-accent onto :root so the active
+    // editor tab paints the user's selected scene.
+    // Both are idempotent — safe under StrictMode's
+    // double-effect in dev.
+    useThemeStore.getState().hydrate();
+    setupThemePersistence();
     // F.3: dismiss the cold-start splash. The splash is a pure-CSS
     // surface in index.html that shows from page load until the
     // first React commit; setting the `splash-done` class on the

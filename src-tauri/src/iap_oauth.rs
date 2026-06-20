@@ -140,15 +140,11 @@ pub fn read_oauth_credentials_from_env() -> Option<OAuthCredentials> {
     // Prefer build-time; fall back to runtime; only
     // return `Some` if all three are present in at
     // least one source.
-    let client_id = build_client_id
-        .map(str::to_string)
-        .or(runtime_client_id)?;
+    let client_id = build_client_id.map(str::to_string).or(runtime_client_id)?;
     let client_secret = build_client_secret
         .map(str::to_string)
         .or(runtime_client_secret)?;
-    let tenant_id = build_tenant_id
-        .map(str::to_string)
-        .or(runtime_tenant_id)?;
+    let tenant_id = build_tenant_id.map(str::to_string).or(runtime_tenant_id)?;
 
     Some(OAuthCredentials {
         client_id,
@@ -193,9 +189,8 @@ pub struct TokenResponse {
 /// (no `Error` trait propagation). The
 /// caller maps it to `MicrosoftError::OAuthFailed`.
 pub fn parse_token_response(body: &str) -> Result<TokenResponse, String> {
-    serde_json::from_str::<TokenResponse>(body).map_err(|e| {
-        format!("failed to parse Microsoft OAuth response: {e}")
-    })
+    serde_json::from_str::<TokenResponse>(body)
+        .map_err(|e| format!("failed to parse Microsoft OAuth response: {e}"))
 }
 
 /// Build the token endpoint URL for a given
@@ -227,10 +222,7 @@ pub fn is_token_expired(cached: &Option<CachedToken>, now_unix_secs: i64) -> boo
 /// `now + min(expires_in, 55 minutes)`. We
 /// cap at 55 minutes regardless of what the
 /// server says, to keep the safety margin.
-pub fn build_cached_token(
-    response: &TokenResponse,
-    now_unix_secs: i64,
-) -> CachedToken {
+pub fn build_cached_token(response: &TokenResponse, now_unix_secs: i64) -> CachedToken {
     let ttl = response.expires_in.min(TOKEN_TTL_SECS);
     CachedToken {
         access_token: response.access_token.clone(),
@@ -262,16 +254,14 @@ pub fn build_cached_token(
 ///   non-2xx response, or invalid JSON).
 /// - `OAuthError::InvalidExpiresIn`: the
 ///   server returned an `expires_in` <= 0.
-pub async fn get_access_token(
-    now_unix_secs: i64,
-) -> Result<String, OAuthError> {
+pub async fn get_access_token(now_unix_secs: i64) -> Result<String, OAuthError> {
     // Fast path: check the cache.
     {
-        let cache_guard = CACHED_TOKEN.lock().map_err(|e| {
-            OAuthError::ExchangeFailed {
+        let cache_guard = CACHED_TOKEN
+            .lock()
+            .map_err(|e| OAuthError::ExchangeFailed {
                 detail: format!("OAuth cache mutex poisoned: {e}"),
-            }
-        })?;
+            })?;
         if !is_token_expired(&*cache_guard, now_unix_secs) {
             // Safe: the guard is held, but we
             // only read `access_token` (a
@@ -289,9 +279,8 @@ pub async fn get_access_token(
         None => {
             // Fall back to the static token
             // (dev-only escape hatch).
-            return std::env::var("LIPI_MS_IAP_BEARER_TOKEN").map_err(|_| {
-                OAuthError::CredentialsMissing
-            });
+            return std::env::var("LIPI_MS_IAP_BEARER_TOKEN")
+                .map_err(|_| OAuthError::CredentialsMissing);
         }
     };
 
@@ -300,11 +289,11 @@ pub async fn get_access_token(
 
     // Cache it.
     {
-        let mut cache_guard = CACHED_TOKEN.lock().map_err(|e| {
-            OAuthError::ExchangeFailed {
+        let mut cache_guard = CACHED_TOKEN
+            .lock()
+            .map_err(|e| OAuthError::ExchangeFailed {
                 detail: format!("OAuth cache mutex poisoned: {e}"),
-            }
-        })?;
+            })?;
         *cache_guard = Some(new_token);
     }
 
@@ -348,12 +337,14 @@ async fn fetch_access_token(
             detail: format!("Microsoft OAuth returned HTTP {status}: {body}"),
         });
     }
-    let body = response.text().await.map_err(|e| OAuthError::ExchangeFailed {
-        detail: format!("failed to read response body: {e}"),
-    })?;
-    let parsed = parse_token_response(&body).map_err(|e| OAuthError::ExchangeFailed {
-        detail: e,
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|e| OAuthError::ExchangeFailed {
+            detail: format!("failed to read response body: {e}"),
+        })?;
+    let parsed =
+        parse_token_response(&body).map_err(|e| OAuthError::ExchangeFailed { detail: e })?;
     if parsed.expires_in <= 0 {
         return Err(OAuthError::InvalidExpiresIn);
     }
@@ -369,9 +360,7 @@ pub enum OAuthError {
     /// The token exchange failed (network
     /// error, non-2xx response, or invalid
     /// JSON).
-    ExchangeFailed {
-        detail: String,
-    },
+    ExchangeFailed { detail: String },
     /// The server returned an `expires_in`
     /// <= 0.
     InvalidExpiresIn,
@@ -521,10 +510,7 @@ mod tests {
     #[test]
     fn build_token_url_handles_empty_tenant() {
         let url = build_token_url("");
-        assert_eq!(
-            url,
-            "https://login.microsoftonline.com//oauth2/v2.0/token"
-        );
+        assert_eq!(url, "https://login.microsoftonline.com//oauth2/v2.0/token");
     }
 
     // --- read_oauth_credentials_from_env ---
@@ -542,9 +528,15 @@ mod tests {
         std::env::remove_var("LIPI_MS_IAP_CLIENT_SECRET");
         std::env::remove_var("LIPI_MS_IAP_TENANT_ID");
         let result = read_oauth_credentials_from_env();
-        if let Some(c) = prev_client { std::env::set_var("LIPI_MS_IAP_CLIENT_ID", c); }
-        if let Some(c) = prev_secret { std::env::set_var("LIPI_MS_IAP_CLIENT_SECRET", c); }
-        if let Some(c) = prev_tenant { std::env::set_var("LIPI_MS_IAP_TENANT_ID", c); }
+        if let Some(c) = prev_client {
+            std::env::set_var("LIPI_MS_IAP_CLIENT_ID", c);
+        }
+        if let Some(c) = prev_secret {
+            std::env::set_var("LIPI_MS_IAP_CLIENT_SECRET", c);
+        }
+        if let Some(c) = prev_tenant {
+            std::env::set_var("LIPI_MS_IAP_TENANT_ID", c);
+        }
         // The result depends on the test
         // environment. In a clean test env,
         // it's None. In a build env with the

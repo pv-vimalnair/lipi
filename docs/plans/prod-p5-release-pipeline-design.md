@@ -95,20 +95,21 @@ password (`lipi-dev-not-a-real-secret`) and is
 git-ignored but present on the project lead's laptop.
 A real release MUST be signed with a different key.
 
-Phase 5 generates a **production keypair**:
+Phase 5 generates a **production keypair**, but only the public key lives
+inside the repo:
 
 ```
 src-tauri/keys/production/
-├── production.key         # PRIVATE — git-ignored, stored in CI secret + offline USB
-└── production.key.pub     # PUBLIC  — committed, embedded in tauri.conf.json
+└── production.key.pub     # PUBLIC — committed, embedded in tauri.conf.json
 ```
 
-The private key is generated via `tauri signer generate
--w src-tauri/keys/production/production.key` (Tauri
-2.11's CLI). The password is set to a 32-char random
-string and stored in the project lead's CI secret store
-(GitHub Actions encrypted secrets) under the name
-`TAURI_PROD_UPDATER_KEY_PASSWORD`.
+The private key is generated outside the workspace, for example with
+`tauri signer generate -w
+$HOME/.lipi-production-secrets/keys/production/production.key` (Tauri
+2.11's CLI), then imported into the project lead's CI secret store and
+offline vault / encrypted USB. The password is set to a 32-char random
+string and stored in the project lead's CI secret store (GitHub Actions
+encrypted secrets) under the name `TAURI_PROD_UPDATER_KEY_PASSWORD`.
 
 The public key is committed to the repo at
 `src-tauri/keys/production/production.key.pub` (the

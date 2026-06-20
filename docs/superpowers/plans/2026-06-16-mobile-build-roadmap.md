@@ -820,9 +820,9 @@ and the AI provider API keys are user-supplied
 - The voice capture uses Apple's on-device
   `SFSpeechRecognizer`; no audio is transmitted
   off-device.
-- The deep-link scheme `app://` is registered
+- The deep-link scheme `lipi://` is registered
   for `app.lipi.ide` so external links
-  (e.g. `app://lipi.open?path=/Users/me/file.ts`)
+  (e.g. `lipi://open?path=/Users/me/file.ts`)
   can open the user's workspace.
 ```
 

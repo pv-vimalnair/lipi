@@ -6,6 +6,199 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (IDE readiness hardening backlog)
+
+- Hardened AI and custom-tool safety: `get_file_contents` is
+  workspace-scoped, dangerous tools now default to confirmation,
+  custom-tool delete / rename / load paths keep the singleton registry
+  in sync, and HTTP custom-tool responses are capped while streaming
+  instead of after the full body is buffered. HTTP custom tools also
+  require per-tool host allowlists, reject credentialed URLs, disable
+  automatic redirects, and default-deny localhost / private / link-local
+  targets unless the tool explicitly opts in. Rust-side IPC policy gates
+  now prevent `run_command` from acting as a generic renderer process
+  launcher, validate LSP spawns against the allowed server-kind command
+  table, reject terminal shell overrides, and write app-local audit JSONL
+  records for allowed/blocked shell, LSP, HTTP, and terminal actions.
+- Hardened deep-link routing: the registered desktop scheme is now
+  Lipi-specific (`lipi://open?path=...`), the parser rejects unrelated
+  authorities and route paths, root checks require an exact root or path
+  separator boundary, and the route performs Rust-side canonical path
+  validation before opening the workspace.
+- Added cancellable workspace search: the search panel now sends a unique
+  search id, cancels stale native searches on new input / root changes /
+  unmount, and the Rust walker checks cancellation between directories,
+  files, and lines.
+- Fixed shell tool timeout cleanup: `run_command` now spawns explicitly,
+  keeps the child handle, reads stdout/stderr concurrently, and kills plus
+  reaps the direct child process when the timeout fires.
+- Hardened secrets and mobile behavior: renderer raw-key access is
+  allowlisted for Wispr only, and Android Stronghold now fails closed
+  instead of falling back to placeholder key material. Production updater
+  and license-signing private keys have also been moved out of the repo
+  tree; `src-tauri/keys/production/` now keeps only committed public
+  material.
+- Fixed build and verification hygiene: `m2c-native` compiles against
+  the pinned `whisper-rs` 0.16 API, `npm run lint` maps to the existing
+  typecheck, `tsconfig.tsbuildinfo` is removed from tracking, and
+  `workspace_search.extra_ignores` supports simple `*` / `?` globs.
+  Dev-tool audit findings were cleared by upgrading the existing Vite /
+  Vitest toolchain to Vite 8, raising the Node floor to `>=20.19.0`,
+  and updating the Monaco manual-chunk config for the newer Rollup /
+  Rolldown typings. Release build output was also tightened: bundled
+  theme artwork is now optimized JPG output, production sourcemaps are
+  opt-in via `LIPI_BUILD_SOURCEMAPS=1`, and `npm run build` ends with
+  a local bundle budget check.
+- Current backlog verification: `npm run typecheck`, `npm run lint`,
+  `npm test` (99 files, 1293 tests), `npm audit --json`, `npm run build`, `cargo check`,
+  `cargo test --lib` (413 tests), `cargo test --tests`,
+  `cargo check --features mobile`, targeted Rust and Vitest suites for
+  the changed areas, Rust formatting check for `src-tauri/src/http.rs`,
+  and `git diff --check`.
+
+### Added (Phase 10 — Editor tab theme: 5 vintage scenes)
+
+Settings → **Theme** now lets the user pick one of 5
+vintage nature-print illustrations (Hickory Hollow,
+Whispering Pines, Marigold Field, Wildflower Field,
+Quiet Valley) and a 9-position frame crop. The active
+editor tab is painted with the cropped image while
+the rail, file tree, editor body, AI panel, and status
+bar stay in the dark-first IDE neutral so your code
+stays the focus. The selection persists across reloads
+via `lipi:theme:v1` localStorage.
+
+**Architecture in one paragraph.** `themes.ts` owns
+the `Theme` interface + `THEMES` + `CROP_POSITIONS` +
+`applyThemeTokens()` (the single function that writes
+`--theme-img` / `--theme-img-crop` / `--theme-accent` /
+`--theme-accent-soft` to `:root`). Illustrations load
+via `import.meta.glob` (fail-fast at module load if an
+asset is missing). `themeStore.ts` is a Zustand store +
+persistence, mirroring the `voicePreferencesStore`
+pattern (Decision #189). `ThemeSection.tsx` is a pure
+view; the picker primitives `ThemeCard` + `CropPicker`
+live in `src/shared/components/`. The TabStrip in
+`EditorWorkspace` reads the four CSS variables — zero
+JS coupling between the picker and the tab, no IPC,
+no asset variants.
+
+**Files added (15 new).**
+
+- **`src/shared/state/themes.ts`** — `Theme` interface
+  (`id` / `name` / `mood` / `imageUrl` / `accent` /
+  `accentSoft`), `THEMES` (5), `CROP_POSITIONS` (9),
+  `CROP_LABELS` (9), `DEFAULT_THEME_ID`,
+  `DEFAULT_CROP_INDEX`, `findTheme`, `cropAt`,
+  `applyThemeTokens`, `THEME_CSS_VARS`.
+  `import.meta.glob` loads every PNG/JPG in
+  `src/shared/assets/themes/` at build time.
+- **`src/shared/state/themeStore.ts`** — Zustand store
+  + persistence at `lipi:theme:v1`. Holds
+  `{ themeId, cropIndex, hydrated }`. Exports
+  `useThemeStore`, `themeSelectors`,
+  `setupThemePersistence`. Defensive validators
+  reject malformed payloads and fall back to defaults.
+- **`src/shared/state/themeStore.test.ts`** — 21 vitest
+  tests (defaults, all setters, defensive guards, all
+  hydrate paths, persistence round-trips, all 5 ids ×
+  all 9 positions).
+- **`src/shared/assets/themes/01-hickory-hollow.jpg`** —
+  autumn leaves + acorn, vintage botanical print. 155 KB.
+- **`src/shared/assets/themes/02-whispering-pines.jpg`** —
+  moonlit trees, vintage poster. 189 KB.
+- **`src/shared/assets/themes/03-marigold-field.jpg`** —
+  whimsical girl in golden wheat field with butterfly. 250 KB.
+- **`src/shared/assets/themes/04-wildflower-field.jpg`** —
+  white daisies on blue sky, vintage botanical print. 302 KB.
+- **`src/shared/assets/themes/05-quiet-valley.jpg`** —
+  green mountains + river, vintage Ghibli-style. 232 KB.
+- **`src/shared/components/ThemeCard/ThemeCard.tsx`** +
+  **`ThemeCard.module.css`** + **`index.ts`** — single
+  theme card. `<button>` with `aria-pressed`, per-card
+  `--card-accent` inline style, 4/5 aspect-ratio art,
+  checkmark badge on active.
+- **`src/shared/components/CropPicker/CropPicker.tsx`** +
+  **`CropPicker.module.css`** + **`index.ts`** — 3×3
+  thumbs in a `role="radiogroup"`, each showing the
+  active theme image cropped to its position. Reset
+  button + `aria-live="polite"` crop-name readout.
+- **`src/screens/SettingsProvider/components/ThemeSection/ThemeSection.tsx`**
+  + **`ThemeSection.module.css`** + **`index.ts`** —
+  Appearance → Theme block composing 5 `<ThemeCard>`
+  + `<CropPicker>` + a "Reset to center" link. Reads
+  from `useThemeStore` via the narrow `themeSelectors`
+  (Rule 6 — no over-broad subscriptions).
+
+**Files modified (3).**
+
+- **`src/shared/components/index.ts`** — added
+  `export * from './ThemeCard';` and
+  `export * from './CropPicker';`.
+- **`src/screens/EditorWorkspace/components/TabStrip/TabStrip.module.css`** —
+  `.tab[data-active]` reads `background-image:
+  var(--theme-img)` + `background-position:
+  var(--theme-img-crop)`. Added the dark wash overlay
+  (`::before`), the 2 px accent stripe on top (`::after`,
+  `var(--theme-accent)`), and the children-need-z-index-1
+  rule. `.dot[data-dirty]` uses `var(--theme-accent)`.
+  **No `.tsx` changes** — TabStrip.tsx was untouched.
+- **`src/screens/SettingsProvider/SettingsProvider.tsx`** —
+  imported `ThemeSection` and inserted `<ThemeSection />`
+  between `<LanguageServerCard />` and the AI Tools `<h2>`.
+- **`src/main.tsx`** — added
+  `useThemeStore.getState().hydrate()` and
+  `setupThemePersistence()` in `AppRoot`'s effect
+  (alongside the workspace / firstRun / tour / license
+  hydrates).
+
+**What did NOT change.** Monaco editor's editor.tsx
+(no theme integration into the editor body — only the
+tab strip gets the illustration, per the Phase 10 budget
+"illustration only paints the active tab"). The file
+tree's active-row background still uses
+`--color-accent-soft`, not `--theme-accent-soft` (matches
+the picker card copy; the per-card inline `--card-accent-soft`
+is exposed for a future "tree active-row uses theme accent"
+polish). The Rust side (no theme assets on the Rust side;
+theme images go straight to the JS bundle via `import.meta.glob`).
+
+**Decisions (Phase 10).** #187 (`import.meta.glob` for
+fail-fast asset loading), #188 (active-tab theme image is
+a CSS-variable swap, not a real canvas crop — 10 % dev
+attention budget), #189 (themeStore follows the
+voicePreferences pattern: Zustand + localStorage +
+`setupThemePersistence`).
+
+**Verification (this entry).** `npx tsc -b` exit 0 ·
+`npx vitest run` **98 files, 1264 tests pass** (was 97/1243
+in §9.51; +1 file = themeStore.test.ts with 21 new tests)
+· `cargo check` (default features) exit 0. The
+monaco-editor marked.js source-map warning in the vitest
+output is pre-existing — same noise from §9.51, unrelated
+to Phase 10.
+
+**HANDOFF ref.** `HANDOFF.md §9.52` + updated "End of
+handoff" paragraph.
+
+**Follow-up slices (out of scope for Phase 10).**
+
+1. **Free-drag cropper** — Phase 11+. A real drag-and-zoom
+   picker (`react-image-crop` or similar) replaces the
+   9-position grid. Data flow change: crop becomes
+   `{ x, y, scale, rotation }` vs. integer index.
+2. **Custom theme upload** — Phase 11+. User picks an image
+   from disk → resize to 4:5 aspect → write to
+   `src/shared/assets/themes/` (or a per-workspace
+   `lipi-themes/` dir) → auto-add to `THEMES`. The data
+   source would need to become a registry.
+3. **Quick-cycle button in the top bar** — Phase 11+. A
+   `ThemeButton` next to the search box that cycles
+   through `THEMES` on click. ~30 lines; mirrors the
+   M3-era `VoiceButton` pattern.
+4. **Tree active-row uses `--theme-accent-soft`** — one-line
+   CSS change in `FileTreePane.module.css`.
+
 ### Added (StrongholdKeyBridge contract + Rust stub — D-186 follow-up)
 
 Phase A of the mobile-build roadmap shipped the

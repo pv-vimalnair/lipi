@@ -45,6 +45,8 @@ const WIN_DIRS = {
   desktop: 'C:\\Users\\alice\\Desktop',
 };
 
+const acceptPath = async (path: string): Promise<string> => path;
+
 function resetStore(): void {
   // M6a: the store no longer
   // has a `currentPath`
@@ -69,20 +71,27 @@ describe('routeDeepLink', () => {
   });
 
   it('calls openWorkspace with the validated path on a valid URL', async () => {
+    const validatePath = vi
+      .fn<(path: string) => Promise<string>>()
+      .mockResolvedValue('C:\\Users\\alice\\Projects\\my-app-canonical');
     await routeDeepLink(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CProjects%5Cmy-app',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CProjects%5Cmy-app',
       WIN_DIRS,
+      validatePath,
+    );
+    expect(validatePath).toHaveBeenCalledWith(
+      'C:\\Users\\alice\\Projects\\my-app',
     );
     expect(openWorkspaceMock).toHaveBeenCalledTimes(1);
     expect(openWorkspaceMock).toHaveBeenCalledWith(
-      'C:\\Users\\alice\\Projects\\my-app',
+      'C:\\Users\\alice\\Projects\\my-app-canonical',
     );
     // The store's status should not have been set to error.
     expect(useWorkspaceStore.getState().status.kind).toBe('idle');
   });
 
   it('sets an error status and skips openWorkspace when the path is missing', async () => {
-    await routeDeepLink('app://lipi.open', WIN_DIRS);
+    await routeDeepLink('lipi://open', WIN_DIRS, acceptPath);
     expect(openWorkspaceMock).not.toHaveBeenCalled();
     const s = useWorkspaceStore.getState().status;
     expect(s.kind).toBe('error');
@@ -93,8 +102,9 @@ describe('routeDeepLink', () => {
 
   it('sets an error status when the path contains ..', async () => {
     await routeDeepLink(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CDocuments%5C..%5C..%5CWindows',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDocuments%5C..%5C..%5CWindows',
       WIN_DIRS,
+      acceptPath,
     );
     expect(openWorkspaceMock).not.toHaveBeenCalled();
     const s = useWorkspaceStore.getState().status;
@@ -106,8 +116,26 @@ describe('routeDeepLink', () => {
 
   it('sets an error status when the path is outside user dirs', async () => {
     await routeDeepLink(
-      'app://lipi.open?path=C%3A%5CWindows%5CSystem32%5Ccmd.exe',
+      'lipi://open?path=C%3A%5CWindows%5CSystem32%5Ccmd.exe',
       WIN_DIRS,
+      acceptPath,
+    );
+    expect(openWorkspaceMock).not.toHaveBeenCalled();
+    const s = useWorkspaceStore.getState().status;
+    expect(s.kind).toBe('error');
+    if (s.kind === 'error') {
+      expect(s.message).toMatch(/outside/i);
+    }
+  });
+
+  it('sets an error status when Rust-side canonical validation rejects', async () => {
+    const validatePath = vi
+      .fn<(path: string) => Promise<string>>()
+      .mockRejectedValue('outside-user-dirs');
+    await routeDeepLink(
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDocuments%5Ca.md',
+      WIN_DIRS,
+      validatePath,
     );
     expect(openWorkspaceMock).not.toHaveBeenCalled();
     const s = useWorkspaceStore.getState().status;
@@ -119,12 +147,14 @@ describe('routeDeepLink', () => {
 
   it('routes two consecutive URLs independently', async () => {
     await routeDeepLink(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CDocuments%5Ca.md',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDocuments%5Ca.md',
       WIN_DIRS,
+      acceptPath,
     );
     await routeDeepLink(
-      'app://lipi.open?path=C%3A%5CUsers%5Calice%5CDesktop%5Cb.md',
+      'lipi://open?path=C%3A%5CUsers%5Calice%5CDesktop%5Cb.md',
       WIN_DIRS,
+      acceptPath,
     );
     expect(openWorkspaceMock).toHaveBeenCalledTimes(2);
     expect(openWorkspaceMock).toHaveBeenNthCalledWith(

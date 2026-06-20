@@ -16,7 +16,7 @@ Stronghold on Android) — Lipi has **no backend**, the user is in full
 control. The headline differentiator is **voice-to-code on mobile**
 (speak, get code); the daily-driver STT on desktop is the **Web Speech
 API** with a real **`cpal` + `whisper-rs`** on-device fallback that
-lands in Phase 6.3. BYO API key (OpenAI / Anthropic / OpenRouter).
+shipped in Phase 6.3. BYO API key (OpenAI / Anthropic / OpenRouter).
 
 ## Workspace
 
@@ -45,7 +45,7 @@ LifeOf project) — **never touch, do not read, do not import from**.
 | `docs/ENGINEERING.md` | The 7 engineering rules every PR must follow |
 | `docs/RELEASING.md` | Release process (signing, auto-update, store uploads) |
 | `docs/plans/mobile-build-roadmap.md` | Future Mac / Linux session's iOS / Android pickup doc |
-| `docs/decisions/0046-…-0100-…md` | Per-decision writeups (numbered `#46`–`#180`) |
+| `docs/decisions/0046-…-0100-…md` | Per-decision writeups (numbered `#46`–`#189`) |
 | `HANDOFF.md` | Phase-by-phase history (Section 9 is the index) |
 | `CHANGELOG.md` | Per-phase changelog entries |
 | `.cursorrules` | Auto-loaded by Cursor IDE with the 7-rule quick reference |
@@ -56,13 +56,14 @@ LifeOf project) — **never touch, do not read, do not import from**.
 # JS side
 npm install                # one-time
 npm run typecheck          # npx tsc -b, 0 errors expected
-npm test                   # npx vitest run, 1243/1243 pass
+npm run lint               # npm run typecheck, 0 errors expected
+npm test                   # npx vitest run, 1293/1293 pass
 npm run build              # vite production build
 
 # Rust side (default features, no m2c-native, no mobile)
 cd src-tauri
 cargo check                # 0 errors, 0 warnings
-cargo test --lib           # 380 / 380 pass
+cargo test --lib           # 413 / 413 pass
 cargo test --tests         # 24 / 24 pass
 
 # Rust side (mobile build — Stronghold + secrets dispatch)
@@ -78,10 +79,11 @@ npm run build:tauri
 `npm run dev:tauri` is the canonical dev loop — Rust incremental
 recompile + Vite HMR.
 
-## Current state (last shipped phase: **6.3**)
+## Current state (last shipped phase: **10**)
 
 | Phase | What | Status |
 |---|---|---|
+| **10** | Editor tab theme: 5 vintage scenes | **SHIPPED 2026-06-18** |
 | **6.3** | Real `cpal` + `whisper-rs` STT wiring | **SHIPPED 2026-06-16** |
 | **6.2** | `whisper-rs` 0.14 → 0.16 (build break fix) | SHIPPED |
 | **mobile-build A** | iOS / Android pipeline seam | SHIPPED |
@@ -180,12 +182,12 @@ The mobile build is mutually exclusive with the desktop features
    `VoiceButton.tsx`. The grep target is `src/shared/components/`.
 4. **No new dependencies without owner confirmation.** The Rust
    `Cargo.toml` is the same rule for the Rust side.
-5. **Tests for every new feature.** Vitest for JS (1243 tests
-   currently), `#[cfg(test)] mod tests` for Rust (380 tests
+5. **Tests for every new feature.** Vitest for JS (1293 tests
+  currently), `#[cfg(test)] mod tests` for Rust (413 tests
    currently).
 6. **State in Zustand, not Context, not `useState` for cross-component.**
 7. **HANDOFF + CHANGELOG updated for every phase.** Decisions get
-   numbered (#46–#180 are taken; new ones go in the next slot). The
+   numbered (#46–#189 are taken; new ones go in the next slot). The
    full decision table is in `HANDOFF.md` §9.
 
 ## Quick commands an agent might want to run

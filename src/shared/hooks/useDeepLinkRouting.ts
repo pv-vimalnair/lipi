@@ -25,6 +25,8 @@ import {
   getUserDirs,
   onDeepLink,
   parseOpenUrl,
+  rejectionReasonFromValidationError,
+  validateDeepLinkPath,
 } from '@/ipc';
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 import { openWorkspace } from '@/screens/Welcome/hooks/useOpenWorkspace';
@@ -73,6 +75,7 @@ export async function routeDeepLink(
     documents: string | null;
     desktop: string | null;
   },
+  validatePath: (path: string) => Promise<string> = validateDeepLinkPath,
 ): Promise<void> {
   const result = parseOpenUrl(rawUrl, userDirs);
   if (result.kind === 'reject') {
@@ -82,5 +85,15 @@ export async function routeDeepLink(
     });
     return;
   }
-  await openWorkspace(result.path);
+  try {
+    const canonicalPath = await validatePath(result.path);
+    await openWorkspace(canonicalPath);
+  } catch (error) {
+    useWorkspaceStore.getState().setStatus({
+      kind: 'error',
+      message: friendlyRejectionReason(
+        rejectionReasonFromValidationError(error),
+      ),
+    });
+  }
 }

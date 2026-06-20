@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lipi — Dark IDE · 2D Flower Selection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0d0e10;
+    --bg-2: #14171c;
+    --bg-3: #1a1e25;
+    --bg-4: #232831;
+    --line: #232831;
+    --line-2: #2a313c;
+    --text: #e6e8eb;
+    --text-dim: #aab1bb;
+    --text-muted: #6e7682;
+    --accent: #4f8cff;
+    --green: #4caf82;
+    --code-keyword: #c678dd;
+    --code-string: #e0a458;
+    --code-variable: #56b6c2;
+    --code-number: #d19a66;
+    --code-comment: #6e7682;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+    overflow: hidden;
+  }
+
+  .page {
+    width: 100vw;
+    height: 100vh;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 0%, rgba(76, 175, 130, 0.18) 0%, transparent 60%),
+      radial-gradient(ellipse 70% 80% at 50% 100%, rgba(20, 80, 70, 0.6) 0%, transparent 70%),
+      linear-gradient(180deg, #1a3a35 0%, #0d2624 50%, #061814 100%);
+    display: grid;
+    place-items: center;
+    padding: 32px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* === The 2D flower illustration — used as background for selected tab === */
+  /* This is a painted/illustrated cherry blossom scene with sky, branch, blossoms, leaves, falling petals */
+  .ide {
+    width: min(1600px, 100%);
+    height: min(950px, 100%);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--bg);
+    box-shadow:
+      0 50px 100px rgba(0, 0, 0, 0.5),
+      0 20px 50px rgba(0, 0, 0, 0.3),
+      0 0 0 0.5px rgba(255, 255, 255, 0.04);
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    font-family: 'Outfit', system-ui, sans-serif;
+    color: var(--text);
+    position: relative;
+  }
+
+  /* === Top bar === */
+  .topbar {
+    display: flex; align-items: center;
+    padding: 0 16px;
+    background: var(--bg-2);
+    border-bottom: 0.5px solid var(--line);
+    gap: 16px;
+    position: relative;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 8px;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .brand .logo {
+    width: 22px; height: 22px;
+    background: linear-gradient(135deg, #4f8cff, #c678dd);
+    border-radius: 6px;
+    display: grid; place-items: center;
+    font-size: 10px; font-weight: 700; color: white;
+  }
+  .workspace {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    padding: 5px 10px;
+    border-radius: 6px;
+    background: var(--bg-3);
+  }
+
+  /* === View tabs — selected one has a 2D flower illustration as background === */
+  .view-tabs {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex; gap: 2px;
+    background: var(--bg-3);
+    border-radius: 8px;
+    padding: 3px;
+  }
+  .view-tab {
+    padding: 5px 16px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    border-radius: 5px;
+    font-weight: 500;
+    position: relative;
+    overflow: hidden;
+  }
+  /* The selected tab — 2D cherry blossom illustration as background */
+  .view-tab.active {
+    background-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 80' preserveAspectRatio='xMidYMid slice'%3E%3Cdefs%3E%3ClinearGradient id='sky' x1='0' y1='0' x2='0' y2='1'%3E%3Cstop offset='0' stop-color='%23FFE9F0'/%3E%3Cstop offset='0.5' stop-color='%23FFD8E5'/%3E%3Cstop offset='1' stop-color='%23FFC8D8'/%3E%3C/linearGradient%3E%3CradialGradient id='bl' cx='50%25' cy='35%25'%3E%3Cstop offset='0' stop-color='%23FFFFFF'/%3E%3Cstop offset='0.55' stop-color='%23FFE4EC'/%3E%3Cstop offset='1' stop-color='%23FFB7C5'/%3E%3C/radialGradient%3E%3ClinearGradient id='br' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0' stop-color='%236B4423'/%3E%3Cstop offset='1' stop-color='%238B5A3C'/%3E%3C/linearGradient%3E%3CradialGradient id='glow' cx='50%25' cy='50%25'%3E%3Cstop offset='0' stop-color='%23FFFFFF' stop-opacity='0.6'/%3E%3Cstop offset='1' stop-color='%23FFFFFF' stop-opacity='0'/%3E%3C/radialGradient%3E%3C/defs%3E%3Crect width='240' height='80' fill='url(%23sky)'/%3E%3Ccircle cx='40' cy='12' r='22' fill='url(%23glow)'/%3E%3Ccircle cx='200' cy='60' r='18' fill='url(%23glow)'/%3E%3Ccircle cx='130' cy='8' r='14' fill='url(%23glow)'/%3E%3Cpath d='M -10 42 Q 50 30 110 42 Q 170 55 250 38' stroke='url(%23br)' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3Cpath d='M 45 30 Q 48 22 50 14' stroke='url(%23br)' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M 120 43 Q 128 52 135 58' stroke='url(%23br)' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3Cpath d='M 180 50 Q 185 60 192 68' stroke='url(%23br)' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3Cellipse cx='52' cy='16' rx='5' ry='2.5' fill='%23A8C97A' transform='rotate(-30 52 16)'/%3E%3Cellipse cx='138' cy='55' rx='5' ry='2.5' fill='%23A8C97A' transform='rotate(30 138 55)'/%3E%3Cellipse cx='195' cy='65' rx='4' ry='2' fill='%23A8C97A' transform='rotate(45 195 65)'/%3E%3Cg transform='translate(35, 28)'%3E%3Cellipse cx='0' cy='-5' rx='4.5' ry='6' fill='url(%23bl)'/%3E%3Cellipse cx='5.5' cy='-1.5' rx='4.5' ry='6' fill='url(%23bl)' transform='rotate(72)'/%3E%3Cellipse cx='3.5' cy='5' rx='4.5' ry='6' fill='url(%23bl)' transform='rotate(144)'/%3E%3Cellipse cx='-3.5' cy='5' rx='4.5' ry='6' fill='url(%23bl)' transform='rotate(216)'/%3E%3Cellipse cx='-5.5' cy='-1.5' rx='4.5' ry='6' fill='url(%23bl)' transform='rotate(288)'/%3E%3Ccircle cx='0' cy='0' r='2.5' fill='%23FF8FA3'/%3E%3Ccircle cx='0' cy='0' r='1' fill='%23FFE4EC'/%3E%3C/g%3E%3Cg transform='translate(70, 18)'%3E%3Cellipse cx='0' cy='-4' rx='3.5' ry='4.5' fill='url(%23bl)'/%3E%3Cellipse cx='4' cy='-1' rx='3.5' ry='4.5' fill='url(%23bl)' transform='rotate(72)'/%3E%3Cellipse cx='2.5' cy='3.5' rx='3.5' ry='4.5' fill='url(%23bl)' transform='rotate(144)'/%3E%3Cellipse cx='-2.5' cy='3.5' rx='3.5' ry='4.5' fill='url(%23bl)' transform='rotate(216)'/%3E%3Cellipse cx='-4' cy='-1' rx='3.5' ry='4.5' fill='url(%23bl)' transform='rotate(288)'/%3E%3Ccircle cx='0' cy='0' r='2' fill='%23FF8FA3'/%3E%3C/g%3E%3Cg transform='translate(115, 36)'%3E%3Cellipse cx='0' cy='-5' rx='5' ry='6.5' fill='url(%23bl)'/%3E%3Cellipse cx='6' cy='-1.5' rx='5' ry='6.5' fill='url(%23bl)' transform='rotate(72)'/%3E%3Cellipse cx='4' cy='5.5' rx='5' ry='6.5' fill='url(%23bl)' transform='rotate(144)'/%3E%3Cellipse cx='-4' cy='5.5' rx='5' ry='6.5' fill='url(%23bl)' transform='rotate(216)'/%3E%3Cellipse cx='-6' cy='-1.5' rx='5' ry='6.5' fill='url(%23bl)' transform='rotate(288)'/%3E%3Ccircle cx='0' cy='0' r='3' fill='%23FF8FA3'/%3E%3Ccircle cx='0' cy='0' r='1.5' fill='%23FFE4EC'/%3E%3C/g%3E%3Cg transform='translate(170, 48)'%3E%3Cellipse cx='0' cy='-4' rx='4' ry='5' fill='url(%23bl)'/%3E%3Cellipse cx='5' cy='-1' rx='4' ry='5' fill='url(%23bl)' transform='rotate(72)'/%3E%3Cellipse cx='3' cy='4' rx='4' ry='5' fill='url(%23bl)' transform='rotate(144)'/%3E%3Cellipse cx='-3' cy='4' rx='4' ry='5' fill='url(%23bl)' transform='rotate(216)'/%3E%3Cellipse cx='-5' cy='-1' rx='4' ry='5' fill='url(%23bl)' transform='rotate(288)'/%3E%3Ccircle cx='0' cy='0' r='2.2' fill='%23FF8FA3'/%3E%3C/g%3E%3Cg transform='translate(215, 28)'%3E%3Cellipse cx='0' cy='-3.5' rx='3' ry='4' fill='url(%23bl)'/%3E%3Cellipse cx='3.5' cy='-1' rx='3' ry='4' fill='url(%23bl)' transform='rotate(72)'/%3E%3Cellipse cx='2' cy='3' rx='3' ry='4' fill='url(%23bl)' transform='rotate(144)'/%3E%3Cellipse cx='-2' cy='3' rx='3' ry='4' fill='url(%23bl)' transform='rotate(216)'/%3E%3Cellipse cx='-3.5' cy='-1' rx='3' ry='4' fill='url(%23bl)' transform='rotate(288)'/%3E%3Ccircle cx='0' cy='0' r='1.5' fill='%23FF8FA3'/%3E%3C/g%3E%3Cellipse cx='85' cy='68' rx='2' ry='2.5' fill='url(%23bl)' opacity='0.7' transform='rotate(30 85 68)'/%3E%3Cellipse cx='155' cy='72' rx='2' ry='2.5' fill='url(%23bl)' opacity='0.6' transform='rotate(60 155 72)'/%3E%3Cellipse cx='225' cy='70' rx='1.5' ry='2' fill='url(%23bl)' opacity='0.5' transform='rotate(45 225 70)'/%3E%3Cellipse cx='22' cy='72' rx='1.5' ry='2' fill='url(%23bl)' opacity='0.55' transform='rotate(15 22 72)'/%3E%3C/svg%3E");
+    background-size: cover;
+    background-position: center;
+    color: #2a0a1a;
+    font-weight: 700;
+    box-shadow:
+      0 0 0 1px rgba(255, 183, 197, 0.5),
+      0 0 16px rgba(255, 107, 157, 0.4),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+    text-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.8),
+      0 0 8px rgba(255, 255, 255, 0.5);
+  }
+
+  .topbar-right {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .avatar {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #4f8cff, #c678dd);
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 600; color: white;
+  }
+  .invite {
+    padding: 5px 12px;
+    background: linear-gradient(135deg, #4f8cff, #6a9fff);
+    color: white; font-size: 12px; font-weight: 500;
+    border-radius: 6px;
+  }
+
+  /* === Body (4 columns) === */
+  .body {
+    display: grid;
+    grid-template-columns: 52px 220px 1fr 360px;
+    overflow: hidden;
+  }
+
+  /* === Rail === */
+  .rail {
+    background: var(--bg-2);
+    border-right: 0.5px solid var(--line);
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding: 12px 0; gap: 4px;
+  }
+  .rail-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: grid; place-items: center;
+    color: var(--text-dim);
+    font-size: 18px; cursor: pointer; position: relative;
+  }
+  .rail-icon:hover { color: var(--text); background: var(--bg-3); }
+  .rail-icon.active { color: var(--text); background: var(--bg-3); }
+  .rail-icon.active::before {
+    content: '';
+    position: absolute;
+    left: -8px; top: 8px; bottom: 8px;
+    width: 2px;
+    background: var(--accent);
+    border-radius: 0 2px 2px 0;
+  }
+  .rail .spacer { flex: 1; }
+  .rail-icon .badge {
+    position: absolute;
+    top: 4px; right: 4px;
+    min-width: 14px; height: 14px;
+    border-radius: 7px;
+    background: var(--accent);
+    color: white; font-size: 9px; font-weight: 700;
+    display: grid; place-items: center; padding: 0 3px;
+  }
+
+  /* === Tree === */
+  .tree-panel {
+    background: var(--bg-2);
+    border-right: 0.5px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .tree-header {
+    display: flex; align-items: center;
+    padding: 10px 14px 6px;
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-muted); font-weight: 600;
+  }
+  .tree-header .search { margin-left: auto; color: var(--text-dim); cursor: pointer; }
+  .tree { flex: 1; overflow: auto; padding: 4px 0 12px; font-size: 13px; }
+  .tree-row {
+    display: flex; align-items: center;
+    padding: 3px 14px 3px 8px;
+    cursor: pointer; color: var(--text-dim); gap: 4px;
+    user-select: none;
+  }
+  .tree-row:hover { background: var(--bg-3); color: var(--text); }
+  .tree-row .chev { width: 14px; opacity: 0.5; font-size: 10px; text-align: center; }
+  .tree-row .ico { width: 16px; font-size: 12px; text-align: center; }
+  .tree-row .name { font-size: 13px; }
+  .tree-row .name.active { color: var(--accent); }
+  .tree-section {
+    padding: 4px 14px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted);
+    margin-top: 4px; font-weight: 600;
+  }
+
+  /* === Editor === */
+  .editor { display: flex; flex-direction: column; background: var(--bg); overflow: hidden; }
+  .tabbar {
+    display: flex; align-items: end;
+    background: var(--bg-2);
+    border-bottom: 0.5px solid var(--line);
+    padding: 0 4px 0 12px;
+    overflow-x: auto; flex-shrink: 0;
+  }
+  .edtab {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 12px; font-size: 12.5px;
+    color: var(--text-muted);
+    border-right: 0.5px solid var(--line);
+    cursor: pointer; position: relative; white-space: nowrap;
+  }
+  .edtab.active { color: var(--text); background: var(--bg); }
+  .edtab.active::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: var(--accent);
+  }
+  .edtab .ico-dot { width: 8px; height: 8px; border-radius: 2px; }
+  .edtab .close { margin-left: 4px; color: var(--text-muted); width: 14px; height: 14px; border-radius: 3px; display: grid; place-items: center; font-size: 14px; line-height: 1; }
+  .edtab .add { color: var(--text-muted); padding: 9px 10px; cursor: pointer; }
+  .tabbar-right { margin-left: auto; display: flex; align-items: center; gap: 4px; padding: 0 8px; }
+  .zoom { padding: 4px 8px; font-size: 11px; color: var(--text-dim); border-radius: 4px; }
+  .edtab-action { width: 28px; height: 28px; display: grid; place-items: center; color: var(--text-dim); border-radius: 4px; }
+
+  .code-body {
+    flex: 1; overflow: auto;
+    padding: 14px 0 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; line-height: 1.65;
+  }
+  .code-row { display: grid; grid-template-columns: 56px 1fr; }
+  .gutter { text-align: right; padding-right: 16px; color: var(--text-muted); user-select: none; }
+  .src { padding-left: 12px; white-space: pre; }
+  .kw { color: var(--code-keyword); }
+  .str { color: var(--code-string); }
+  .var { color: var(--code-variable); }
+  .num { color: var(--code-number); }
+  .com { color: var(--code-comment); font-style: italic; }
+  .punc { color: var(--text-dim); }
+  .caret {
+    display: inline-block;
+    width: 2px; height: 16px;
+    background: var(--accent);
+    vertical-align: text-bottom;
+    margin-left: 1px;
+    animation: blink 1.2s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* === Mavis panel === */
+  .ai {
+    background: var(--bg-2);
+    border-left: 0.5px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .ai-header {
+    display: flex; align-items: center;
+    padding: 12px 16px;
+    border-bottom: 0.5px solid var(--line);
+  }
+  .ai-title { font-size: 13px; font-weight: 600; }
+  .ai-chat-btn {
+    margin-left: auto;
+    padding: 5px 12px;
+    background: var(--text);
+    color: var(--bg);
+    font-size: 12px; font-weight: 500;
+    border-radius: 6px;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+
+  .ai-body {
+    flex: 1; overflow: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .ai-msg {
+    background: var(--bg-3);
+    border: 0.5px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12.5px; line-height: 1.55;
+  }
+  .ai-msg .file-card {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg);
+    border: 0.5px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .ai-msg .file-card .ico {
+    width: 28px; height: 32px;
+    background: linear-gradient(135deg, #4f8cff, #c678dd);
+    border-radius: 4px;
+    display: grid; place-items: center;
+    color: white; font-size: 9px; font-weight: 700;
+  }
+  .ai-msg .file-card .name { font-size: 12.5px; font-weight: 500; }
+  .ai-msg .file-card .size { font-size: 11px; color: var(--text-muted); }
+
+  .reasoning-toggle { color: var(--text-dim); font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  .action-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .action-chip {
+    padding: 5px 12px;
+    border: 0.5px solid var(--green);
+    color: var(--green);
+    font-size: 12px; font-weight: 500;
+    border-radius: 6px; background: transparent; cursor: pointer;
+  }
+  .action-chip:hover { background: rgba(76, 175, 130, 0.12); }
+
+  .diff-block {
+    background: var(--bg);
+    border: 0.5px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px; line-height: 1.55;
+  }
+  .diff-block .head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-3);
+    border-bottom: 0.5px solid var(--line);
+    font-family: 'Outfit', system-ui, sans-serif;
+    font-size: 11px; color: var(--text-dim); font-weight: 500;
+  }
+  .diff-block .head .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .diff-block.before .head .dot { background: #e06c75; }
+  .diff-block.after .head .dot { background: var(--green); }
+  .diff-block .body { padding: 8px 12px; white-space: pre; }
+  .diff-block .body .minus { color: #e06c75; }
+  .diff-block .body .plus { color: var(--green); }
+  .diff-block .body .com { color: var(--text-muted); }
+
+  .ai-action-row { display: flex; gap: 8px; align-items: center; }
+  .ai-btn {
+    padding: 7px 14px;
+    background: var(--bg-3);
+    border: 0.5px solid var(--line);
+    font-size: 12.5px; font-weight: 500;
+    border-radius: 6px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .ai-btn.primary { background: var(--green); color: #061814; border-color: var(--green); }
+
+  .ai-input-wrap {
+    padding: 12px 16px;
+    border-top: 0.5px solid var(--line);
+    background: var(--bg-2);
+  }
+  .ai-input {
+    background: var(--bg-3);
+    border: 0.5px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--text-muted); font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .ai-input .send {
+    margin-left: auto;
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    background: var(--accent);
+    display: grid; place-items: center;
+    color: white;
+  }
+  .ai-toolbar { display: flex; align-items: center; gap: 10px; padding: 0 4px; font-size: 12px; }
+  .ai-toolbar .ic-btn {
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    color: var(--text-dim);
+    border-radius: 4px; cursor: pointer;
+  }
+  .ai-toolbar .mode {
+    margin-left: 4px;
+    padding: 4px 12px;
+    background: var(--bg-3);
+    border: 0.5px solid var(--line);
+    border-radius: 6px;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-weight: 500;
+  }
+  .ai-toolbar .mode .pulse { width: 6px; height: 6px; background: var(--green); border-radius: 50%; }
+  .ai-toolbar .send-btn {
+    margin-left: auto;
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    background: var(--bg-3);
+    display: grid; place-items: center;
+    color: var(--text-dim);
+  }
+
+  /* === Legend === */
+  .legend {
+    position: fixed;
+    bottom: 16px; left: 16px;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(20px);
+    border: 0.5px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: white;
+    font-size: 11px;
+    z-index: 100;
+  }
+  .legend b { color: #ff8fa3; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="ide">
+
+    <!-- Top bar -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">L</div>
+        <span>Lipi</span>
+      </div>
+      <div class="workspace">
+        <span>lipi</span>
+        <span class="chev">▾</span>
+      </div>
+
+      <!-- View tabs — selected "Code" has a 2D flower illustration as background -->
+      <div class="view-tabs">
+        <div class="view-tab">Preview</div>
+        <div class="view-tab">Design</div>
+        <div class="view-tab active">Code</div>
+      </div>
+
+      <div class="topbar-right">
+        <div class="avatar">V</div>
+        <div class="invite">Invite</div>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div class="body">
+
+      <!-- Rail -->
+      <div class="rail">
+        <div class="rail-icon active" title="Explorer">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"/></svg>
+        </div>
+        <div class="rail-icon" title="Search">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+        </div>
+        <div class="rail-icon" title="Source Control">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M18 9.5c0-2-2-3.5-4-3.5s-4 1.5-4 3.5 2 3.5 4 3.5 4 1.5 4 3.5"/></svg>
+          <span class="badge">3</span>
+        </div>
+        <div class="rail-icon" title="Run & Debug">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </div>
+        <div class="rail-icon" title="Extensions">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        </div>
+        <div class="rail-icon" title="Mavis">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+        <div class="spacer"></div>
+        <div class="rail-icon" title="Settings">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </div>
+      </div>
+
+      <!-- Tree -->
+      <div class="tree-panel">
+        <div class="tree-header">
+          <span>Explorer</span>
+          <span class="search">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          </span>
+        </div>
+        <div class="tree">
+          <div class="tree-section">Open Editors</div>
+          <div class="tree-row" style="padding-left: 22px"><span class="ico">📄</span><span class="name">tokens.css</span></div>
+          <div class="tree-row" style="padding-left: 22px"><span class="ico">📄</span><span class="name">secrets_strongho...</span></div>
+          <div class="tree-section" style="margin-top: 8px">lipi</div>
+          <div class="tree-row" style="padding-left: 22px"><span class="chev">▾</span><span class="ico">📁</span><span class="name">src-tauri</span></div>
+          <div class="tree-row" style="padding-left: 38px"><span class="chev">▾</span><span class="ico">📁</span><span class="name">src</span></div>
+          <div class="tree-row" style="padding-left: 54px"><span class="ico">📄</span><span class="name active">tokens.css</span></div>
+          <div class="tree-row" style="padding-left: 54px"><span class="ico">📄</span><span class="name">secrets_stronghold_key_bridge.rs</span></div>
+          <div class="tree-row" style="padding-left: 54px"><span class="ico">📄</span><span class="name">stt_capture.rs</span></div>
+          <div class="tree-row" style="padding-left: 54px"><span class="ico">📄</span><span class="name">stt_inference.rs</span></div>
+          <div class="tree-row" style="padding-left: 38px"><span class="chev">▾</span><span class="ico">📁</span><span class="name">screens</span></div>
+          <div class="tree-row" style="padding-left: 54px"><span class="chev">▸</span><span class="ico">📁</span><span class="name">EditorWorkspace</span></div>
+          <div class="tree-row" style="padding-left: 54px"><span class="chev">▸</span><span class="ico">📁</span><span class="name">SettingsProvider</span></div>
+          <div class="tree-row" style="padding-left: 22px"><span class="chev">▸</span><span class="ico">📁</span><span class="name">src</span></div>
+          <div class="tree-row" style="padding-left: 22px"><span class="ico">📄</span><span class="name">package.json</span></div>
+          <div class="tree-row" style="padding-left: 22px"><span class="ico">📄</span><span class="name">Cargo.toml</span></div>
+          <div class="tree-row" style="padding-left: 22px"><span class="ico">📄</span><span class="name">tauri.conf.json</span></div>
+          <div class="tree-row" style="padding-left: 22px"><span class="ico">📄</span><span class="name">.gitignore</span></div>
+          <div class="tree-row" style="padding-left: 22px"><span class="ico">📄</span><span class="name">README.md</span></div>
+        </div>
+      </div>
+
+      <!-- Editor -->
+      <div class="editor">
+        <div class="tabbar">
+          <div class="edtab active">
+            <span class="ico-dot" style="background: var(--accent)"></span>
+            <span>tokens.css</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab">
+            <span class="ico-dot" style="background: var(--code-string)"></span>
+            <span>secrets_stronghold_key_bridge.rs</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab">
+            <span class="ico-dot" style="background: var(--code-string)"></span>
+            <span>ChatPanel.tsx</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab add">+</div>
+          <div class="tabbar-right">
+            <div class="zoom">88% ▾</div>
+            <div class="edtab-action" title="Split">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            </div>
+            <div class="edtab-action" title="More">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="code-body">
+<div class="code-row"><div class="gutter">1</div><div class="src"><span class="com">/*</span></div></div>
+<div class="code-row"><div class="gutter">2</div><div class="src"><span class="com"> * Apple Liquid Glass — design tokens (port from WWDC25)</span></div></div>
+<div class="code-row"><div class="gutter">3</div><div class="src"><span class="com"> * The single source of truth for Lipi's design system.</span></div></div>
+<div class="code-row"><div class="gutter">4</div><div class="src"><span class="com"> */</span></div></div>
+<div class="code-row"><div class="gutter">5</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">6</div><div class="src"><span class="kw">:root</span> <span class="punc">{</span></div></div>
+<div class="code-row"><div class="gutter">7</div><div class="src">  <span class="com">/* === Glass surfaces (translucent body) === */</span></div></div>
+<div class="code-row"><div class="gutter">8</div><div class="src">  <span style="color:var(--accent)">--glass-bg</span>:           <span class="str">rgba(255, 255, 255, 0.55)</span>;</div></div>
+<div class="code-row"><div class="gutter">9</div><div class="src">  <span style="color:var(--accent)">--glass-bg-strong</span>:    <span class="str">rgba(255, 255, 255, 0.72)</span>;</div></div>
+<div class="code-row"><div class="gutter">10</div><div class="src">  <span style="color:var(--accent)">--glass-bg-subtle</span>:    <span class="str">rgba(255, 255, 255, 0.40)</span>;</div></div>
+<div class="code-row"><div class="gutter">11</div><div class="src">  <span style="color:var(--accent)">--glass-bg-tinted</span>:    <span class="str">rgba(37, 99, 235, 0.14)</span>;</div></div>
+<div class="code-row"><div class="gutter">12</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">13</div><div class="src">  <span class="com">/* === Glass edge (squircle + inner highlights) === */</span></div></div>
+<div class="code-row"><div class="gutter">14</div><div class="src">  <span style="color:var(--accent)">--glass-border</span>:       <span class="str">0.5px solid rgba(255, 255, 255, 0.65)</span>;</div></div>
+<div class="code-row"><div class="gutter">15</div><div class="src">  <span style="color:var(--accent)">--glass-highlight</span>:    <span class="str">inset 0 1px 0 rgba(255, 255, 255, 0.7)</span>;</div></div>
+<div class="code-row"><div class="gutter">16</div><div class="src">  <span style="color:var(--accent)">--glass-depth</span>:        <span class="str">inset 0 -1px 0 rgba(0, 0, 0, 0.04)</span>;</div></div>
+<div class="code-row"><div class="gutter">17</div><div class="src">  <span style="color:var(--accent)">--glass-outer-shadow</span>: <span class="str">0 12px 32px rgba(15, 15, 18, 0.08)</span>;</div></div>
+<div class="code-row"><div class="gutter">18</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">19</div><div class="src">  <span class="com">/* === Glass blur (illumination) === */</span></div></div>
+<div class="code-row"><div class="gutter">20</div><div class="src">  <span style="color:var(--accent)">--glass-blur</span>:         <span class="str">blur(30px) saturate(180%)</span>;</div></div>
+<div class="code-row"><div class="gutter">21</div><div class="src">  <span style="color:var(--accent)">--glass-blur-subtle</span>:  <span class="str">blur(15px) saturate(180%)</span>;</div></div>
+<div class="code-row"><div class="gutter">22</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">23</div><div class="src">  <span class="com">/* === Geometry (squircle) === */</span></div></div>
+<div class="code-row"><div class="gutter">24</div><div class="src">  <span style="color:var(--accent)">--radius-glass</span>:       <span class="num">24px</span>;</div></div>
+<div class="code-row"><div class="gutter">25</div><div class="src">  <span style="color:var(--accent)">--radius-control</span>:     <span class="num">12px</span>;</div></div>
+<div class="code-row"><div class="gutter">26</div><div class="src"><span class="punc">}</span><span class="caret"></span></div></div>
+        </div>
+      </div>
+
+      <!-- Mavis -->
+      <div class="ai">
+        <div class="ai-header">
+          <div class="ai-title">Mavis</div>
+          <div class="ai-chat-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+          </div>
+        </div>
+
+        <div class="ai-body">
+          <div class="ai-msg">
+            <div class="file-card">
+              <div class="ico">FIG</div>
+              <div>
+                <div class="name">cherry-blossom-tab.fig</div>
+                <div class="size">142.8 KB</div>
+              </div>
+            </div>
+            <div>Replace the gradient on the selected view tab with a 2D painted cherry blossom scene — soft pink sky, branch with 5 blossoms, falling petals.</div>
+          </div>
+
+          <div class="reasoning-toggle"><span class="chev">▸</span> Reasoning</div>
+
+          <div class="action-row">
+            <div class="action-chip">Apply 2D illustration</div>
+            <div class="action-chip">Swap SVG asset</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:12.5px;color:var(--text);font-weight:500">Style · Selected tab gets 2D nature scene</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.5">
+              The selected tab now shows an inline SVG of cherry blossoms on a branch, with a soft pink sky and falling petals. The "Code" label sits on top with a white text-shadow for legibility.
+            </div>
+          </div>
+
+          <div class="diff-block before">
+            <div class="head"><span class="dot"></span> Before · tokens.css</div>
+            <div class="body"><span class="minus">-</span> <span class="com">/* gradient pill — single color */</span>
+<span class="minus">-</span> <span style="color:#9cdcfe">.view-tab.active</span> <span class="punc">{</span>
+<span class="minus">-</span>   <span style="color:#9cdcfe">background</span>: <span class="str">linear-gradient(135deg, #4f8cff, #c678dd)</span>;
+<span class="minus">-</span> <span class="punc">}</span></div>
+          </div>
+
+          <div class="diff-block after">
+            <div class="head"><span class="dot"></span> After · tokens.css</div>
+            <div class="body"><span class="plus">+</span> <span class="com">/* 2D flower illustration as background */</span>
+<span class="plus">+</span> <span style="color:#9cdcfe">.view-tab.active</span> <span class="punc">{</span>
+<span class="plus">+</span>   <span style="color:#9cdcfe">background-image</span>: <span class="str">url("flower-scene.svg")</span>;
+<span class="plus">+</span>   <span style="color:#9cdcfe">background-size</span>: <span class="str">cover</span>;
+<span class="plus">+</span>   <span style="color:#9cdcfe">color</span>: <span class="str">#2a0a1a</span>;
+<span class="plus">+</span>   <span style="color:#9cdcfe">text-shadow</span>: <span class="str">0 1px 0 white</span>;
+<span class="plus">+</span> <span class="punc">}</span></div>
+          </div>
+
+          <div class="ai-action-row">
+            <div class="ai-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              Explain
+            </div>
+            <div class="ai-btn">Cancel</div>
+            <div class="ai-btn primary" style="margin-left:auto">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Apply
+            </div>
+          </div>
+        </div>
+
+        <div class="ai-input-wrap">
+          <div class="ai-input">
+            <span>Ask a follow-up...</span>
+            <div class="send">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </div>
+          </div>
+          <div class="ai-toolbar">
+            <div class="ic-btn" title="Attach">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </div>
+            <div class="ic-btn" title="Voice">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </div>
+            <div class="mode"><span class="pulse"></span>Builder</div>
+            <div class="send-btn">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="legend">
+    <b>Lipi</b> · selected tab uses 2D cherry blossom illustration (SVG, inline)
+  </div>
+</div>
+</body>
+</html>

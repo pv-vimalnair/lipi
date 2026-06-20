@@ -234,9 +234,8 @@ fn is_base64_receipt(s: &str) -> bool {
     if s.len() < MIN_LEN {
         return false;
     }
-    s.bytes().all(|b| {
-        b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
-    })
+    s.bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
 }
 
 // --- The Tauri command --------------------------------------------
@@ -347,10 +346,7 @@ pub async fn iap_refresh_license(receipt: String, plan: String) -> LicenseStatus
 /// The inner function for `iap_refresh_license`.
 /// Returns `Result<LicenseStatus, String>` so
 /// the error path is explicit.
-async fn iap_refresh_license_inner(
-    receipt: String,
-    plan: String,
-) -> Result<LicenseStatus, String> {
+async fn iap_refresh_license_inner(receipt: String, plan: String) -> Result<LicenseStatus, String> {
     // Step 1: load + verify the current license.
     let current_key = crate::licensing::load_license()
         .map_err(|e| format!("iap-license-load-failed: {e}"))?
@@ -361,7 +357,10 @@ async fn iap_refresh_license_inner(
         .map_err(|e| format!("iap-license-invalid: {e}"))?;
 
     // Step 2: check the `kid` field.
-    let current_kid = current_payload.kid.as_deref().unwrap_or(crate::licensing::KID_TRIAL);
+    let current_kid = current_payload
+        .kid
+        .as_deref()
+        .unwrap_or(crate::licensing::KID_TRIAL);
     if current_kid != crate::licensing::KID_IAP_LOCAL {
         return Err(format!(
             "iap-refresh-not-applicable: the current license is not IAP-issued (kid = {current_kid:?}). Use the existing license activation flow to refresh a trial or offline-purchase license."
@@ -405,7 +404,9 @@ async fn iap_refresh_license_inner(
         jti: random_jti(),
         kid: Some(KID_IAP_LOCAL.to_string()),
     };
-    payload.validate_shape().map_err(|e| format!("license-shape-invalid: {e}"))?;
+    payload
+        .validate_shape()
+        .map_err(|e| format!("license-shape-invalid: {e}"))?;
 
     // Step 7: sign with the existing per-machine
     // keypair (which is the same keypair that
@@ -456,8 +457,8 @@ async fn iap_redeem_inner(receipt: String, plan: String) -> Result<LicenseStatus
             // For the parsed-response case,
             // we deserialize the JSON response
             // and call `validate_apple_response`.
-            let response: crate::iap_apple::AppleVerifyResponse =
-                serde_json::from_str(&receipt).map_err(|e| {
+            let response: crate::iap_apple::AppleVerifyResponse = serde_json::from_str(&receipt)
+                .map_err(|e| {
                     format!("iap-malformed-response: failed to parse Apple response: {e}")
                 })?;
             let now = now_unix_secs();
@@ -531,9 +532,8 @@ async fn iap_redeem_inner(receipt: String, plan: String) -> Result<LicenseStatus
     // Microsoft".
     #[allow(unreachable_patterns)]
     let plan_for_product = match product_id {
-        crate::iap_apple::APPLE_PRODUCT_ID_MONTHLY | crate::iap_microsoft::MS_PRODUCT_ID_MONTHLY => {
-            PLAN_MONTHLY_IAP
-        }
+        crate::iap_apple::APPLE_PRODUCT_ID_MONTHLY
+        | crate::iap_microsoft::MS_PRODUCT_ID_MONTHLY => PLAN_MONTHLY_IAP,
         crate::iap_apple::APPLE_PRODUCT_ID_YEARLY | crate::iap_microsoft::MS_PRODUCT_ID_YEARLY => {
             PLAN_YEARLY_IAP
         }
@@ -566,7 +566,9 @@ async fn iap_redeem_inner(receipt: String, plan: String) -> Result<LicenseStatus
         jti: random_jti(),
         kid: Some(KID_IAP_LOCAL.to_string()),
     };
-    payload.validate_shape().map_err(|e| format!("license-shape-invalid: {e}"))?;
+    payload
+        .validate_shape()
+        .map_err(|e| format!("license-shape-invalid: {e}"))?;
 
     // Step 4: get or create the per-machine IAP
     // keypair, then sign the payload.
@@ -721,7 +723,9 @@ mod tests {
                     "expected iap-save-failed or iap-keychain-error, got: {reason}"
                 );
             }
-            other => panic!("expected Active or Invalid with iap-save-failed reason, got: {other:?}"),
+            other => {
+                panic!("expected Active or Invalid with iap-save-failed reason, got: {other:?}")
+            }
         }
     }
 
@@ -753,7 +757,9 @@ mod tests {
                     "expected iap-save-failed or iap-keychain-error, got: {reason}"
                 );
             }
-            other => panic!("expected Active or Invalid with iap-save-failed reason, got: {other:?}"),
+            other => {
+                panic!("expected Active or Invalid with iap-save-failed reason, got: {other:?}")
+            }
         }
     }
 
@@ -784,7 +790,10 @@ mod tests {
         let status = iap_redeem(receipt, PLAN_MONTHLY_IAP.to_string()).await;
         match status {
             LicenseStatus::Invalid { reason } => {
-                assert!(reason.contains("iap-expired"), "expected iap-expired, got: {reason}");
+                assert!(
+                    reason.contains("iap-expired"),
+                    "expected iap-expired, got: {reason}"
+                );
             }
             other => panic!("expected Invalid, got: {other:?}"),
         }
@@ -807,7 +816,8 @@ mod tests {
                 // catches this first with
                 // `iap-product-id-mismatch`.
                 assert!(
-                    reason.contains("iap-product-id-mismatch") || reason.contains("iap-plan-mismatch"),
+                    reason.contains("iap-product-id-mismatch")
+                        || reason.contains("iap-plan-mismatch"),
                     "expected iap-product-id-mismatch or iap-plan-mismatch, got: {reason}"
                 );
             }

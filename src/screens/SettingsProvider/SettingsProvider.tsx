@@ -17,7 +17,12 @@ import {
 } from '@/ipc';
 import { useAppStore } from '@/shared/state/appStore';
 import { useWorkspaceStore, workspaceSelectors } from '@/shared/state/workspaceStore';
-import { useToolSettingsStore, toolSettingsSelectors } from '@/shared/state/toolSettingsStore';
+import {
+  useToolSettingsStore,
+  toolSettingsSelectors,
+  type ConfirmationMode,
+} from '@/shared/state/toolSettingsStore';
+import { confirmAlwaysAllowTool } from '@/shared/toolPolicyWarnings';
 import { useCustomToolsStore } from '@/shared/state/customToolsStore';
 import { useGitStore } from '@/screens/EditorWorkspace/state/gitStore';
 import { useChatNavStore } from '@/shared/state/chatNavStore';
@@ -34,6 +39,7 @@ import { OnDeviceCard } from './components/OnDeviceCard';
 import { WebSpeechCard } from './components/WebSpeechCard';
 import { NativeDictationCard } from './components/NativeDictationCard';
 import { LanguageServerCard } from './components/LanguageServerCard';
+import { ThemeSection } from './components/ThemeSection';
 import { PrivacyDataCard } from './components/PrivacyDataCard';
 import { LicenseCard } from './components/LicenseCard';
 import type { LipiToolEntry } from '@/ipc';
@@ -208,8 +214,9 @@ export function SettingsProvider() {
             signature help, and inlay hints on top of Monaco&apos;s built-in
             service.
           </p>
-          <LanguageServerCard />
-          <h2 className={styles.sectionHeading}>AI Tools</h2>
+<LanguageServerCard />
+           <ThemeSection />
+           <h2 className={styles.sectionHeading}>AI Tools</h2>
           <p className={styles.sectionLede}>
             The AI can use these built-in tools to help with your code.
             Disabling a tool hides it from the model — the model won&apos;t
@@ -614,6 +621,19 @@ function ToolCard({ tool }: ToolCardProps) {
   const setMode = useToolSettingsStore(
     (s) => s.setConfirmationMode,
   );
+  const onSetMode = useCallback(
+    (nextMode: ConfirmationMode) => {
+      if (
+        nextMode === 'always_allow' &&
+        mode !== 'always_allow' &&
+        !confirmAlwaysAllowTool(tool.name)
+      ) {
+        return;
+      }
+      setMode(tool.name, nextMode);
+    },
+    [mode, setMode, tool.name],
+  );
 
   return (
     <article
@@ -653,7 +673,7 @@ function ToolCard({ tool }: ToolCardProps) {
             className={styles.toolPolicyOption}
             aria-pressed={mode === 'always_allow'}
             disabled={!enabled}
-            onClick={() => setMode(tool.name, 'always_allow')}
+            onClick={() => onSetMode('always_allow')}
             data-testid={`tool-policy-${tool.name}-always-allow`}
             title="Run without asking"
           >
@@ -664,7 +684,7 @@ function ToolCard({ tool }: ToolCardProps) {
             className={styles.toolPolicyOption}
             aria-pressed={mode === 'per_call'}
             disabled={!enabled}
-            onClick={() => setMode(tool.name, 'per_call')}
+            onClick={() => onSetMode('per_call')}
             data-testid={`tool-policy-${tool.name}-per-call`}
             title="Ask once per assistant turn"
           >
@@ -675,7 +695,7 @@ function ToolCard({ tool }: ToolCardProps) {
             className={styles.toolPolicyOption}
             aria-pressed={mode === 'always_confirm'}
             disabled={!enabled}
-            onClick={() => setMode(tool.name, 'always_confirm')}
+            onClick={() => onSetMode('always_confirm')}
             data-testid={`tool-policy-${tool.name}-always-confirm`}
             title="Ask before every run"
           >
@@ -1511,7 +1531,7 @@ function ToolSettingsResetCard() {
         <p className={styles.toolSettingsResetCardDescription}>
           Re-enable every tool and clear every per-tool confirmation
           policy. Every built-in and custom tool becomes available
-          to the model with no prompts. This is a soft-delete — the
+          to the model with the default confirm-before-running policy. The
           current settings are saved for 5 seconds and you can
           undo from the toast that appears after clicking Reset.
         </p>

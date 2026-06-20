@@ -218,8 +218,9 @@ impl LipiToolsFile {
     /// On unknown `kind` value: returns
     /// `LipiToolsError::UnknownKind { kind }`.
     pub fn from_json_str(s: &str) -> Result<Self, LipiToolsError> {
-        let file: LipiToolsFile = serde_json::from_str(s)
-            .map_err(|e| LipiToolsError::Json { detail: e.to_string() })?;
+        let file: LipiToolsFile = serde_json::from_str(s).map_err(|e| LipiToolsError::Json {
+            detail: e.to_string(),
+        })?;
         file.validate()?;
         Ok(file)
     }
@@ -229,8 +230,9 @@ impl LipiToolsFile {
     /// indent (matches the JSON files in
     /// `package.json` / `tsconfig.json`).
     pub fn to_json_string(&self) -> Result<String, LipiToolsError> {
-        serde_json::to_string_pretty(self)
-            .map_err(|e| LipiToolsError::Json { detail: e.to_string() })
+        serde_json::to_string_pretty(self).map_err(|e| LipiToolsError::Json {
+            detail: e.to_string(),
+        })
     }
 
     /// Run all the shape validations: version
@@ -456,10 +458,7 @@ pub fn read_lipi_tools(workspace_root: &Path) -> Result<LipiToolsFile, LipiTools
 /// store reads the existing file, mutates
 /// the in-memory list, and writes the full
 /// list back).
-pub fn write_lipi_tools(
-    workspace_root: &Path,
-    file: &LipiToolsFile,
-) -> Result<(), LipiToolsError> {
+pub fn write_lipi_tools(workspace_root: &Path, file: &LipiToolsFile) -> Result<(), LipiToolsError> {
     file.validate()?;
     let path = workspace_root.join(LIPI_TOOLS_FILENAME);
     let path_str = path.to_string_lossy().into_owned();
@@ -493,7 +492,11 @@ mod tests {
             description: "Run npm test.".to_string(),
             kind: LipiToolKind::Shell,
             command: Some("npm".to_string()),
-            args: Some(vec!["test".to_string(), "--prefix".to_string(), "{package_dir}".to_string()]),
+            args: Some(vec![
+                "test".to_string(),
+                "--prefix".to_string(),
+                "{package_dir}".to_string(),
+            ]),
             cwd: None,
             url: None,
             method: None,

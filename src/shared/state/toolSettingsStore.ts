@@ -10,8 +10,9 @@
  *   2. `confirmationMode` — a per-tool
  *      invocation policy that gates the
  *      executor with a user prompt (5d).
- *      `always_allow` is the default and
- *      preserves the 5c behaviour.
+ *      `always_confirm` is the default;
+ *      silent execution is an explicit
+ *      per-tool opt-in.
  *
  * ## Why a separate store from `aiStore`?
  *
@@ -61,7 +62,7 @@
  * in-memory state still works; the user's
  * settings just don't survive a page reload.
  *
- * ## The "all enabled" + "all allow" defaults
+ * ## The "all enabled" + "confirm before running" defaults
  *
  * On a fresh install, the store seeds itself
  * with `disabledToolNames: []` and
@@ -69,10 +70,11 @@
  * `isEnabled(name)` selector returns `true`
  * for any tool not in the disabled set; the
  * `getConfirmationMode(name)` selector
- * returns `'always_allow'` for any tool not
- * in the map. Both defaults preserve the
- * 5b-6/5c behaviour: the AI can call any
- * tool freely, no prompt.
+ * returns `'always_confirm'` for any tool
+ * not in the map. That keeps newly-added
+ * built-in and custom tools behind an
+ * explicit user decision until the user
+ * opts a specific tool into silent runs.
  *
  * ## Tool names
  *
@@ -94,9 +96,9 @@
  * iterates `listTools()` from the JS
  * `toolRegistry`). The confirmation policy
  * applies to them too — a `run_npm_deploy`
- * shell tool defaults to `'always_allow'`
- * just like a built-in, and the user sets
- * it to `'always_confirm'` from the same
+ * shell tool defaults to `'always_confirm'`
+ * just like a built-in, and the user can
+ * set it to `'always_allow'` from the same
  * Settings card.
  */
 
@@ -160,10 +162,12 @@ export type ConfirmationMode =
   | 'per_call';
 
 /** The default policy applied to any tool
- *  not in `confirmationMode`. Picked to
- *  preserve the 5c behaviour: no prompt,
- *  the AI can call freely. */
-const DEFAULT_CONFIRMATION_MODE: ConfirmationMode = 'always_allow';
+ *  not in `confirmationMode`. Picked for
+ *  least privilege: the model can propose
+ *  a tool call, but the user approves it
+ *  before it touches files, processes, or
+ *  the network. */
+const DEFAULT_CONFIRMATION_MODE: ConfirmationMode = 'always_confirm';
 
 interface PersistedStateV1 {
   disabledToolNames: string[];
@@ -173,7 +177,7 @@ interface PersistedStateV2 {
   disabledToolNames: string[];
   /** Per-tool policy. Tools not in the
    *  map use `DEFAULT_CONFIRMATION_MODE`
-   *  (currently `'always_allow'`). */
+   *  (currently `'always_confirm'`). */
   confirmationMode: Record<string, ConfirmationMode>;
 }
 
@@ -324,7 +328,7 @@ interface ToolSettingsState {
   disabledToolNames: string[];
   /** Per-tool invocation policy. Tools not in
    *  the map use `DEFAULT_CONFIRMATION_MODE`
-   *  (`'always_allow'`). */
+   *  (`'always_confirm'`). */
   confirmationMode: Record<string, ConfirmationMode>;
   /** True once we've attempted the localStorage
    *  hydration. The Settings screen can use this
@@ -345,7 +349,7 @@ interface ToolSettingsState {
 
   /** Look up the policy for a tool. Tools
    *  not in the map return the default
-   *  (`'always_allow'`). */
+   *  (`'always_confirm'`). */
   getConfirmationMode: (name: string) => ConfirmationMode;
 
   /** 5d: pure predicate consulted by the

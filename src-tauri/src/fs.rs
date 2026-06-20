@@ -16,7 +16,7 @@
 
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use serde::Serialize;
@@ -46,6 +46,8 @@ pub enum FsError {
     TooLarge(u64),
     #[error("path already exists: {0}")]
     AlreadyExists(String),
+    #[error("path is outside the workspace: {0}")]
+    OutsideWorkspace(String),
     #[error("io error: {0}")]
     Io(String),
 }
@@ -162,6 +164,70 @@ pub fn read_file(path: &Path) -> Result<FileContent, FsError> {
         FileEncoding::Binary => String::new(),
     };
     Ok(FileContent { content, encoding })
+}
+
+/// Read a workspace-relative file for AI tools.
+///
+/// Unlike `read_file`, this deliberately refuses absolute paths,
+/// parent-directory traversal, and symlink escapes outside the
+/// canonical workspace root. The editor itself still uses
+/// `read_file` because it already stores absolute paths; model-
+/// driven tools use this narrower helper.
+pub fn read_workspace_file(
+    workspace_root: &Path,
+    relative_path: &Path,
+) -> Result<FileContent, FsError> {
+    validate_workspace_relative_path(relative_path)?;
+
+    let root = fs::canonicalize(workspace_root).map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => FsError::NotFound(workspace_root.display().to_string()),
+        std::io::ErrorKind::PermissionDenied => {
+            FsError::PermissionDenied(workspace_root.display().to_string())
+        }
+        _ => FsError::Io(err.to_string()),
+    })?;
+    let root_meta = fs::metadata(&root).map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => FsError::NotFound(root.display().to_string()),
+        std::io::ErrorKind::PermissionDenied => {
+            FsError::PermissionDenied(root.display().to_string())
+        }
+        _ => FsError::Io(err.to_string()),
+    })?;
+    if !root_meta.is_dir() {
+        return Err(FsError::NotADirectory(root.display().to_string()));
+    }
+
+    let candidate = root.join(relative_path);
+    let resolved = fs::canonicalize(&candidate).map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => FsError::NotFound(candidate.display().to_string()),
+        std::io::ErrorKind::PermissionDenied => {
+            FsError::PermissionDenied(candidate.display().to_string())
+        }
+        _ => FsError::Io(err.to_string()),
+    })?;
+
+    if !resolved.starts_with(&root) {
+        return Err(FsError::OutsideWorkspace(
+            relative_path.display().to_string(),
+        ));
+    }
+
+    read_file(&resolved)
+}
+
+fn validate_workspace_relative_path(path: &Path) -> Result<(), FsError> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err(FsError::OutsideWorkspace(path.display().to_string()));
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(FsError::OutsideWorkspace(path.display().to_string()));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Atomically write a file: write to `<path>.tmp`, fsync, rename.
@@ -310,6 +376,16 @@ mod tests {
         p
     }
 
+    #[cfg(unix)]
+    fn create_test_symlink(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(from, to)
+    }
+
+    #[cfg(windows)]
+    fn create_test_symlink(from: &Path, to: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_file(from, to)
+    }
+
     #[test]
     fn read_dir_sorts_dirs_first_and_files_alphabetically() {
         let dir = unique_tmpdir("readdir");
@@ -360,6 +436,55 @@ mod tests {
         assert!(matches!(c.encoding, FileEncoding::Binary));
         assert!(c.content.is_empty());
         fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn read_workspace_file_reads_relative_file_inside_root() {
+        let dir = unique_tmpdir("workspace-read");
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/main.ts"), "console.log('ok');").unwrap();
+        let c = read_workspace_file(&dir, Path::new("src/main.ts")).unwrap();
+        assert!(matches!(c.encoding, FileEncoding::Utf8));
+        assert_eq!(c.content, "console.log('ok');");
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn read_workspace_file_rejects_absolute_path() {
+        let dir = unique_tmpdir("workspace-abs");
+        let file = dir.join("secret.txt");
+        fs::write(&file, "secret").unwrap();
+        let err = read_workspace_file(&dir, &file).unwrap_err();
+        assert!(matches!(err, FsError::OutsideWorkspace(_)));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn read_workspace_file_rejects_parent_traversal() {
+        let dir = unique_tmpdir("workspace-traversal");
+        let err = read_workspace_file(&dir, Path::new("../secret.txt")).unwrap_err();
+        assert!(matches!(err, FsError::OutsideWorkspace(_)));
+        fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn read_workspace_file_rejects_symlink_escape_when_supported() {
+        let workspace = unique_tmpdir("workspace-symlink");
+        let outside = unique_tmpdir("outside-symlink");
+        fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+        let link = workspace.join("link.txt");
+        let linked = create_test_symlink(&outside.join("secret.txt"), &link);
+        if linked.is_err() {
+            fs::remove_dir_all(workspace).ok();
+            fs::remove_dir_all(outside).ok();
+            return;
+        }
+
+        let err = read_workspace_file(&workspace, Path::new("link.txt")).unwrap_err();
+        assert!(matches!(err, FsError::OutsideWorkspace(_)));
+        fs::remove_dir_all(workspace).ok();
+        fs::remove_dir_all(outside).ok();
     }
 
     #[test]

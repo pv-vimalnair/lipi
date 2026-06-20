@@ -50,8 +50,8 @@
 //! once the plugin is implemented — the contract is the
 //! stable seam.
 
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 
 /// The single IPC method name the iOS / Android plugins
 /// must implement to start a recognition session. The JS
@@ -258,8 +258,7 @@ mod tests {
     fn contract_lists_three_methods() {
         let c = contract_for(ContractStatus::Active);
         assert_eq!(c.methods.len(), 3);
-        let names: Vec<&'static str> =
-            c.methods.iter().map(|m| m.name).collect();
+        let names: Vec<&'static str> = c.methods.iter().map(|m| m.name).collect();
         assert_eq!(names, vec!["start", "stop", "cancel"]);
     }
 
@@ -300,8 +299,14 @@ mod tests {
         let c = contract_for(ContractStatus::Active);
         let s = serde_json::to_string(&c).unwrap();
         assert!(s.contains("\"status\":\"active\""), "got: {s}");
-        assert!(s.contains("\"plugin_name\":\"native-dictation\""), "got: {s}");
-        assert!(s.contains("\"transcript\":\"stt://transcript\""), "got: {s}");
+        assert!(
+            s.contains("\"plugin_name\":\"native-dictation\""),
+            "got: {s}"
+        );
+        assert!(
+            s.contains("\"transcript\":\"stt://transcript\""),
+            "got: {s}"
+        );
         // Error kinds are kebab-cased too.
         assert!(s.contains("\"permission-denied\""), "got: {s}");
         assert!(s.contains("\"no-input-device\""), "got: {s}");
@@ -320,8 +325,7 @@ mod tests {
             NativeDictationErrorKind::Unknown,
         ] {
             let s = serde_json::to_string(&kind).unwrap();
-            let back: NativeDictationErrorKind =
-                serde_json::from_str(&s).unwrap();
+            let back: NativeDictationErrorKind = serde_json::from_str(&s).unwrap();
             assert_eq!(back, kind, "round-trip failed for {s}");
         }
     }

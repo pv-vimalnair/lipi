@@ -92,7 +92,7 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["app"]
+        "schemes": ["lipi"]
       }
     }
   }

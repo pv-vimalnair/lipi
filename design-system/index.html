@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lipi Design System — IDE Preview</title>
+  <style>
+    /* ================================================================
+     * Glass tokens (mirror of src/shared/styles/tokens.css)
+     * Default = LIGHT. Dark overrides below.
+     * ================================================================ */
+    :root {
+      --glass-bg:           rgba(255, 255, 255, 0.55);
+      --glass-bg-strong:    rgba(255, 255, 255, 0.72);
+      --glass-bg-subtle:    rgba(255, 255, 255, 0.40);
+      --glass-bg-tinted:    rgba(37, 99, 235, 0.14);
+      --glass-border:       0.5px solid rgba(255, 255, 255, 0.65);
+      --glass-highlight:    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+      --glass-depth:        inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+      --glass-outer-shadow: 0 12px 32px rgba(15, 15, 18, 0.08);
+      --glass-blur:         blur(30px) saturate(180%);
+      --glass-blur-subtle:  blur(15px) saturate(180%);
+      --radius-glass:       24px;
+      --radius-control:     12px;
+
+      --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+      --space-6: 24px; --space-8: 32px; --space-12: 48px;
+      --font-family-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+      --font-family-mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      --font-size-xs: 11px; --font-size-sm: 12px; --font-size-md: 14px;
+      --font-size-lg: 16px; --font-size-xl: 20px; --font-size-2xl: 28px;
+      --font-weight-medium: 500; --font-weight-semibold: 600;
+      --line-height-normal: 1.45;
+
+      --text-primary: #1a1d24;
+      --text-secondary: #4a5260;
+      --text-muted: #6e7682;
+      --accent: #4f8cff;
+      --accent-strong: #2889ef;
+    }
+    [data-theme="dark"] {
+      --glass-bg:           rgba(15, 18, 22, 0.55);
+      --glass-bg-strong:    rgba(15, 18, 22, 0.72);
+      --glass-bg-subtle:    rgba(15, 18, 22, 0.40);
+      --glass-bg-tinted:    rgba(37, 99, 235, 0.22);
+      --glass-border:       0.5px solid rgba(255, 255, 255, 0.16);
+      --glass-highlight:    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+      --glass-depth:        inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+      --glass-outer-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+      --text-primary: #e6e8eb;
+      --text-secondary: #aab1bb;
+      --text-muted: #6e7682;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    body {
+      font-family: var(--font-family-sans);
+      color: var(--text-primary);
+      background: #0b0d10 url('themes/leaves.png') center/cover no-repeat fixed;
+      transition: background-image 0.5s ease;
+      -webkit-font-smoothing: antialiased;
+    }
+    code, .mono { font-family: var(--font-family-mono); }
+
+    /* ================================================================
+     * Glass surface utility — composable class
+     * ================================================================ */
+    .glass {
+      background: var(--glass-bg);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      border: var(--glass-border);
+      border-radius: var(--radius-glass);
+      box-shadow:
+        var(--glass-outer-shadow),
+        var(--glass-highlight),
+        var(--glass-depth);
+    }
+    .glass-strong {
+      background: var(--glass-bg-strong);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+    }
+    .glass-subtle {
+      background: var(--glass-bg-subtle);
+      backdrop-filter: var(--glass-blur-subtle);
+      -webkit-backdrop-filter: var(--glass-blur-subtle);
+    }
+
+    /* ================================================================
+     * Stage: full-screen IDE layout
+     * ================================================================ */
+    .stage {
+      display: grid;
+      grid-template-rows: 60px 1fr 32px;
+      grid-template-columns: 56px 280px 1fr 1fr;
+      grid-template-areas:
+        "title  title  title  title"
+        "activity sidebar editor chat"
+        "status status status status";
+      gap: 12px;
+      padding: 12px;
+      height: 100vh;
+    }
+
+    /* === TitleBar === */
+    .titlebar {
+      grid-area: title;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 12px;
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+    .brand-mark {
+      width: 28px; height: 28px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #4f8cff, #2889ef);
+      color: white;
+      display: grid; place-items: center;
+      font-weight: 700; font-size: 14px;
+    }
+    .workspace-name {
+      color: var(--text-secondary);
+      padding: 4px 10px;
+      border-radius: 8px;
+      font-size: 13px;
+      background: var(--glass-bg-subtle);
+      backdrop-filter: var(--glass-blur-subtle);
+    }
+    .titlebar-spacer { flex: 1; }
+    .mode-toggle {
+      display: flex;
+      gap: 2px;
+      padding: 4px;
+      background: var(--glass-bg-subtle);
+      border-radius: 10px;
+      backdrop-filter: var(--glass-blur-subtle);
+    }
+    .mode-toggle button {
+      background: transparent;
+      border: none;
+      padding: 5px 12px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: 7px;
+      font-family: inherit;
+      font-weight: 500;
+    }
+    .mode-toggle button.active {
+      background: var(--glass-bg-strong);
+      color: var(--text-primary);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .icon-btn {
+      width: 32px; height: 32px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-radius: 8px;
+      display: grid; place-items: center;
+      font-size: 16px;
+      font-family: inherit;
+    }
+    .icon-btn:hover { background: var(--glass-bg-subtle); }
+
+    /* === ActivityBar === */
+    .activitybar {
+      grid-area: activity;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 12px 0;
+      gap: 6px;
+    }
+    .activity-icon {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: grid; place-items: center;
+      font-size: 18px;
+    }
+    .activity-icon.active {
+      background: var(--glass-bg-tinted);
+      color: var(--text-primary);
+    }
+    .activity-icon:hover { background: var(--glass-bg-subtle); }
+
+    /* === Sidebar === */
+    .sidebar {
+      grid-area: sidebar;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow: hidden;
+    }
+    .sidebar-section { display: flex; flex-direction: column; gap: 6px; }
+    .sidebar-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      font-weight: 600;
+      padding: 0 8px;
+    }
+    .file-tree { display: flex; flex-direction: column; gap: 1px; }
+    .file-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      cursor: pointer;
+    }
+    .file-row:hover { background: var(--glass-bg-subtle); }
+    .file-row.active {
+      background: var(--glass-bg-tinted);
+      color: var(--text-primary);
+    }
+    .file-icon {
+      font-size: 12px;
+      opacity: 0.7;
+      width: 16px;
+      text-align: center;
+    }
+    .file-row.depth-1 { padding-left: 24px; }
+    .file-row.depth-2 { padding-left: 40px; }
+
+    /* === Editor === */
+    .editor {
+      grid-area: editor;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .editor-tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 12px;
+      border-bottom: var(--glass-border);
+    }
+    .editor-tab {
+      padding: 5px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .editor-tab.active {
+      background: var(--glass-bg-strong);
+      color: var(--text-primary);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .editor-tab .tab-icon { font-size: 10px; }
+    .editor-body {
+      flex: 1;
+      padding: 18px 22px;
+      overflow: auto;
+      font-family: var(--font-family-mono);
+      font-size: 12px;
+      line-height: 1.65;
+    }
+    .code-line { display: flex; gap: 14px; }
+    .line-num {
+      color: var(--text-muted);
+      user-select: none;
+      min-width: 24px;
+      text-align: right;
+    }
+    .tok-com { color: var(--text-muted); font-style: italic; }
+    .tok-key { color: #2889ef; font-weight: 500; }
+    .tok-str { color: #1a8754; }
+    .tok-num { color: #d97706; }
+    .tok-pun { color: var(--text-secondary); }
+
+    /* === AI Chat === */
+    .chat {
+      grid-area: chat;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: hidden;
+    }
+    .chat-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .chat-avatar {
+      width: 30px; height: 30px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4f8cff, #2889ef);
+      color: white;
+      display: grid; place-items: center;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .chat-name { font-weight: 600; font-size: 13px; }
+    .chat-actions { margin-left: auto; }
+    .chat-btn {
+      background: var(--glass-bg-strong);
+      border: var(--glass-border);
+      border-radius: 10px;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 500;
+    }
+    .chat-btn-primary {
+      background: linear-gradient(135deg, #4f8cff, #2889ef);
+      color: white;
+      border: none;
+    }
+    .chat-msg {
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-size: 12.5px;
+      line-height: 1.5;
+      max-width: 90%;
+    }
+    .chat-msg.user {
+      background: var(--glass-bg-strong);
+      align-self: flex-end;
+    }
+    .chat-msg.assistant {
+      background: var(--glass-bg-subtle);
+      align-self: flex-start;
+      backdrop-filter: var(--glass-blur-subtle);
+    }
+    .chat-msg code {
+      background: var(--glass-bg-tinted);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 11.5px;
+    }
+    .chat-input {
+      margin-top: auto;
+      padding: 10px 12px;
+      background: var(--glass-bg-strong);
+      border: var(--glass-border);
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      backdrop-filter: var(--glass-blur);
+    }
+    .chat-input input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 12.5px;
+      outline: none;
+    }
+    .chat-input input::placeholder { color: var(--text-muted); }
+    .chat-input button {
+      width: 26px; height: 26px;
+      border-radius: 8px;
+      border: none;
+      background: linear-gradient(135deg, #4f8cff, #2889ef);
+      color: white;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 14px;
+    }
+
+    /* === StatusBar === */
+    .statusbar {
+      grid-area: status;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 16px;
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .statusbar .spacer { flex: 1; }
+
+    /* ================================================================
+     * Control Panel (floating, top-right)
+     * ================================================================ */
+    .controls {
+      position: fixed;
+      top: 84px;
+      right: 12px;
+      z-index: 100;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 240px;
+    }
+    .controls-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+    .controls-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .theme-thumb {
+      width: 50px;
+      height: 36px;
+      border-radius: 8px;
+      border: 2px solid transparent;
+      background-size: cover;
+      background-position: center;
+      cursor: pointer;
+      padding: 0;
+      transition: transform 0.15s ease;
+    }
+    .theme-thumb:hover { transform: scale(1.05); }
+    .theme-thumb.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.3);
+    }
+    .mode-row { display: flex; gap: 6px; }
+    .mode-btn {
+      flex: 1;
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: var(--glass-border);
+      background: var(--glass-bg-subtle);
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .mode-btn.active {
+      background: var(--glass-bg-strong);
+      color: var(--text-primary);
+    }
+    .caption {
+      font-size: 10px;
+      color: var(--text-muted);
+      text-align: center;
+      margin-top: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <!-- TitleBar -->
+    <header class="titlebar glass">
+      <div class="brand">
+        <div class="brand-mark">L</div>
+        <span>Lipi</span>
+      </div>
+      <span class="workspace-name">/ lipi</span>
+      <div class="titlebar-spacer"></div>
+      <div class="mode-toggle">
+        <button>Preview</button>
+        <button>Design</button>
+        <button class="active">Code</button>
+      </div>
+      <button class="icon-btn" title="Notifications">◔</button>
+      <button class="icon-btn" title="Settings">⚙</button>
+    </header>
+
+    <!-- ActivityBar -->
+    <nav class="activitybar glass">
+      <button class="activity-icon active" title="Explorer">▤</button>
+      <button class="activity-icon" title="Search">⌕</button>
+      <button class="activity-icon" title="Git">⎇</button>
+      <button class="activity-icon" title="Run">▶</button>
+      <button class="activity-icon" title="Extensions">◫</button>
+      <div style="flex:1"></div>
+      <button class="activity-icon" title="Mavis Chat">✦</button>
+    </nav>
+
+    <!-- Sidebar -->
+    <aside class="sidebar glass">
+      <div class="sidebar-section">
+        <div class="sidebar-title">Open Editors</div>
+        <div class="file-tree">
+          <div class="file-row active"><span class="file-icon">●</span>tokens.css</div>
+          <div class="file-row"><span class="file-icon">●</span>secrets_stronghold_key_bridge.rs</div>
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-title">Explorer · lipi</div>
+        <div class="file-tree">
+          <div class="file-row"><span class="file-icon">▾</span>src-tauri</div>
+          <div class="file-row depth-1"><span class="file-icon">▾</span>src</div>
+          <div class="file-row depth-2"><span class="file-icon">⊟</span>tokens.css</div>
+          <div class="file-row depth-2"><span class="file-icon">⊟</span>secrets_stronghold_key_bridge.rs</div>
+          <div class="file-row depth-2"><span class="file-icon">⊟</span>stt_capture.rs</div>
+          <div class="file-row depth-2"><span class="file-icon">⊟</span>stt_inference.rs</div>
+          <div class="file-row depth-1"><span class="file-icon">▾</span>screens</div>
+          <div class="file-row depth-2"><span class="file-icon">▸</span>EditorWorkspace</div>
+          <div class="file-row depth-2"><span class="file-icon">▸</span>SettingsProvider</div>
+          <div class="file-row depth-1"><span class="file-icon">⊟</span>package.json</div>
+          <div class="file-row depth-1"><span class="file-icon">⊟</span>Cargo.toml</div>
+          <div class="file-row depth-1"><span class="file-icon">⊟</span>tauri.conf.json</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Editor -->
+    <main class="editor glass">
+      <div class="editor-tabs">
+        <div class="editor-tab active"><span class="tab-icon">●</span>tokens.css</div>
+        <div class="editor-tab"><span class="tab-icon">●</span>secrets_stronghold_key_bridge.rs</div>
+        <div class="editor-tab"><span class="tab-icon">●</span>ChatPanel.tsx</div>
+        <div style="flex:1"></div>
+        <span style="font-size:11px;color:var(--text-muted)">88%</span>
+      </div>
+      <div class="editor-body">
+        <div class="code-line"><span class="line-num">1</span><span><span class="tok-com">/* Apple Liquid Glass — design tokens (port from WWDC25)</span></span></div>
+        <div class="code-line"><span class="line-num">2</span><span><span class="tok-com"> * The single source of truth for Lipi's design system.</span></span></div>
+        <div class="code-line"><span class="line-num">3</span><span><span class="tok-com"> */</span></span></div>
+        <div class="code-line"><span class="line-num">4</span><span>&nbsp;</span></div>
+        <div class="code-line"><span class="line-num">5</span><span><span class="tok-key">:root</span> <span class="tok-pun">{</span></span></div>
+        <div class="code-line"><span class="line-num">6</span><span>  <span class="tok-com">/* === Glass surfaces (translucent body) === */</span></span></div>
+        <div class="code-line"><span class="line-num">7</span><span>  <span class="tok-key">--glass-bg</span><span class="tok-pun">:</span>        <span class="tok-str">rgba(255, 255, 255, 0.55)</span><span class="tok-pun">;</span></span></div>
+        <div class="code-line"><span class="line-num">8</span><span>  <span class="tok-key">--glass-bg-strong</span><span class="tok-pun">:</span> <span class="tok-str">rgba(255, 255, 255, 0.72)</span><span class="tok-pun">;</span></span></div>
+        <div class="code-line"><span class="line-num">9</span><span>  <span class="tok-key">--glass-bg-subtle</span><span class="tok-pun">:</span> <span class="tok-str">rgba(255, 255, 255, 0.40)</span><span class="tok-pun">;</span></div>
+        <div class="code-line"><span class="line-num">10</span><span>  <span class="tok-key">--glass-bg-tinted</span><span class="tok-pun">:</span> <span class="tok-str">rgba(37, 99, 235, 0.14)</span><span class="tok-pun">;</span></span></div>
+        <div class="code-line"><span class="line-num">11</span><span>&nbsp;</span></div>
+        <div class="code-line"><span class="line-num">12</span><span>  <span class="tok-com">/* === Glass edge (squircle + inner highlights) === */</span></span></div>
+        <div class="code-line"><span class="line-num">13</span><span>  <span class="tok-key">--glass-border</span><span class="tok-pun">:</span>       <span class="tok-str">0.5px solid rgba(255, 255, 255, 0.65)</span><span class="tok-pun">;</span></span></div>
+        <div class="code-line"><span class="line-num">14</span><span>  <span class="tok-key">--glass-highlight</span><span class="tok-pun">:</span>    <span class="tok-str">inset 0 1px 0 rgba(255, 255, 255, 0.7)</span><span class="tok-pun">;</span></div>
+        <div class="code-line"><span class="line-num">15</span><span>  <span class="tok-key">--glass-depth</span><span class="tok-pun">:</span>        <span class="tok-str">inset 0 -1px 0 rgba(0, 0, 0, 0.04)</span><span class="tok-pun">;</span></div>
+        <div class="code-line"><span class="line-num">16</span><span>  <span class="tok-key">--glass-outer-shadow</span><span class="tok-pun">:</span> <span class="tok-str">0 12px 32px rgba(15, 15, 18, 0.08)</span><span class="tok-pun">;</span></span></div>
+        <div class="code-line"><span class="line-num">17</span><span>&nbsp;</span></div>
+        <div class="code-line"><span class="line-num">18</span><span>  <span class="tok-com">/* === Glass blur (illumination) === */</span></span></div>
+        <div class="code-line"><span class="line-num">19</span><span>  <span class="tok-key">--glass-blur</span><span class="tok-pun">:</span>         <span class="tok-str">blur(30px) saturate(180%)</span><span class="tok-pun">;</span></span></div>
+        <div class="code-line"><span class="line-num">20</span><span>  <span class="tok-key">--glass-blur-subtle</span><span class="tok-pun">:</span>  <span class="tok-str">blur(15px) saturate(180%)</span><span class="tok-pun">;</span></div>
+        <div class="code-line"><span class="line-num">21</span><span><span class="tok-pun">}</span></span></div>
+      </div>
+    </main>
+
+    <!-- AI Chat -->
+    <aside class="chat glass">
+      <div class="chat-header">
+        <div class="chat-avatar">M</div>
+        <span class="chat-name">Mavis</span>
+        <div class="chat-actions">
+          <button class="chat-btn chat-btn-primary">+ Chat</button>
+        </div>
+      </div>
+      <div class="chat-msg assistant">
+        The current sidebar uses a hard-coded dark color. I'll wrap it in a <code>.glass-surface</code> utility so it picks up the new tokens automatically.
+      </div>
+      <div class="chat-msg user">
+        Apply the Liquid Glass tokens to all panes — sidebar, editor, AI panel.
+      </div>
+      <div class="chat-input">
+        <input type="text" placeholder="Ask a follow-up..." />
+        <button>↑</button>
+      </div>
+    </aside>
+
+    <!-- StatusBar -->
+    <footer class="statusbar glass">
+      <span>⎇ main</span>
+      <span>● 0 warnings</span>
+      <span class="spacer"></span>
+      <span>UTF-8</span>
+      <span>LF</span>
+      <span>Spaces: 2</span>
+      <span>● Builder</span>
+    </footer>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls glass">
+    <div>
+      <div class="controls-title">Theme Image</div>
+      <div class="controls-row" id="thumbs">
+        <button class="theme-thumb active" data-img="leaves"   data-ext="png" style="background-image:url('themes/leaves.png')" title="Leaves"></button>
+        <button class="theme-thumb"        data-img="trees"    data-ext="jpg" style="background-image:url('themes/trees.jpg')" title="Trees"></button>
+        <button class="theme-thumb"        data-img="field"    data-ext="jpg" style="background-image:url('themes/field.jpg')" title="Field"></button>
+        <button class="theme-thumb"        data-img="flower"   data-ext="png" style="background-image:url('themes/flower.png')" title="Flower"></button>
+        <button class="theme-thumb"        data-img="mountains" data-ext="png" style="background-image:url('themes/mountains.png')" title="Mountains"></button>
+      </div>
+      <div class="caption" id="caption">leaves</div>
+    </div>
+    <div>
+      <div class="controls-title">Mode</div>
+      <div class="mode-row">
+        <button class="mode-btn active" data-mode="light">Light</button>
+        <button class="mode-btn"        data-mode="dark">Dark</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const thumbs = document.querySelectorAll('.theme-thumb');
+    const modeBtns = document.querySelectorAll('.mode-btn');
+    const caption = document.getElementById('caption');
+
+    thumbs.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const img = btn.dataset.img;
+        const ext = btn.dataset.ext;
+        document.body.style.backgroundImage = `url('themes/${img}.${ext}')`;
+        caption.textContent = img;
+        thumbs.forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    modeBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        document.documentElement.dataset.theme = mode;
+        modeBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>

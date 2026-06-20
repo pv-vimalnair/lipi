@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lipi — Windowed on Desktop (Final Reference)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-page: #fafafb;
+    --surface: #ffffff;
+    --line: #ececf2;
+    --text: #14171e;
+    --muted: #6b7080;
+    --soft: #f4f4f8;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', system-ui, sans-serif;
+    background: var(--bg-page);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+
+  .container { max-width: 1680px; margin: 0 auto; padding: 32px 32px 80px; }
+
+  /* Header */
+  .head { margin-bottom: 28px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  .head h1 { font-size: 22px; line-height: 1.2; margin: 0; font-weight: 600; letter-spacing: -0.01em; }
+  .head .sub { font-size: 13px; color: var(--muted); }
+  .head .right { margin-left: auto; font-size: 12px; color: var(--muted); }
+
+  /* === Desktop scene === */
+  .scene {
+    position: relative;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(15, 15, 18, 0.08);
+    background: #87ceeb;
+    aspect-ratio: 16 / 10;
+    width: 100%;
+  }
+
+  /* Painted landscape wallpaper (SVG layered) */
+  .wallpaper {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+  }
+  .wallpaper svg { width: 100%; height: 100%; display: block; }
+
+  /* === The windowed IDE === */
+  .window {
+    position: absolute;
+    top: 5%;
+    left: 8%;
+    right: 8%;
+    bottom: 5%;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #ffffff;
+    box-shadow:
+      0 30px 80px rgba(0, 0, 0, 0.30),
+      0 12px 30px rgba(0, 0, 0, 0.18),
+      0 0 0 0.5px rgba(0, 0, 0, 0.08);
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    font-family: 'Outfit', system-ui, sans-serif;
+    color: #14171e;
+  }
+
+  /* Specular shine on the very top of the window (Apple's wet-gel feel) */
+  .window::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 60px;
+    background: linear-gradient(180deg,
+      rgba(255, 255, 255, 0.35) 0%,
+      rgba(255, 255, 255, 0) 100%);
+    border-radius: 14px 14px 0 0;
+    pointer-events: none;
+    z-index: 50;
+  }
+
+  /* Subtle bottom inner shadow on the window */
+  .window::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 6px;
+    background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.04) 100%);
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  /* === Editor (left side) === */
+  .editor {
+    display: flex; flex-direction: column;
+    border-right: 0.5px solid #ebebef;
+    background: #ffffff;
+    min-width: 0;
+  }
+  /* Tab bar is translucent — wallpaper shows through subtly */
+  .editor .tabbar {
+    display: flex; align-items: center; gap: 1px;
+    padding: 8px 12px 0 76px;
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border-bottom: 0.5px solid rgba(0, 0, 0, 0.06);
+    position: relative;
+    z-index: 2;
+  }
+  /* Traffic lights on the far left of the editor */
+  .traffic {
+    position: absolute;
+    left: 16px; top: 50%;
+    transform: translateY(-50%);
+    display: flex; gap: 7px;
+  }
+  .traffic span { width: 12px; height: 12px; border-radius: 50%; }
+  .traffic span:nth-child(1) { background: #ff5f57; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.1); }
+  .traffic span:nth-child(2) { background: #febc2e; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.1); }
+  .traffic span:nth-child(3) { background: #28c840; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.1); }
+
+  .tab {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 12px 7px 12px;
+    font-size: 12.5px;
+    color: #5c5c66;
+    background: rgba(240, 240, 244, 0.7);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 8px 8px 0 0;
+    border: 0.5px solid rgba(0, 0, 0, 0.06);
+    border-bottom: none;
+    position: relative;
+    top: 0.5px;
+  }
+  .tab .dot { width: 6px; height: 6px; border-radius: 50%; background: #2563eb; }
+  .tab .label-main { color: #14171e; font-weight: 500; }
+  .tab .label-sub { color: #8e8e96; font-size: 11.5px; }
+  .tab.active {
+    background: #ffffff;
+    color: #14171e;
+    border-color: rgba(0, 0, 0, 0.06);
+  }
+  .tab.active .label-main { color: #14171e; }
+  .tab.close-hint .close {
+    margin-left: 4px;
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    display: grid; place-items: center;
+    color: #8e8e96;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .tab.close-hint .close:hover { background: #ececf2; color: #14171e; }
+
+  .editor-body {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    background: #ffffff;
+  }
+  .code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.65;
+    color: #14171e;
+    display: grid;
+    grid-template-columns: 56px 1fr;
+    padding: 14px 0 14px 0;
+  }
+  .gutter {
+    text-align: right;
+    padding-right: 16px;
+    color: #c8c8d0;
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+    border-right: 0.5px solid #f4f4f8;
+  }
+  .code .gutter div { line-height: 1.65; }
+  .code .src { padding-left: 16px; white-space: pre; }
+  .code .src div { line-height: 1.65; }
+
+  .kw { color: #c026d3; }      /* import, export, const, function, return, async, from */
+  .fn { color: #2563eb; }      /* function names */
+  .var { color: #14171e; }     /* identifiers */
+  .str { color: #059669; }     /* strings */
+  .num { color: #d97706; }     /* numbers */
+  .com { color: #8e8e96; font-style: italic; } /* comments */
+  .type { color: #2563eb; }    /* types like Metadata */
+  .punc { color: #5c5c66; }    /* punctuation */
+  .jsx { color: #c026d3; }     /* JSX tags */
+  .attr { color: #2563eb; }    /* JSX attributes */
+
+  .caret {
+    display: inline-block;
+    width: 2px; height: 16px;
+    background: #2563eb;
+    vertical-align: text-bottom;
+    margin-left: 1px;
+    animation: blink 1.2s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* === Chat panel (right side) === */
+  .chat {
+    display: flex; flex-direction: column;
+    background: #ffffff;
+    min-width: 0;
+  }
+  /* Chat tabs row is translucent (Apple's "toolbar" pattern) */
+  .chat-tabs {
+    display: flex; align-items: center;
+    padding: 0 12px;
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border-bottom: 0.5px solid rgba(0, 0, 0, 0.06);
+    gap: 4px;
+    height: 40px;
+    position: relative;
+    z-index: 2;
+  }
+  .chat-tab {
+    padding: 6px 10px;
+    font-size: 12.5px;
+    color: #5c5c66;
+    border-radius: 6px;
+  }
+  .chat-tab.active {
+    background: rgba(240, 240, 244, 0.85);
+    color: #14171e;
+    font-weight: 500;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .chat-tab:hover:not(.active) { background: rgba(248, 248, 250, 0.7); }
+  .chat-tabs .more { margin-left: auto; color: #8e8e96; }
+
+  .chat-body {
+    flex: 1;
+    overflow: hidden;
+    padding: 16px;
+    background: #ffffff;
+  }
+  .chat-card {
+    background: #f8f8fa;
+    border: 0.5px solid #ebebef;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  .chat-card .title {
+    font-size: 12px;
+    color: #5c5c66;
+    margin-bottom: 8px;
+    line-height: 1.5;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: #14171e; color: white;
+    font-size: 11px; font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 6px;
+  }
+
+  .chat-text {
+    font-size: 12.5px;
+    color: #14171e;
+    line-height: 1.6;
+    margin-bottom: 10px;
+  }
+
+  .num-item {
+    font-size: 12.5px;
+    color: #14171e;
+    line-height: 1.55;
+    margin-bottom: 10px;
+  }
+  .num-item .n { color: #5c5c66; font-weight: 500; }
+  .num-item .body-text { display: inline; }
+
+  .code-block {
+    background: #14171e;
+    color: #e6e8eb;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 6px 0 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    line-height: 1.6;
+    position: relative;
+    overflow: hidden;
+  }
+  .code-block .code-content {
+    padding-right: 110px;
+  }
+  .code-block .kw { color: #c586c0; }
+  .code-block .fn { color: #dcdcaa; }
+  .code-block .str { color: #ce9178; }
+  .code-block .com { color: #6e7682; font-style: italic; }
+  .code-block .var { color: #9cdcfe; }
+  .code-block .punc { color: #d4d4d4; }
+  .code-actions {
+    position: absolute;
+    bottom: 10px; right: 10px;
+    display: flex; gap: 6px;
+  }
+  .code-btn {
+    background: #1f2027;
+    color: #e6e8eb;
+    border: 0.5px solid #2a2e38;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    display: inline-flex; align-items: center; gap: 4px;
+    cursor: pointer;
+    font-family: 'Outfit', system-ui, sans-serif;
+  }
+  .code-btn.primary {
+    background: #ffffff;
+    color: #14171e;
+  }
+  .code-btn:hover { background: #2a2e38; }
+  .code-btn.primary:hover { background: #f0f0f4; }
+
+  .chat-input {
+    border: 0.5px solid rgba(0, 0, 0, 0.06);
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(15px) saturate(180%);
+    -webkit-backdrop-filter: blur(15px) saturate(180%);
+    border-radius: 10px;
+    padding: 10px 14px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px;
+    color: #8e8e96;
+    margin-bottom: 8px;
+  }
+  .chat-input .icon-btn {
+    margin-left: auto;
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    color: #5c5c66;
+  }
+  .chat-actions {
+    display: flex; gap: 8px; align-items: center;
+    font-size: 11.5px;
+    color: #5c5c66;
+    padding: 0 4px;
+  }
+  .chat-actions .left { display: flex; gap: 14px; align-items: center; margin-left: auto; }
+  .chat-actions .action { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+  .chat-actions .action:hover { color: #14171e; }
+
+  /* === Bottom labels === */
+  .legend {
+    display: flex; gap: 24px;
+    margin-top: 16px; font-size: 12px; color: var(--muted);
+    align-items: center;
+  }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .legend .dot.window { background: #2563eb; }
+  .legend .dot.shadow { background: #14171e; }
+  .legend .dot.wallpaper { background: linear-gradient(135deg, #87ceeb, #d4a85a); }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <header class="head">
+    <h1>Lipi — windowed on desktop</h1>
+    <span class="sub">The final reference: a clean white IDE floating on a painted landscape wallpaper, like GitHub Copilot in macOS.</span>
+    <span class="right">Liquid Glass tokens + native window chrome + Mica</span>
+  </header>
+
+  <div class="scene">
+    <!-- Painted landscape wallpaper -->
+    <div class="wallpaper">
+      <svg viewBox="0 0 1600 1000" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#7eb8d8"/>
+            <stop offset="35%" stop-color="#a8cfe4"/>
+            <stop offset="60%" stop-color="#e8d8a8"/>
+            <stop offset="80%" stop-color="#e8b878"/>
+            <stop offset="100%" stop-color="#d4a05a"/>
+          </linearGradient>
+          <linearGradient id="field-near" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#e8c468"/>
+            <stop offset="60%" stop-color="#a89048"/>
+            <stop offset="100%" stop-color="#6b5828"/>
+          </linearGradient>
+          <linearGradient id="field-mid" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#c8a868"/>
+            <stop offset="100%" stop-color="#8c7848"/>
+          </linearGradient>
+          <linearGradient id="hill-far" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#8a9a78"/>
+            <stop offset="100%" stop-color="#6a7a58"/>
+          </linearGradient>
+          <linearGradient id="hill-near" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#6a8050"/>
+            <stop offset="100%" stop-color="#4a6038"/>
+          </linearGradient>
+        </defs>
+
+        <!-- Sky -->
+        <rect width="1600" height="1000" fill="url(#sky)"/>
+
+        <!-- Clouds -->
+        <g opacity="0.55" fill="#ffffff">
+          <ellipse cx="200" cy="140" rx="180" ry="32"/>
+          <ellipse cx="380" cy="170" rx="120" ry="22"/>
+          <ellipse cx="900" cy="110" rx="220" ry="36"/>
+          <ellipse cx="1180" cy="155" rx="160" ry="28"/>
+          <ellipse cx="1450" cy="120" rx="140" ry="24"/>
+        </g>
+
+        <!-- Far hills -->
+        <path d="M 0 480 Q 200 420 400 460 T 800 440 T 1200 470 T 1600 450 L 1600 1000 L 0 1000 Z" fill="url(#hill-far)" opacity="0.85"/>
+
+        <!-- Mid field -->
+        <path d="M 0 580 Q 300 540 600 570 T 1200 560 T 1600 580 L 1600 1000 L 0 1000 Z" fill="url(#field-mid)"/>
+
+        <!-- Near hill -->
+        <path d="M 0 720 Q 200 680 400 700 Q 600 720 800 690 Q 1000 670 1200 700 Q 1400 720 1600 700 L 1600 1000 L 0 1000 Z" fill="url(#hill-near)"/>
+
+        <!-- Foreground field -->
+        <path d="M 0 820 Q 200 800 400 815 Q 700 840 1000 820 Q 1300 800 1600 830 L 1600 1000 L 0 1000 Z" fill="url(#field-near)"/>
+
+        <!-- Tree on the right (autumn) -->
+        <g transform="translate(1450, 480)">
+          <ellipse cx="0" cy="40" rx="180" ry="100" fill="#d4a85a" opacity="0.8"/>
+          <ellipse cx="-40" cy="20" rx="120" ry="80" fill="#c88a48" opacity="0.85"/>
+          <ellipse cx="50" cy="0" rx="100" ry="70" fill="#e8a058" opacity="0.8"/>
+          <rect x="-8" y="80" width="16" height="80" fill="#3a2818"/>
+        </g>
+
+        <!-- Distant tree on the left -->
+        <g transform="translate(150, 540)" opacity="0.7">
+          <ellipse cx="0" cy="20" rx="60" ry="40" fill="#7a5a38"/>
+          <rect x="-3" y="40" width="6" height="30" fill="#3a2818"/>
+        </g>
+
+        <!-- Sun glow -->
+        <circle cx="1200" cy="280" r="80" fill="#fff8e0" opacity="0.4"/>
+        <circle cx="1200" cy="280" r="40" fill="#fff8e0" opacity="0.6"/>
+
+        <!-- Texture strokes for painterly feel -->
+        <g stroke="#ffffff" stroke-width="1" opacity="0.15" fill="none">
+          <path d="M 0 850 Q 400 840 800 850 T 1600 855"/>
+          <path d="M 0 880 Q 400 870 800 880 T 1600 885"/>
+          <path d="M 0 920 Q 400 910 800 920 T 1600 925"/>
+        </g>
+      </svg>
+    </div>
+
+    <!-- The windowed Lipi IDE -->
+    <div class="window">
+      <!-- LEFT: Code Editor -->
+      <div class="editor">
+        <div class="tabbar">
+          <div class="traffic"><span></span><span></span><span></span></div>
+          <div class="tab"><span class="label-main">secrets_stronghold_key_bridge.rs</span><span class="label-sub">src-tauri</span><span class="close">&times;</span></div>
+          <div class="tab active"><span class="dot"></span><span class="label-main">tokens.css</span><span class="label-sub">shared</span><span class="close">&times;</span></div>
+          <div class="tab"><span class="label-main">ChatPanel.tsx</span><span class="label-sub">ai</span><span class="close">&times;</span></div>
+        </div>
+        <div class="editor-body">
+          <div class="code">
+            <div class="gutter">
+              <div>1</div><div>2</div><div>3</div><div>4</div><div>5</div>
+              <div>6</div><div>7</div><div>8</div><div>9</div><div>10</div>
+              <div>11</div><div>12</div><div>13</div><div>14</div><div>15</div>
+              <div>16</div><div>17</div><div>18</div><div>19</div><div>20</div>
+              <div>21</div><div>22</div><div>23</div><div>24</div><div>25</div>
+              <div>26</div><div>27</div><div>28</div><div>29</div><div>30</div>
+              <div>31</div><div>32</div><div>33</div><div>34</div><div>35</div>
+              <div>36</div><div>37</div><div>38</div><div>39</div><div>40</div>
+              <div>41</div><div>42</div><div>43</div><div>44</div><div>45</div>
+            </div>
+            <div class="src"><div><span class="com">/*</span></div><div><span class="com"> * Apple Liquid Glass — CSS tokens (port from WWDC25)</span></div><div><span class="com"> * The single source of truth for the design system.</span></div><div><span class="com"> */</span></div><div></div><div><span class="kw">:root</span> <span class="punc">{</span></div><div>  <span class="com">/* === Glass surfaces === */</span></div><div>  <span class="attr">--glass-bg</span>:           <span class="str">rgba(255, 255, 255, 0.55)</span>;</div><div>  <span class="attr">--glass-bg-strong</span>:    <span class="str">rgba(255, 255, 255, 0.72)</span>;</div><div>  <span class="attr">--glass-bg-subtle</span>:    <span class="str">rgba(255, 255, 255, 0.40)</span>;</div><div>  <span class="attr">--glass-bg-tinted</span>:    <span class="str">rgba(37, 99, 235, 0.14)</span>;</div><div></div><div>  <span class="com">/* === Glass edge (squircle + inner highlights) === */</span></div><div>  <span class="attr">--glass-border</span>:       <span class="str">0.5px solid rgba(255, 255, 255, 0.65)</span>;</div><div>  <span class="attr">--glass-highlight</span>:    <span class="str">inset 0 1px 0 rgba(255, 255, 255, 0.7)</span>;</div><div>  <span class="attr">--glass-depth</span>:        <span class="str">inset 0 -1px 0 rgba(0, 0, 0, 0.04)</span>;</div><div>  <span class="attr">--glass-outer-shadow</span>: <span class="str">0 12px 32px rgba(15, 15, 18, 0.08)</span>;</div><div>  <span class="attr">--glass-specular</span>:     <span class="str">linear-gradient(180deg, ...)</span>;</div><div></div><div>  <span class="com">/* === Glass blur (illumination) === */</span></div><div>  <span class="attr">--glass-blur</span>:         <span class="str">blur(30px) saturate(180%)</span>;</div><div>  <span class="attr">--glass-blur-subtle</span>:  <span class="str">blur(15px) saturate(180%)</span>;</div><div></div><div>  <span class="com">/* === Geometry (squircle) === */</span></div><div>  <span class="attr">--radius-glass</span>:       <span class="num">24px</span>;</div><div>  <span class="attr">--radius-control</span>:     <span class="num">12px</span>;</div><div>  <span class="attr">--radius-pill</span>:        <span class="num">999px</span>;</div><div></div><div>  <span class="com">/* === Updated for light theme === */</span></div><div>  <span class="attr">--color-bg-base</span>:      <span class="str">linear-gradient(180deg, #FFF, #F8F9FC)</span>;</div><div>  <span class="attr">--color-bg-pane</span>:      <span class="str">#FFFFFF</span>;  <span class="com">/* Monaco needs solid */</span></div><div>  <span class="attr">--color-text-primary</span>: <span class="str">#14171E</span>;</div><div>  <span class="attr">--color-text-secondary</span>: <span class="str">#5C5C66</span>;</div><div>  <span class="attr">--color-accent</span>:       <span class="str">#2563EB</span>;</div><div><span class="punc">}</span><span class="caret"></span></div><div></div><div><span class="com">/* Auto light/dark via media query — no JS hook needed */</span></div><div><span class="kw">@media</span> <span class="punc">(</span><span class="fn">prefers-color-scheme</span>: <span class="str">dark</span><span class="punc">) {</span></div><div>  <span class="attr">--glass-bg</span>: <span class="str">rgba(20, 20, 28, 0.55)</span>;</div><div>  <span class="punc">}</span></div><div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: AI Chat -->
+      <div class="chat">
+        <div class="chat-tabs">
+          <div class="chat-tab active">Mavis</div>
+          <div class="chat-tab">Directory</div>
+          <div class="chat-tab">Git</div>
+          <div class="chat-tab">Tasks</div>
+          <div class="chat-tab">Logs</div>
+          <div class="chat-tab more">···</div>
+        </div>
+
+        <div class="chat-body">
+          <div class="chat-card">
+            <div class="title">Apply Liquid Glass tokens to all surface classes.</div>
+            <span class="chip">Entire workspace</span>
+          </div>
+
+          <div class="chat-text">Here are the changes needed to add Apple's Liquid Glass to Lipi:</div>
+
+          <div class="num-item">
+            <span class="n">1.</span> <span class="body-text">Update <code style="background:#f0f0f4;padding:1px 5px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11.5px">tokens.css</code> with the 3-layer glass system.</span>
+          </div>
+          <div class="code-block">
+<div class="code-content"><span class="kw">:root</span> <span class="punc">{</span>
+  <span class="attr">--glass-bg</span>: <span class="str">rgba(255, 255, 255, 0.55)</span>;
+  <span class="attr">--glass-blur</span>: <span class="str">blur(30px) saturate(180%)</span>;
+  <span class="attr">--radius-glass</span>: <span class="num">24px</span>;
+<span class="punc">}</span></div>
+            <div class="code-actions">
+              <div class="code-btn">↪ Refer</div>
+              <div class="code-btn primary">✓ Apply</div>
+            </div>
+          </div>
+
+          <div class="num-item">
+            <span class="n">2.</span> <span class="body-text">Apply <code style="background:#f0f0f4;padding:1px 5px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11.5px">.glass-surface</code> to 12 surface classes.</span>
+          </div>
+          <div class="code-block">
+<div class="code-content"><span class="com">// sidebar, title bar, chat, modals...</span>
+<span class="var">.sidebar</span> <span class="punc">{</span>
+  <span class="kw">background</span>: <span class="str">var(--glass-bg)</span>;
+  <span class="kw">backdrop-filter</span>: <span class="str">var(--glass-blur)</span>;
+<span class="punc">}</span></div>
+            <div class="code-actions">
+              <div class="code-btn">↪ Refer</div>
+              <div class="code-btn primary">✓ Apply</div>
+            </div>
+          </div>
+
+          <div class="num-item">
+            <span class="n">3.</span> <span class="body-text">Switch Monaco to <code style="background:#f0f0f4;padding:1px 5px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11.5px">vs</code> light theme for code readability on the new white surface.</span>
+          </div>
+
+          <div class="num-item">
+            <span class="n">4.</span> <span class="body-text">Enable <code style="background:#f0f0f4;padding:1px 5px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11.5px">tauri-plugin-decorum</code> for Windows 11 Mica on the window chrome.</span>
+          </div>
+        </div>
+
+        <div style="padding: 0 16px 12px; background: rgba(255, 255, 255, 0.65); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); border-top: 0.5px solid rgba(0, 0, 0, 0.06); padding-top: 10px;">
+          <div class="chat-input">
+            <span>Ask Mavis anything...</span>
+            <span class="icon-btn" title="Attach">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 17.93 8.8l-8.57 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </span>
+            <span class="icon-btn" title="Voice">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </span>
+          </div>
+          <div class="chat-actions">
+            <span class="action">⌘R Refer directory</span>
+            <span class="action">⌘⇧ File-only</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="item"><span class="dot window"></span> Windowed IDE — clean white panels, soft drop shadow</span>
+    <span class="item"><span class="dot shadow"></span> Floating on desktop — wallpaper visible around the window</span>
+    <span class="item"><span class="dot wallpaper"></span> Wallpaper = any image (Windows Mica + transparent window)</span>
+  </div>
+
+</div>
+</body>
+</html>

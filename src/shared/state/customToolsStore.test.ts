@@ -30,6 +30,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  deregisterCustomTool,
+  getTool,
+  listTools,
+} from '@/screens/EditorWorkspace/state/toolRegistry';
 import { useCustomToolsStore } from './customToolsStore';
 
 // --- Mocks for the new IPCs -----------------------------------
@@ -98,6 +103,11 @@ beforeEach(() => {
     loading: false,
     saving: false,
   });
+  for (const tool of listTools()) {
+    if (tool.kind !== 'builtin') {
+      deregisterCustomTool(tool.name);
+    }
+  }
 });
 
 // --- Tests ----------------------------------------------------
@@ -135,6 +145,20 @@ describe('customToolsStore.load', () => {
     const readCall = invokeMock.mock.calls.find((c) => c[0] === 'read_lipi_tools');
     expect(readCall).toBeDefined();
     expect(readCall?.[1]).toEqual({ workspaceRoot: '/tmp/workspace' });
+    expect(getTool('run_npm_test')?.kind).toBe('shell');
+    expect(getTool('fetch_jira')?.kind).toBe('http');
+  });
+
+  it('deregisters stale custom tools when loading a new workspace file', async () => {
+    setupReadMock([makeShellEntry('foo')]);
+    await useCustomToolsStore.getState().load('/tmp/workspace-a');
+    expect(getTool('foo')).toBeDefined();
+
+    setupReadMock([makeShellEntry('bar')]);
+    await useCustomToolsStore.getState().load('/tmp/workspace-b');
+
+    expect(getTool('foo')).toBeUndefined();
+    expect(getTool('bar')).toBeDefined();
   });
 
   it('handles an empty file (the Rust side returns the empty default, not an error)', async () => {
@@ -258,6 +282,22 @@ describe('customToolsStore.updateTool', () => {
     const writeCall = invokeMock.mock.calls.find((c) => c[0] === 'write_lipi_tools');
     expect(writeCall).toBeDefined();
   });
+
+  it('renames a tool and deregisters the old handler', async () => {
+    await useCustomToolsStore.getState().load('/tmp/workspace');
+    expect(getTool('foo')).toBeDefined();
+
+    const renamed: import('@/ipc').LipiToolEntry = {
+      ...makeShellEntry('renamed_foo'),
+      description: 'Renamed description.',
+    };
+    await useCustomToolsStore.getState().updateTool(renamed, 'foo');
+
+    const s = useCustomToolsStore.getState();
+    expect(s.tools.map((t) => t.name)).toEqual(['renamed_foo', 'bar']);
+    expect(getTool('foo')).toBeUndefined();
+    expect(getTool('renamed_foo')?.customConfig?.description).toBe('Renamed description.');
+  });
 });
 
 describe('customToolsStore.removeTool', () => {
@@ -267,11 +307,29 @@ describe('customToolsStore.removeTool', () => {
 
   it('removes a tool by name and writes the file', async () => {
     await useCustomToolsStore.getState().load('/tmp/workspace');
+    expect(getTool('foo')).toBeDefined();
     await useCustomToolsStore.getState().removeTool('foo');
     const s = useCustomToolsStore.getState();
     expect(s.tools.map((t) => t.name)).toEqual(['bar']);
+    expect(getTool('foo')).toBeUndefined();
+    expect(getTool('bar')).toBeDefined();
     const writeCall = invokeMock.mock.calls.find((c) => c[0] === 'write_lipi_tools');
     expect(writeCall).toBeDefined();
+  });
+
+  it('can re-add a removed tool with fresh registry config', async () => {
+    await useCustomToolsStore.getState().load('/tmp/workspace');
+    await useCustomToolsStore.getState().removeTool('foo');
+    expect(getTool('foo')).toBeUndefined();
+
+    const replacement = {
+      ...makeShellEntry('foo'),
+      description: 'Fresh replacement.',
+    };
+    await useCustomToolsStore.getState().addTool(replacement);
+
+    expect(getTool('foo')?.customConfig?.description).toBe('Fresh replacement.');
+    expect(useCustomToolsStore.getState().tools.map((t) => t.name)).toEqual(['bar', 'foo']);
   });
 
   it('is a no-op for an unknown name', async () => {

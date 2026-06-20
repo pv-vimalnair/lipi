@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAiStore } from '../state/aiStore';
 import { listTools } from '../state/toolRegistry';
+import { confirmAlwaysAllowTool } from '@/shared/toolPolicyWarnings';
 import styles from './ConfirmToolCallModal.module.css';
 
 /**
@@ -208,9 +209,10 @@ export function ConfirmToolCallModal(): JSX.Element | null {
     resolve('allow_once', canRun ? argsText : undefined);
   }, [resolve, canRun, argsText]);
   const onAllowAlways = useCallback(() => {
-    if (!canRun) return;
+    if (!canRun || !pending) return;
+    if (!confirmAlwaysAllowTool(pending.toolName)) return;
     resolve('allow_always', canRun ? argsText : undefined);
-  }, [resolve, canRun, argsText]);
+  }, [resolve, canRun, pending, argsText]);
   const onResetToModel = useCallback(() => {
     if (!pending) return;
     setArgsText(pending.argsJson);

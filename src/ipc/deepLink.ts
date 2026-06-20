@@ -1,5 +1,5 @@
 /**
- * Phase I — typed IPC for the `app://lipi.open?path=...`
+ * Phase I — typed IPC for the `lipi://open?path=...`
  * deep-link scheme.
  *
  * The shape of this file mirrors the rest of `@/ipc/*`:
@@ -16,7 +16,7 @@
  *  - `onDeepLink(handler)` subscribes to the `lipi://deep-link`
  *    event that the Rust `setup` callback re-emits when the OS
  *    hands the app a URL. The handler receives the raw URL
- *    string (e.g. `"app://lipi.open?path=C%3A%5CUsers%5Cfoo"`).
+ *    string (e.g. `"lipi://open?path=C%3A%5CUsers%5Cfoo"`).
  *
  * The pure URL → `OpenUrlResult` parsing lives in this file too
  * (the `parseOpenUrl` helper) so the path-validation rules can
@@ -36,6 +36,8 @@ export interface UserDirs {
 }
 
 export const DEEP_LINK_EVENT = 'lipi://deep-link';
+export const DEEP_LINK_PROTOCOL = 'lipi:';
+export const DEEP_LINK_HOST = 'open';
 
 /** Read the user's home, Documents, and Desktop dirs.
  *  Throws on IPC failure (extremely unlikely — the command
@@ -44,7 +46,13 @@ export async function getUserDirs(): Promise<UserDirs> {
   return await invoke<UserDirs>('get_user_dirs');
 }
 
-/** Subscribe to incoming `app://lipi.open?path=...` URLs.
+/** Canonicalize and validate a parsed deep-link path on the Rust side.
+ *  This follows symlinks before the final user-dir boundary check. */
+export async function validateDeepLinkPath(path: string): Promise<string> {
+  return await invoke<string>('validate_deep_link_path', { path });
+}
+
+/** Subscribe to incoming `lipi://open?path=...` URLs.
  *  Returns an unsubscribe function. Same shape as the
  *  Tauri `listen()` API so callers can compose with the
  *  rest of the event-bus code. */
@@ -76,13 +84,17 @@ export type PathRejectionReason =
   /** The path is not under the user's home / Documents / Desktop. */
   | 'outside-user-dirs'
   /** The path couldn't be URL-decoded (percent-encoded garbage). */
-  | 'decode-failed';
+  | 'decode-failed'
+  /** The URL is not the `lipi://open?path=...` deep-link shape. */
+  | 'invalid-url'
+  /** The path does not exist or could not be canonicalized. */
+  | 'not-found';
 
 export type OpenUrlResult =
   | { kind: 'ok'; path: string }
   | { kind: 'reject'; reason: PathRejectionReason };
 
-/** Parse `app://lipi.open?path=<urlencoded>` and validate the
+/** Parse `lipi://open?path=<urlencoded>` and validate the
  *  path against the user's home / Documents / Desktop. Returns
  *  either a validated `path` or a structured rejection reason. */
 export function parseOpenUrl(
@@ -96,16 +108,22 @@ export function parseOpenUrl(
     return { kind: 'reject', reason: 'missing-path' };
   }
 
-  // Scheme must be `app`. (The plugin already filters, but
-  // defense-in-depth: an unfiltered URL with a different scheme
-  // would silently pass otherwise.)
-  if (url.protocol !== 'app:') {
-    return { kind: 'reject', reason: 'missing-path' };
+  // Defense-in-depth: the OS handler is registered for `lipi`,
+  // but the frontend still requires the exact workspace-open
+  // authority so unrelated `lipi://...` URLs cannot be treated
+  // as workspace paths.
+  if (
+    url.protocol !== DEEP_LINK_PROTOCOL ||
+    url.hostname !== DEEP_LINK_HOST ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.port !== '' ||
+    (url.pathname !== '' && url.pathname !== '/')
+  ) {
+    return { kind: 'reject', reason: 'invalid-url' };
   }
 
-  // The authority can be anything (we don't use it for routing),
-  // but we do require a path or query — a bare `app://lipi.open`
-  // is a no-op and should be rejected.
+  // A bare `lipi://open` is a no-op and should be rejected.
   const encodedPath = url.searchParams.get('path');
   if (encodedPath === null || encodedPath === '') {
     return { kind: 'reject', reason: 'missing-path' };
@@ -133,9 +151,9 @@ export function parseOpenUrl(
   const normalised = normalisePath(decoded);
 
   // Must be under the user's home (always) or Documents / Desktop
-  // (if they exist). The Rust side already returns canonical
-  // paths (no symlinks, no `\\?\` prefix), so a case-insensitive
-  // startsWith on Windows is safe.
+  // (if they exist). The Rust side returns canonical allowed roots,
+  // and the runtime route performs one more Rust-side canonical path
+  // check before opening.
   const allowedRoots: string[] = [userDirs.home];
   if (userDirs.documents) allowedRoots.push(userDirs.documents);
   if (userDirs.desktop) allowedRoots.push(userDirs.desktop);
@@ -179,14 +197,41 @@ function normalisePath(p: string): string {
  *  prefix), so a straight string compare is reliable. */
 function pathStartsWith(path: string, root: string): boolean {
   const normPath = path.replace(/[\\/]+/g, '\\');
-  const normRoot = root.replace(/[\\/]+/g, '\\');
+  let normRoot = root.replace(/[\\/]+/g, '\\');
+  if (normRoot.length > 3 && normRoot.endsWith('\\')) {
+    normRoot = normRoot.slice(0, -1);
+  }
   // Drive-letter root (`C:\...`) is always Windows, so
   // case-insensitive compare. A root that has backslashes
   // is also Windows-style.
   if (/^[A-Za-z]:/.test(normRoot) || normRoot.includes('\\')) {
-    return normPath.toLowerCase().startsWith(normRoot.toLowerCase());
+    return hasRootBoundary(
+      normPath.toLowerCase(),
+      normRoot.toLowerCase(),
+    );
   }
-  return normPath.startsWith(normRoot);
+  return hasRootBoundary(normPath, normRoot);
+}
+
+function hasRootBoundary(path: string, root: string): boolean {
+  if (path === root) return true;
+  const boundaryRoot = root.endsWith('\\') ? root : `${root}\\`;
+  return path.startsWith(boundaryRoot);
+}
+
+export function rejectionReasonFromValidationError(
+  error: unknown,
+): PathRejectionReason {
+  const message =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error
+        ? error.message
+        : '';
+  if (message.includes('not-found')) return 'not-found';
+  if (message.includes('outside-user-dirs')) return 'outside-user-dirs';
+  if (message.includes('not-absolute')) return 'not-absolute';
+  return 'outside-user-dirs';
 }
 
 /** User-facing one-liner for a rejection reason. The hook
@@ -203,5 +248,9 @@ export function friendlyRejectionReason(reason: PathRejectionReason): string {
       return 'The deep link path is outside your Documents, Desktop, or home folder.';
     case 'decode-failed':
       return "The deep link path couldn't be decoded.";
+    case 'invalid-url':
+      return 'The deep link is not a Lipi workspace-open URL.';
+    case 'not-found':
+      return 'The deep link path could not be found.';
   }
 }

@@ -333,42 +333,42 @@ describe('toolSettingsStore', () => {
     });
 
     it('getConfirmationMode returns the default for unset tools', () => {
-      // Default = `always_allow` (preserves
-      // the 5c behaviour for tools the user
-      // has not configured).
+      // Default = `always_confirm` so newly
+      // added tools do not run silently until
+      // the user opts them in.
       const { getConfirmationMode } = useToolSettingsStore.getState();
-      expect(getConfirmationMode('get_file_contents')).toBe('always_allow');
-      expect(getConfirmationMode('run_npm_test')).toBe('always_allow');
+      expect(getConfirmationMode('get_file_contents')).toBe('always_confirm');
+      expect(getConfirmationMode('run_npm_test')).toBe('always_confirm');
     });
 
     it('setConfirmationMode stores the mode for a tool', () => {
       const { setConfirmationMode, getConfirmationMode } =
         useToolSettingsStore.getState();
-      setConfirmationMode('get_file_contents', 'always_confirm');
-      expect(getConfirmationMode('get_file_contents')).toBe('always_confirm');
+      setConfirmationMode('get_file_contents', 'always_allow');
+      expect(getConfirmationMode('get_file_contents')).toBe('always_allow');
       // Other tools are unaffected.
-      expect(getConfirmationMode('run_npm_test')).toBe('always_allow');
+      expect(getConfirmationMode('run_npm_test')).toBe('always_confirm');
     });
 
     it('setConfirmationMode overwrites an existing mode', () => {
       const { setConfirmationMode, getConfirmationMode } =
         useToolSettingsStore.getState();
-      setConfirmationMode('get_file_contents', 'always_confirm');
+      setConfirmationMode('get_file_contents', 'always_allow');
       setConfirmationMode('get_file_contents', 'per_call');
       expect(getConfirmationMode('get_file_contents')).toBe('per_call');
     });
 
     it('setConfirmationMode drops the entry when set back to the default', () => {
-      // The default is `always_allow`. Setting
+      // The default is `always_confirm`. Setting
       // back to the default should REMOVE the
       // key from the map to keep the persisted
       // JSON small.
       const { setConfirmationMode } = useToolSettingsStore.getState();
-      setConfirmationMode('get_file_contents', 'always_confirm');
+      setConfirmationMode('get_file_contents', 'always_allow');
       expect(
         'get_file_contents' in useToolSettingsStore.getState().confirmationMode,
       ).toBe(true);
-      setConfirmationMode('get_file_contents', 'always_allow');
+      setConfirmationMode('get_file_contents', 'always_confirm');
       expect(
         'get_file_contents' in useToolSettingsStore.getState().confirmationMode,
       ).toBe(false);
@@ -400,8 +400,15 @@ describe('toolSettingsStore', () => {
       });
     });
 
-    it('returns false for an unset tool (default always_allow)', () => {
+    it('returns true for an unset tool (default always_confirm)', () => {
       const { shouldConfirm } = useToolSettingsStore.getState();
+      expect(shouldConfirm('get_file_contents', false)).toBe(true);
+    });
+
+    it('returns false for an explicit always_allow tool', () => {
+      const { setConfirmationMode, shouldConfirm } =
+        useToolSettingsStore.getState();
+      setConfirmationMode('get_file_contents', 'always_allow');
       expect(shouldConfirm('get_file_contents', false)).toBe(false);
     });
 
@@ -589,7 +596,7 @@ describe('toolSettingsStore', () => {
       const { setEnabled, setConfirmationMode, clearAllSettings } =
         useToolSettingsStore.getState();
       setEnabled('get_file_contents', false);
-      setConfirmationMode('run_npm_test', 'always_confirm');
+      setConfirmationMode('run_npm_test', 'always_allow');
       clearAllSettings();
       const s = useToolSettingsStore.getState();
       expect(s.disabledToolNames).toEqual([]);
@@ -602,7 +609,7 @@ describe('toolSettingsStore', () => {
         useToolSettingsStore.getState();
       setEnabled('get_file_contents', false);
       setEnabled('run_npm_test', false);
-      setConfirmationMode('a', 'always_confirm');
+      setConfirmationMode('a', 'always_allow');
       clearAllSettings();
       const raw = localStorage.getItem('lipi:toolSettings:undo:v1');
       expect(raw).not.toBeNull();
@@ -611,7 +618,7 @@ describe('toolSettingsStore', () => {
         'get_file_contents',
         'run_npm_test',
       ]);
-      expect(parsed.confirmationMode).toEqual({ a: 'always_confirm' });
+      expect(parsed.confirmationMode).toEqual({ a: 'always_allow' });
     });
 
     it('is a no-op when both disabledToolNames and confirmationMode are empty', () => {
@@ -630,7 +637,7 @@ describe('toolSettingsStore', () => {
     });
 
     it('is a no-op when only DEFAULT_CONFIRMATION_MODE entries exist (no real "settings")', () => {
-      // The default mode is `always_allow`.
+      // The default mode is `always_confirm`.
       // A fresh `setConfirmationMode` with
       // the default removes the entry
       // (per the existing implementation),
@@ -649,7 +656,7 @@ describe('toolSettingsStore', () => {
       // see the undo toast on Reset.
       const { setConfirmationMode, clearAllSettings } =
         useToolSettingsStore.getState();
-      setConfirmationMode('a', 'always_confirm');
+      setConfirmationMode('a', 'always_allow');
       clearAllSettings();
       const s = useToolSettingsStore.getState();
       expect(s.confirmationMode).toEqual({});
@@ -895,7 +902,7 @@ describe('toolSettingsStore', () => {
       const { setEnabled, setConfirmationMode, applyImportedSettings } =
         useToolSettingsStore.getState();
       setEnabled('old_disabled', false);
-      setConfirmationMode('old_policy', 'always_confirm');
+      setConfirmationMode('old_policy', 'always_allow');
       applyImportedSettings({
         disabledToolNames: ['new_disabled'],
         confirmationMode: { new_policy: 'per_call' },

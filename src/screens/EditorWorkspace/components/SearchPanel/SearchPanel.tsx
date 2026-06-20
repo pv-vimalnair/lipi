@@ -4,6 +4,7 @@ import { Button } from '@/shared/components';
 import { PaneShell } from '../PaneShell';
 import {
   SearchError as SearchErrorClass,
+  workspaceSearchCancel,
   workspaceSearch,
   type SearchMatch,
   type SearchResult,
@@ -40,16 +41,9 @@ const MAX_RESULTS_DISPLAYED = 200;
  *
  * v1 limitations (documented in the
  * HANDOFF):
- *  - No cancellation. A pathological
- *    workspace (e.g. a huge
- *    `node_modules` that wasn't ignored)
- *    blocks until done.
  *  - Case-sensitive by default. The user
  *    gets a button to toggle.
- *  - Glob patterns in `extra_ignores` are
- *    NOT supported (Rust side is exact-
- *    name match only). `.lipiignore` is a
- *    follow-up.
+ *  - `.lipiignore` is a follow-up.
  */
 export function SearchPanel() {
   // M6a: read the active path via
@@ -74,6 +68,14 @@ export function SearchPanel() {
   const requestIdRef = useRef(0);
   // Latest debounce timer.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeSearchIdRef = useRef<string | null>(null);
+
+  const cancelActiveSearch = useCallback((): void => {
+    const activeSearchId = activeSearchIdRef.current;
+    if (!activeSearchId) return;
+    activeSearchIdRef.current = null;
+    void workspaceSearchCancel(activeSearchId);
+  }, []);
 
   const runSearch = useCallback(
     async (
@@ -82,16 +84,22 @@ export function SearchPanel() {
       root: string,
     ): Promise<void> => {
       if (!q.trim() || !root) {
+        requestIdRef.current += 1;
+        cancelActiveSearch();
         setStatus({ kind: 'idle' });
         return;
       }
       const id = ++requestIdRef.current;
+      const searchId = `workspace-search-${id}`;
+      cancelActiveSearch();
+      activeSearchIdRef.current = searchId;
       setStatus({ kind: 'searching' });
       try {
         const result = await workspaceSearch({
           query: q,
           rootPath: root,
           caseInsensitive: ci,
+          searchId,
         });
         // A newer request may have started
         // while we were waiting — drop the
@@ -100,14 +108,25 @@ export function SearchPanel() {
         setStatus({ kind: 'done', result });
       } catch (err) {
         if (id !== requestIdRef.current) return;
+        if (
+          err instanceof SearchErrorClass &&
+          err.payload.kind === 'Cancelled'
+        ) {
+          setStatus({ kind: 'idle' });
+          return;
+        }
         const msg =
           err instanceof SearchErrorClass
             ? `${err.payload.kind}: ${err.payload.detail}`
             : String(err);
         setStatus({ kind: 'error', message: msg });
+      } finally {
+        if (id === requestIdRef.current) {
+          activeSearchIdRef.current = null;
+        }
       }
     },
-    [],
+    [cancelActiveSearch],
   );
 
   // Debounce the search on every query
@@ -117,6 +136,8 @@ export function SearchPanel() {
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (!query.trim() || !rootPath) {
+      requestIdRef.current += 1;
+      cancelActiveSearch();
       setStatus({ kind: 'idle' });
       return;
     }
@@ -125,8 +146,9 @@ export function SearchPanel() {
     }, DEBOUNCE_MS);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
+      cancelActiveSearch();
     };
-  }, [query, caseInsensitive, rootPath, runSearch]);
+  }, [query, caseInsensitive, rootPath, runSearch, cancelActiveSearch]);
 
   const onResultClick = useCallback(
     async (match: SearchMatch) => {

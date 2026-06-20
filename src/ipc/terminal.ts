@@ -58,7 +58,7 @@ export interface TerminalExitEvent {
 }
 
 export interface TerminalErrorPayload {
-  kind: 'Io' | 'Spawn' | 'NotFound' | 'AlreadyClosed' | 'Pty';
+  kind: 'Io' | 'Spawn' | 'NotFound' | 'AlreadyClosed' | 'Pty' | 'Policy';
   detail: string;
 }
 
@@ -86,8 +86,8 @@ function asTerminalError(err: unknown): TerminalError {
 }
 
 export interface OpenOptions {
-  /** Override the platform default shell. `undefined` means
-   *  "use cmd.exe on Windows / $SHELL or /bin/sh on Unix". */
+  /** Deprecated. Rust rejects renderer-supplied shell overrides;
+   *  omit this to use the platform default shell. */
   shell?: string;
   /** Initial PTY rows. Defaults to 24 (xterm.js default). */
   rows?: number;

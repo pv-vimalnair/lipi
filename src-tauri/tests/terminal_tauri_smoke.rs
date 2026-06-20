@@ -108,12 +108,20 @@ fn two_opens_yield_two_distinct_camel_case_session_ids() {
     let state = Arc::new(TerminalState::new());
     let a = lipi_lib::terminal_open_rs(
         &state,
-        OpenOptions { rows: 24, cols: 80, shell: None },
+        OpenOptions {
+            rows: 24,
+            cols: 80,
+            shell: None,
+        },
         Arc::new(NoopSink),
     );
     let b = lipi_lib::terminal_open_rs(
         &state,
-        OpenOptions { rows: 24, cols: 80, shell: None },
+        OpenOptions {
+            rows: 24,
+            cols: 80,
+            shell: None,
+        },
         Arc::new(NoopSink),
     );
     let (a, b) = match (a, b) {

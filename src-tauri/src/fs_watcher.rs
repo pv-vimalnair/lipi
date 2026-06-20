@@ -170,10 +170,7 @@ pub fn fs_watch(app: AppHandle, path: String) -> Result<WatchHandle, String> {
         let table = guard.as_ref().expect("initialised above");
         for (id, active) in table.iter() {
             if active.path == dir {
-                return Ok(WatchHandle {
-                    id: *id,
-                    path,
-                });
+                return Ok(WatchHandle { id: *id, path });
             }
         }
     }
@@ -255,8 +252,7 @@ async fn drain_events(
     // directly. The blocking task is the
     // standard idiom for bridging sync
     // channels into async.
-    let (async_tx, mut async_rx) =
-        tokio::sync::mpsc::channel::<notify::Result<notify::Event>>(256);
+    let (async_tx, mut async_rx) = tokio::sync::mpsc::channel::<notify::Result<notify::Event>>(256);
 
     // The `tauri::async_runtime` exposes
     // `spawn_blocking` only via the
@@ -430,11 +426,10 @@ mod tests {
         // fake receiver).
         let dir = unique_tmpdir("create");
         let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
-        let mut watcher: RecommendedWatcher =
-            notify::recommended_watcher(move |res| {
-                let _ = tx.send(res);
-            })
-            .unwrap();
+        let mut watcher: RecommendedWatcher = notify::recommended_watcher(move |res| {
+            let _ = tx.send(res);
+        })
+        .unwrap();
         watcher.watch(&dir, RecursiveMode::NonRecursive).unwrap();
 
         // Create a file in the watched
@@ -466,11 +461,10 @@ mod tests {
         let file = dir.join("a.txt");
         touch(&file);
         let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
-        let mut watcher: RecommendedWatcher =
-            notify::recommended_watcher(move |res| {
-                let _ = tx.send(res);
-            })
-            .unwrap();
+        let mut watcher: RecommendedWatcher = notify::recommended_watcher(move |res| {
+            let _ = tx.send(res);
+        })
+        .unwrap();
         watcher.watch(&dir, RecursiveMode::NonRecursive).unwrap();
 
         // Mutate the file. notify's

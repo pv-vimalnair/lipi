@@ -44,7 +44,6 @@
 //! state struct per app, holding all live child processes.
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -55,6 +54,8 @@ use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex as AsyncMutex;
+
+use crate::ipc_policy::canonicalize_workspace_root;
 
 /// Hard upper bound on a single `lsp_stdio_read` call.
 /// Matches the typical pipe buffer on Linux/macOS (64 KiB)
@@ -280,6 +281,12 @@ pub struct RunStdioArgs {
     /// Optional working directory.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Required for Rust-side spawn policy.
+    /// Defaults to Typescript for compatibility,
+    /// but the command/args still have to match
+    /// the per-kind allowlist.
+    #[serde(default)]
+    pub server_kind: Option<LspServerKind>,
 }
 
 /// `lsp_run_stdio` result. `handleId` is a 32-char hex
@@ -326,6 +333,8 @@ pub enum StdioError {
     Io(String),
     #[error("check timed out after {seconds}s")]
     Timeout { seconds: u64 },
+    #[error("blocked by policy: {0}")]
+    Policy(String),
 }
 
 /// One live child process. The reader task (spawned at
@@ -479,8 +488,7 @@ impl StdioHandle {
                         // one-time drain on JS
                         // subscription).
                         {
-                            let mut q =
-                                stdout_buffer.lock().expect("buffer poisoned");
+                            let mut q = stdout_buffer.lock().expect("buffer poisoned");
                             // Cap the buffer at 8 MiB
                             // so a chatty server can't
                             // OOM us.
@@ -511,13 +519,9 @@ impl StdioHandle {
                             handle_id: handle_id.clone(),
                             chunk: buf[..n].to_vec(),
                         };
-                        if let Err(e) =
-                            app_handle.emit(LSP_STDOUT_EVENT, &payload)
-                        {
+                        if let Err(e) = app_handle.emit(LSP_STDOUT_EVENT, &payload) {
                             if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                                eprintln!(
-                                    "[lsp] failed to emit {LSP_STDOUT_EVENT}: {e}"
-                                );
+                                eprintln!("[lsp] failed to emit {LSP_STDOUT_EVENT}: {e}");
                             }
                         }
                     }
@@ -525,9 +529,7 @@ impl StdioHandle {
                         // Read error — most likely the
                         // child died. Log and exit.
                         if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                            eprintln!(
-                                "[lsp] reader for {handle_id} error: {e}"
-                            );
+                            eprintln!("[lsp] reader for {handle_id} error: {e}");
                         }
                         let mut ex = exited.lock().expect("exited poisoned");
                         *ex = true;
@@ -567,9 +569,7 @@ impl StdioHandle {
                         let bytes = &buf[..n];
                         // 1. Crash-tail buffer (Phase 9.5).
                         {
-                            let mut q = stderr_buffer
-                                .lock()
-                                .expect("stderr buffer poisoned");
+                            let mut q = stderr_buffer.lock().expect("stderr buffer poisoned");
                             push_stderr(&mut q, bytes);
                         }
                         // 2. Live log buffer (Phase 9.7).
@@ -594,12 +594,9 @@ impl StdioHandle {
                             "handleId": handle_id,
                             "chunk": String::from_utf8_lossy(bytes),
                         });
-                        if let Err(e) = app_handle.emit(LSP_LOG_EVENT, payload)
-                        {
+                        if let Err(e) = app_handle.emit(LSP_LOG_EVENT, payload) {
                             if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                                eprintln!(
-                                    "[lsp] failed to emit {LSP_LOG_EVENT}: {e}"
-                                );
+                                eprintln!("[lsp] failed to emit {LSP_LOG_EVENT}: {e}");
                             }
                         }
                     }
@@ -609,9 +606,7 @@ impl StdioHandle {
                         // the wait task will fire the
                         // crash event.
                         if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                            eprintln!(
-                                "[lsp] stderr reader for {handle_id} error: {_e}"
-                            );
+                            eprintln!("[lsp] stderr reader for {handle_id} error: {_e}");
                         }
                         break;
                     }
@@ -653,28 +648,20 @@ impl StdioHandle {
                 c.wait().await.ok().and_then(|s| s.code())
             };
             {
-                let mut e = child_exited
-                    .lock()
-                    .expect("child_exited poisoned");
+                let mut e = child_exited.lock().expect("child_exited poisoned");
                 *e = true;
             }
             if let Some(code) = exit_code {
-                let mut s = exit_status
-                    .lock()
-                    .expect("exit_status poisoned");
+                let mut s = exit_status.lock().expect("exit_status poisoned");
                 *s = Some(code);
             }
             // Snapshot the stderr tail.
             let tail = {
-                let q = stderr_buffer
-                    .lock()
-                    .expect("stderr buffer poisoned");
+                let q = stderr_buffer.lock().expect("stderr buffer poisoned");
                 // Decode as UTF-8 lossy; LSP
                 // servers log ASCII / UTF-8.
-                String::from_utf8_lossy(
-                    q.iter().copied().collect::<Vec<u8>>().as_slice(),
-                )
-                .to_string()
+                String::from_utf8_lossy(q.iter().copied().collect::<Vec<u8>>().as_slice())
+                    .to_string()
             };
             // Emit the crash event. The JS side
             // decides what to do (auto-respawn
@@ -704,12 +691,20 @@ pub async fn run_stdio(
     if args.command.is_empty() {
         return Err(StdioError::Empty);
     }
+    let kind = args.server_kind.unwrap_or(LspServerKind::Typescript);
+    let spec = server_kind_spec(kind).ok_or_else(|| {
+        StdioError::Policy("unknown language-server kind cannot spawn a process".to_string())
+    })?;
+    validate_lsp_spawn_policy(&args, &spec)?;
+
     let mut cmd = Command::new(&args.command);
     cmd.args(&args.args);
-    if let Some(cwd) = &args.cwd {
-        let path = PathBuf::from(cwd);
-        cmd.current_dir(path);
-    }
+    let cwd = args
+        .cwd
+        .as_ref()
+        .ok_or_else(|| StdioError::Policy("lsp_run_stdio requires a workspace cwd".to_string()))?;
+    let path = canonicalize_workspace_root(cwd).map_err(StdioError::Policy)?;
+    cmd.current_dir(path);
     cmd.stdin(std::process::Stdio::piped());
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -873,10 +868,7 @@ pub async fn stdio_read_stderr(
             .ok_or_else(|| StdioError::NotFound(handle_id.clone()))?
             .clone()
     };
-    let mut buf = handle
-        .stderr_buffer
-        .lock()
-        .expect("stderr buffer poisoned");
+    let mut buf = handle.stderr_buffer.lock().expect("stderr buffer poisoned");
     // Cap the per-call read to MAX_READ_BYTES
     // (1 MiB) so a chatty server can't make the
     // Tauri IPC payload huge. The ring buffer
@@ -1077,6 +1069,7 @@ pub struct CheckAvailableArgs {
 /// `server_kind_spec()`.
 struct ServerKindSpec {
     binary: &'static str,
+    stdio_args: &'static [&'static str],
     install_hint: &'static str,
 }
 
@@ -1090,10 +1083,12 @@ fn server_kind_spec(kind: LspServerKind) -> Option<ServerKindSpec> {
     match kind {
         LspServerKind::Typescript => Some(ServerKindSpec {
             binary: "typescript-language-server",
+            stdio_args: &["--stdio"],
             install_hint: "npm install -g typescript-language-server",
         }),
         LspServerKind::RustAnalyzer => Some(ServerKindSpec {
             binary: "rust-analyzer",
+            stdio_args: &[],
             // `rustup component add rust-analyzer` is the
             // canonical install; covers both
             // `rustup`-managed and
@@ -1113,10 +1108,33 @@ fn server_kind_spec(kind: LspServerKind) -> Option<ServerKindSpec> {
             // recommendation in the
             // pyright-langserver README).
             binary: "pyright-langserver",
+            stdio_args: &["--stdio"],
             install_hint: "npm install -g pyright",
         }),
         LspServerKind::Unknown => None,
     }
+}
+
+fn validate_lsp_spawn_policy(args: &RunStdioArgs, spec: &ServerKindSpec) -> Result<(), StdioError> {
+    if args.command != spec.binary {
+        return Err(StdioError::Policy(format!(
+            "serverKind requires `{}`, got `{}`",
+            spec.binary, args.command
+        )));
+    }
+    let expected: Vec<String> = spec.stdio_args.iter().map(|arg| arg.to_string()).collect();
+    if args.args != expected {
+        return Err(StdioError::Policy(format!(
+            "`{}` must be spawned with args {:?}",
+            spec.binary, expected
+        )));
+    }
+    if args.cwd.as_deref().unwrap_or_default().trim().is_empty() {
+        return Err(StdioError::Policy(
+            "lsp_run_stdio requires a workspace cwd".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// `lsp_check_available` — public entry
@@ -1149,9 +1167,7 @@ pub async fn check_available(
 /// kind's install hint) if the binary
 /// isn't on PATH; returns `version: Some(...)`
 /// if the binary is runnable.
-async fn check_available_for(
-    spec: &ServerKindSpec,
-) -> Result<CheckAvailableResult, StdioError> {
+async fn check_available_for(spec: &ServerKindSpec) -> Result<CheckAvailableResult, StdioError> {
     // Step 1: probe PATH for the binary. The
     // JS side could do this with
     // `run_command` directly, but bundling
@@ -1210,8 +1226,7 @@ async fn check_available_for(
     version_cmd.stdout(std::process::Stdio::piped());
     version_cmd.stderr(std::process::Stdio::piped());
 
-    let version_result =
-        tokio::time::timeout(CHECK_AVAILABLE_TIMEOUT, version_cmd.output()).await;
+    let version_result = tokio::time::timeout(CHECK_AVAILABLE_TIMEOUT, version_cmd.output()).await;
     let version = match version_result {
         Ok(Ok(o)) if o.status.success() => {
             Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -1286,14 +1301,9 @@ mod tests {
         // update. Locking the value per-kind catches
         // accidental edits without making future
         // kinds (Phase 9.2c+) hard to add.
-        let ts = server_kind_spec(LspServerKind::Typescript)
-            .expect("typescript has a spec");
-        assert_eq!(
-            ts.install_hint,
-            "npm install -g typescript-language-server"
-        );
-        let rust = server_kind_spec(LspServerKind::RustAnalyzer)
-            .expect("rust-analyzer has a spec");
+        let ts = server_kind_spec(LspServerKind::Typescript).expect("typescript has a spec");
+        assert_eq!(ts.install_hint, "npm install -g typescript-language-server");
+        let rust = server_kind_spec(LspServerKind::RustAnalyzer).expect("rust-analyzer has a spec");
         assert_eq!(rust.install_hint, "rustup component add rust-analyzer");
         // Phase 9.2c — the pyright install
         // hint is `npm install -g pyright`
@@ -1302,8 +1312,7 @@ mod tests {
         // Node package; installing `pyright`
         // is enough to put the binary on
         // PATH).
-        let py = server_kind_spec(LspServerKind::Pyright)
-            .expect("pyright has a spec");
+        let py = server_kind_spec(LspServerKind::Pyright).expect("pyright has a spec");
         assert_eq!(py.install_hint, "npm install -g pyright");
     }
 
@@ -1342,20 +1351,16 @@ mod tests {
         // The TS side sends `"rust_analyzer"` —
         // serde must map that back to the variant
         // (not panic / not return Unknown).
-        let k: LspServerKind =
-            serde_json::from_str("\"rust_analyzer\"").unwrap();
+        let k: LspServerKind = serde_json::from_str("\"rust_analyzer\"").unwrap();
         assert_eq!(k, LspServerKind::RustAnalyzer);
-        let k: LspServerKind =
-            serde_json::from_str("\"typescript\"").unwrap();
+        let k: LspServerKind = serde_json::from_str("\"typescript\"").unwrap();
         assert_eq!(k, LspServerKind::Typescript);
         // Phase 9.2c — the `'pyright'` wire
         // literal maps back to the
         // `Pyright` variant.
-        let k: LspServerKind =
-            serde_json::from_str("\"pyright\"").unwrap();
+        let k: LspServerKind = serde_json::from_str("\"pyright\"").unwrap();
         assert_eq!(k, LspServerKind::Pyright);
-        let k: LspServerKind =
-            serde_json::from_str("\"unknown\"").unwrap();
+        let k: LspServerKind = serde_json::from_str("\"unknown\"").unwrap();
         assert_eq!(k, LspServerKind::Unknown);
     }
 
@@ -1391,6 +1396,55 @@ mod tests {
     }
 
     #[test]
+    fn lsp_spawn_policy_accepts_only_matching_command_and_args() {
+        let spec = server_kind_spec(LspServerKind::Typescript).unwrap();
+        let ok = RunStdioArgs {
+            command: "typescript-language-server".to_string(),
+            args: vec!["--stdio".to_string()],
+            cwd: Some("/tmp/workspace".to_string()),
+            server_kind: Some(LspServerKind::Typescript),
+        };
+        validate_lsp_spawn_policy(&ok, &spec).expect("matching spec should pass");
+
+        let wrong_command = RunStdioArgs {
+            command: "powershell".to_string(),
+            args: vec!["--stdio".to_string()],
+            cwd: Some("/tmp/workspace".to_string()),
+            server_kind: Some(LspServerKind::Typescript),
+        };
+        assert!(matches!(
+            validate_lsp_spawn_policy(&wrong_command, &spec),
+            Err(StdioError::Policy(_))
+        ));
+
+        let wrong_args = RunStdioArgs {
+            command: "typescript-language-server".to_string(),
+            args: vec!["--stdio".to_string(), "--evil".to_string()],
+            cwd: Some("/tmp/workspace".to_string()),
+            server_kind: Some(LspServerKind::Typescript),
+        };
+        assert!(matches!(
+            validate_lsp_spawn_policy(&wrong_args, &spec),
+            Err(StdioError::Policy(_))
+        ));
+    }
+
+    #[test]
+    fn lsp_spawn_policy_requires_workspace_cwd() {
+        let spec = server_kind_spec(LspServerKind::RustAnalyzer).unwrap();
+        let args = RunStdioArgs {
+            command: "rust-analyzer".to_string(),
+            args: vec![],
+            cwd: None,
+            server_kind: Some(LspServerKind::RustAnalyzer),
+        };
+        assert!(matches!(
+            validate_lsp_spawn_policy(&args, &spec),
+            Err(StdioError::Policy(_))
+        ));
+    }
+
+    #[test]
     fn check_available_args_omits_kind_for_backward_compat() {
         // The pre-9.2b `lsp_check_available` was
         // kind-less. The TS side might still send
@@ -1400,8 +1454,7 @@ mod tests {
         // behaviour).
         let args: CheckAvailableArgs = serde_json::from_str("{}").unwrap();
         assert!(args.server_kind.is_none());
-        let args: CheckAvailableArgs =
-            serde_json::from_str("null").unwrap_or_default();
+        let args: CheckAvailableArgs = serde_json::from_str("null").unwrap_or_default();
         assert!(args.server_kind.is_none());
     }
 
@@ -1413,8 +1466,7 @@ mod tests {
         // The struct has
         // `rename_all = "camelCase"`.
         let args: CheckAvailableArgs =
-            serde_json::from_str(r#"{"serverKind":"rust_analyzer"}"#)
-                .unwrap();
+            serde_json::from_str(r#"{"serverKind":"rust_analyzer"}"#).unwrap();
         assert_eq!(args.server_kind, Some(LspServerKind::RustAnalyzer));
         // Phase 9.2c — the `'pyright'` kind
         // also flows through the IPC arg
@@ -1422,9 +1474,7 @@ mod tests {
         // `lspCheckAvailable({ serverKind:
         // 'pyright' })` from the bridge for
         // a `.py` file.)
-        let args: CheckAvailableArgs =
-            serde_json::from_str(r#"{"serverKind":"pyright"}"#)
-                .unwrap();
+        let args: CheckAvailableArgs = serde_json::from_str(r#"{"serverKind":"pyright"}"#).unwrap();
         assert_eq!(args.server_kind, Some(LspServerKind::Pyright));
     }
 
@@ -1446,10 +1496,7 @@ mod tests {
             result.install_hint.is_empty(),
             "Unknown must have an empty install hint"
         );
-        assert!(
-            result.version.is_none(),
-            "Unknown must have no version"
-        );
+        assert!(result.version.is_none(), "Unknown must have no version");
     }
 
     #[test]
@@ -1466,8 +1513,7 @@ mod tests {
         // like a `CheckAvailableResult`.
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(check_available(None));
-        let result =
-            result.expect("Typescript default probe shouldn't error");
+        let result = result.expect("Typescript default probe shouldn't error");
         // `available` is a bool; `install_hint`
         // and `version` are present regardless.
         let _ = result.available;
@@ -1494,8 +1540,7 @@ mod tests {
         // room for the newest. This is the property
         // that gives us "last 100 lines" on a chatty
         // server.
-        let mut buf: VecDeque<u8> =
-            VecDeque::with_capacity(STDERR_BUFFER_CAP);
+        let mut buf: VecDeque<u8> = VecDeque::with_capacity(STDERR_BUFFER_CAP);
         for _ in 0..STDERR_BUFFER_CAP {
             buf.push_back(b'A');
         }
@@ -1506,11 +1551,15 @@ mod tests {
         let first_two: Vec<u8> = buf.iter().take(2).copied().collect();
         assert_eq!(first_two, b"AA".to_vec());
         // The last two bytes should be the new ones.
-        let last_two: Vec<u8> =
-            buf.iter().rev().take(2).copied().collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
+        let last_two: Vec<u8> = buf
+            .iter()
+            .rev()
+            .take(2)
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         assert_eq!(last_two, b"BC".to_vec());
     }
 
@@ -1552,8 +1601,7 @@ mod tests {
         // replacement characters — which is the
         // correct behaviour for "show the last N
         // lines". This test pins that contract.
-        let mut buf: VecDeque<u8> =
-            VecDeque::with_capacity(STDERR_BUFFER_CAP);
+        let mut buf: VecDeque<u8> = VecDeque::with_capacity(STDERR_BUFFER_CAP);
         // Fill to (cap - 2) so we have room for the
         // 2-byte UTF-8 sequence without evicting.
         for _ in 0..(STDERR_BUFFER_CAP - 2) {
@@ -1564,15 +1612,14 @@ mod tests {
         // at exactly the cap.
         push_stderr(&mut buf, &[0xC3, 0xA9]);
         assert_eq!(buf.len(), STDERR_BUFFER_CAP);
-        let s = String::from_utf8_lossy(
-            &buf.iter().copied().collect::<Vec<u8>>(),
-        )
-        .to_string();
+        let s = String::from_utf8_lossy(&buf.iter().copied().collect::<Vec<u8>>()).to_string();
         // No 'p' was dropped. The decoded string
         // has (cap - 2) 'p' chars + 1 'é' char.
         assert!(s.ends_with('\u{00E9}'));
-        assert_eq!(s.chars().filter(|c| *c == 'p').count(),
-                   STDERR_BUFFER_CAP - 2);
+        assert_eq!(
+            s.chars().filter(|c| *c == 'p').count(),
+            STDERR_BUFFER_CAP - 2
+        );
     }
 
     #[test]
@@ -1618,8 +1665,7 @@ mod tests {
         // Round-trip too: deserialise the JSON back
         // into a struct and confirm the None is
         // preserved.
-        let parsed: LspCrashedPayload =
-            serde_json::from_str(&json).unwrap();
+        let parsed: LspCrashedPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, payload);
     }
 
@@ -1750,8 +1796,7 @@ mod tests {
         let mut buf: VecDeque<u8> = VecDeque::new();
         push_stderr_log(&mut buf, b"line 1\nline 2\n");
         assert_eq!(buf.len(), 14);
-        let s = String::from_utf8(buf.iter().copied().collect::<Vec<u8>>())
-            .unwrap();
+        let s = String::from_utf8(buf.iter().copied().collect::<Vec<u8>>()).unwrap();
         assert_eq!(s, "line 1\nline 2\n");
     }
 
@@ -1761,18 +1806,15 @@ mod tests {
         // two more bytes, assert the two oldest are
         // evicted. This pins the eviction semantics
         // for the live "Server output" panel.
-        let mut buf: VecDeque<u8> =
-            VecDeque::with_capacity(STDERR_LOG_BUFFER_CAP);
+        let mut buf: VecDeque<u8> = VecDeque::with_capacity(STDERR_LOG_BUFFER_CAP);
         for i in 0..STDERR_LOG_BUFFER_CAP {
             buf.push_back(b'a' + (i % 26) as u8);
         }
-        let before_first_two: Vec<u8> =
-            buf.iter().take(2).copied().collect();
+        let before_first_two: Vec<u8> = buf.iter().take(2).copied().collect();
         push_stderr_log(&mut buf, b"!!");
         assert_eq!(buf.len(), STDERR_LOG_BUFFER_CAP);
         // The two oldest bytes were evicted.
-        let after_first_two: Vec<u8> =
-            buf.iter().take(2).copied().collect();
+        let after_first_two: Vec<u8> = buf.iter().take(2).copied().collect();
         assert_ne!(before_first_two, after_first_two);
         // The two newest bytes are the new ones.
         let last_two: Vec<u8> = buf

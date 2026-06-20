@@ -225,7 +225,7 @@ them up **once**, before the first release:
 
 | Secret | Source | Used by |
 |--------|--------|---------|
-| `TAURI_PROD_UPDATER_KEY` | Contents of `src-tauri/keys/production/production.key` (the PEM). | All platforms. |
+| `TAURI_PROD_UPDATER_KEY` | Contents of the production updater private key from `%USERPROFILE%\.lipi-production-secrets\keys\production\production.key` or the offline vault. | All platforms. |
 | `TAURI_PROD_UPDATER_KEY_PASSWORD` | The password set when the key was generated. | All platforms. |
 | `APPLE_ID` | Apple Developer account email. | macOS. |
 | `APPLE_PASSWORD` | App-specific password for the Apple Developer account (created at appleid.apple.com). | macOS. |
@@ -254,10 +254,11 @@ This is a **one-time** operation, done before
 the v0.1.0 release:
 
 ```bash
-# 1. Generate the keypair. The Tauri CLI
-#    produces a .key (private) and a .key.pub
-#    (public) in the home directory by default.
-npx tauri signer generate -w src-tauri/keys/production/production.key
+# 1. Generate the keypair outside the repo.
+#    The Tauri CLI produces a .key (private)
+#    and a .key.pub (public) beside the path.
+mkdir -p "$HOME/.lipi-production-secrets/keys/production"
+npx tauri signer generate -w "$HOME/.lipi-production-secrets/keys/production/production.key"
 
 # 2. The CLI prompts for a password. Set a
 #    strong 32+ character password. Save it in
@@ -265,28 +266,29 @@ npx tauri signer generate -w src-tauri/keys/production/production.key
 
 # 3. Copy the .key file's contents to the
 #    TAURI_PROD_UPDATER_KEY GitHub secret.
-cat src-tauri/keys/production/production.key
+cat "$HOME/.lipi-production-secrets/keys/production/production.key"
 # → paste into GitHub repo settings → Secrets
 
 # 4. Add the password to the
 #    TAURI_PROD_UPDATER_KEY_PASSWORD secret.
 
-# 5. Update tauri.conf.json to reference the
-#    new pubkey. The rotate_updater_key CLI
-#    does this in-place:
+# 5. Copy only the public key into the repo,
+#    then update tauri.conf.json to reference it.
+cp "$HOME/.lipi-production-secrets/keys/production/production.key.pub" \
+  src-tauri/keys/production/production.key.pub
+
 ./src-tauri/target/debug/rotate_updater_key \
   --pubkey-file src-tauri/keys/production/production.key.pub
 
-# 6. Commit the patched tauri.conf.json.
-git add src-tauri/tauri.conf.json
+# 6. Commit the public key and patched tauri.conf.json.
+git add src-tauri/keys/production/production.key.pub src-tauri/tauri.conf.json
 git commit -m "Rotate to production updater keypair"
 ```
 
-The `.key` file should also be backed up to an
-encrypted offline USB (the project lead's
-personal backup). If the GitHub secret is ever
-lost, the project lead can recover the key from
-the USB.
+The private `.key` file should also be imported into an encrypted
+offline vault / USB (the project lead's personal backup). Never store
+production private keys under `src-tauri/keys/production/`; that
+directory should contain only committed public material.
 
 ## References
 

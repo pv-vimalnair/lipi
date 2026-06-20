@@ -30,21 +30,24 @@
 //!
 //! ## What's *not* here
 //!
-//! - Streaming responses. 5c waits for the
-//!   full body, which is what the AI
-//!   model needs (a chunked response would
-//!   require multiple `ai://chunk` events
-//!   and the `toolLoop` flow would have to
-//!   resume mid-tool — 5d+).
-//! - Multipart uploads, cookies, redirects
-//!   past the default 10. 5c is the
-//!   "fetch-equivalent" surface; more
-//!   exotic HTTP shapes are 5d+.
-//! - DNS / TLS hardening beyond `reqwest`'s
-//!   defaults (we trust the OS resolver and
-//!   rustls). Same posture as 5b-1.
+//! - Streaming tool results. 5c returns one
+//!   bounded body string to the AI model.
+//!   Rust may stream the network response
+//!   internally to enforce that bound, but
+//!   it does not emit partial `ai://chunk`
+//!   events mid-tool.
+//! - Multipart uploads or cookies. Redirects
+//!   are not followed automatically because a
+//!   public allowlisted host can redirect to a
+//!   private network address.
+//! - Connect-time DNS pinning. We preflight-check
+//!   the requested host, literal IPs, and resolved
+//!   addresses before sending; a future hardening
+//!   pass can pin the actual socket address to fully
+//!   close DNS rebinding races.
 
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -64,6 +67,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// erroring out, so the model still gets
 /// something useful.
 pub const MAX_BODY_BYTES_DEFAULT: usize = 1024 * 1024;
+const TRUNCATED_MARKER: &str = "\n<truncated>";
 
 /// Public error type. Serialised to JS as
 /// `{kind: <discriminator>, message: <string>}`.
@@ -95,10 +99,7 @@ pub enum HttpRequestError {
     /// include the body (truncated) so the
     /// model can see the error payload.
     #[error("HTTP {status}: status was non-2xx")]
-    Non2xx {
-        status: u16,
-        body: String,
-    },
+    Non2xx { status: u16, body: String },
     /// The request did not finish in time.
     #[error("HTTP request timed out after {seconds}s")]
     Timeout { seconds: u64 },
@@ -168,6 +169,15 @@ pub struct HttpRequestArgs {
     /// 5d+ reason as `timeout_secs`.
     #[serde(default)]
     pub max_body_bytes: Option<usize>,
+    /// Per-tool host allowlist. The JS custom-tool executor
+    /// derives this from a static URL-template host, or the
+    /// user can set it explicitly for placeholder-based hosts.
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+    /// Explicit opt-in for localhost, private, link-local,
+    /// and metadata-address targets. Default false.
+    #[serde(default)]
+    pub allow_private_network: bool,
 }
 
 /// 5c: the public, testable implementation.
@@ -199,15 +209,13 @@ pub async fn http_request_impl(
             detail: format!("unsupported scheme `{scheme}`; only `http`/`https` allowed in 5c"),
         });
     }
-
     // 2. Validate method.
     let method_str = args.method.as_deref().unwrap_or("GET");
-    let method = Method::from_bytes(method_str.as_bytes()).map_err(|e| {
-        HttpRequestError::InvalidUrl {
+    let method =
+        Method::from_bytes(method_str.as_bytes()).map_err(|e| HttpRequestError::InvalidUrl {
             url: args.url.clone(),
             detail: format!("invalid method `{method_str}`: {e}"),
-        }
-    })?;
+        })?;
 
     // 3. Build headers.
     let mut header_map = HeaderMap::new();
@@ -218,14 +226,15 @@ pub async fn http_request_impl(
                 detail: e.to_string(),
             }
         })?;
-        let header_value = HeaderValue::from_str(value).map_err(|e| {
-            HttpRequestError::InvalidHeaderValue {
+        let header_value =
+            HeaderValue::from_str(value).map_err(|e| HttpRequestError::InvalidHeaderValue {
                 name: name.clone(),
                 detail: e.to_string(),
-            }
-        })?;
+            })?;
         header_map.insert(header_name, header_value);
     }
+
+    validate_url_host_policy(&parsed, &args).await?;
 
     // 4. Build request.
     let mut request = client.request(method, parsed).headers(header_map);
@@ -242,7 +251,9 @@ pub async fn http_request_impl(
     //    standard pattern.
     let send_fut = request.send();
     let response = match tokio::time::timeout(timeout, send_fut).await {
-        Ok(res) => res.map_err(|e| HttpRequestError::Network { detail: e.to_string() })?,
+        Ok(res) => res.map_err(|e| HttpRequestError::Network {
+            detail: e.to_string(),
+        })?,
         Err(_) => {
             return Err(HttpRequestError::Timeout {
                 seconds: timeout.as_secs(),
@@ -252,7 +263,7 @@ pub async fn http_request_impl(
 
     // 6. Extract headers BEFORE reading the
     //    body. `read_body_truncated` consumes
-    //    the response (via `.bytes()`), so we
+    //    the response stream, so we
     //    have to capture the headers first.
     //    We cap the count at 50 to keep the
     //    payload bounded.
@@ -261,12 +272,7 @@ pub async fn http_request_impl(
         .headers()
         .iter()
         .take(50)
-        .map(|(n, v)| {
-            (
-                n.as_str().to_string(),
-                v.to_str().unwrap_or("").to_string(),
-            )
-        })
+        .map(|(n, v)| (n.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
 
     // 7. Read the body (truncated).
@@ -288,34 +294,154 @@ pub async fn http_request_impl(
     })
 }
 
-/// Read the response body into a String,
-/// truncated to `max_body_bytes`. 5c MVP
-/// reads the *full* body first (capped at
-/// `max_body_bytes`) — we don't stream
-/// because the AI model wants the whole
-/// payload, and a 1 MiB cap keeps memory
-/// bounded.
-async fn read_body_truncated(response: Response, max_body_bytes: usize) -> String {
-    match response.bytes().await {
-        Ok(bytes) => {
-            let mut s = String::from_utf8_lossy(&bytes).into_owned();
-            if s.len() > max_body_bytes {
-                s.truncate(max_body_bytes);
-                s.push_str("\n<truncated>");
-            }
-            s
-        }
-        Err(_) => String::new(),
+async fn validate_url_host_policy(
+    parsed: &url::Url,
+    args: &HttpRequestArgs,
+) -> Result<(), HttpRequestError> {
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(HttpRequestError::InvalidUrl {
+            url: args.url.clone(),
+            detail: "credentials in HTTP tool URLs are not allowed".to_string(),
+        });
     }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| HttpRequestError::InvalidUrl {
+            url: args.url.clone(),
+            detail: "URL must include a host".to_string(),
+        })?;
+
+    if !host_is_allowed(host, &args.allowed_hosts) {
+        return Err(HttpRequestError::InvalidUrl {
+            url: args.url.clone(),
+            detail: format!("host `{host}` is not in this tool's allowedHosts list"),
+        });
+    }
+
+    if !args.allow_private_network {
+        if host_is_local_name(host) {
+            return Err(HttpRequestError::InvalidUrl {
+                url: args.url.clone(),
+                detail: format!(
+                    "host `{host}` is local/private; set allowPrivateNetwork for this tool to opt in"
+                ),
+            });
+        }
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            if ip_is_private_or_local(ip) {
+                return Err(HttpRequestError::InvalidUrl {
+                    url: args.url.clone(),
+                    detail: format!(
+                        "address `{ip}` is local/private; set allowPrivateNetwork for this tool to opt in"
+                    ),
+                });
+            }
+        } else {
+            let port = parsed.port_or_known_default().unwrap_or(80);
+            let resolved = tokio::net::lookup_host((host, port)).await.map_err(|e| {
+                HttpRequestError::Network {
+                    detail: format!("failed to resolve `{host}`: {e}"),
+                }
+            })?;
+            for socket in resolved {
+                let ip = socket.ip();
+                if ip_is_private_or_local(ip) {
+                    return Err(HttpRequestError::InvalidUrl {
+                        url: args.url.clone(),
+                        detail: format!(
+                            "host `{host}` resolved to local/private address `{ip}`; set allowPrivateNetwork for this tool to opt in"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn host_is_allowed(host: &str, allowed_hosts: &[String]) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    allowed_hosts.iter().any(|allowed| {
+        let allowed = allowed.trim().trim_end_matches('.').to_ascii_lowercase();
+        if allowed.is_empty() {
+            return false;
+        }
+        if let Some(suffix) = allowed.strip_prefix("*.") {
+            return host.ends_with(&format!(".{suffix}"));
+        }
+        host == allowed
+    })
+}
+
+fn host_is_local_name(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    host == "localhost" || host.ends_with(".localhost")
+}
+
+fn ip_is_private_or_local(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || octets[0] == 0
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || (octets[0] == 169 && octets[1] == 254)
+        }
+        IpAddr::V6(ip) => {
+            if let Some(mapped_v4) = ip.to_ipv4_mapped() {
+                return ip_is_private_or_local(IpAddr::V4(mapped_v4));
+            }
+            let segments = ip.segments();
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+        }
+    }
+}
+
+/// Stream the response body into a bounded
+/// buffer and stop reading as soon as
+/// `max_body_bytes` is reached.
+async fn read_body_truncated(mut response: Response, max_body_bytes: usize) -> String {
+    let mut bytes = Vec::with_capacity(max_body_bytes.min(8 * 1024));
+    let mut truncated = false;
+
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = max_body_bytes.saturating_sub(bytes.len());
+                if chunk.len() > remaining {
+                    bytes.extend_from_slice(&chunk[..remaining]);
+                    truncated = true;
+                    break;
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(_) => return String::new(),
+        }
+    }
+
+    let mut s = String::from_utf8_lossy(&bytes).into_owned();
+    if truncated {
+        s.push_str(TRUNCATED_MARKER);
+    }
+    s
 }
 
 /// 5c: public entry point called by the
 /// `#[tauri::command]` wrapper in `lib.rs`.
 /// The JS `toolRegistry` invokes this via
 /// `invoke('http_request', …)`.
-pub async fn http_request(
-    args: HttpRequestArgs,
-) -> Result<HttpRequestResult, HttpRequestError> {
+pub async fn http_request(args: HttpRequestArgs) -> Result<HttpRequestResult, HttpRequestError> {
     // Build a fresh client per call. 5c
     // MVP doesn't pool clients (the
     // reqwest client is cheap to build
@@ -325,8 +451,11 @@ pub async fn http_request(
     // long-lived `Client` managed by
     // Tauri state.
     let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| HttpRequestError::Network { detail: e.to_string() })?;
+        .map_err(|e| HttpRequestError::Network {
+            detail: e.to_string(),
+        })?;
     let timeout = args
         .timeout_secs
         .map(Duration::from_secs)
@@ -334,18 +463,6 @@ pub async fn http_request(
     let max_body_bytes = args.max_body_bytes.unwrap_or(MAX_BODY_BYTES_DEFAULT);
     http_request_impl(client, args, timeout, max_body_bytes).await
 }
-
-// We need a refactor: read headers BEFORE
-// reading the body. Let me fix this with a
-// proper helper. The bug above is that
-// `read_body_truncated` consumes the
-// response, so `response.headers()` is no
-// longer accessible.
-//
-// We patch the design: extract headers
-// from the response FIRST, then read the
-// body. The body-reading helper now takes
-// the pre-extracted header list.
 
 // --- Tests ------------------------------------------------------------
 
@@ -365,6 +482,23 @@ mod tests {
         Response::from(http_response)
     }
 
+    fn args_for_url(url: &str) -> HttpRequestArgs {
+        let allowed_host = url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_string()))
+            .unwrap_or_else(|| "example.com".to_string());
+        HttpRequestArgs {
+            url: url.to_string(),
+            method: None,
+            headers: HashMap::new(),
+            body: String::new(),
+            timeout_secs: None,
+            max_body_bytes: None,
+            allowed_hosts: vec![allowed_host],
+            allow_private_network: false,
+        }
+    }
+
     #[tokio::test]
     async fn read_body_truncated_handles_short_body() {
         let response = synthetic_response(200, &["hello world"]);
@@ -381,6 +515,23 @@ mod tests {
         assert!(s.ends_with("<truncated>"), "tail: {:?}", &s[s.len() - 20..]);
         // Body length <= cap + marker length + some slack.
         assert!(s.len() <= 1024 + "<truncated>".len() + 8);
+    }
+
+    #[tokio::test]
+    async fn read_body_truncated_drops_bytes_beyond_cap() {
+        let body = format!("{}TAIL_SHOULD_NOT_SURVIVE", "a".repeat(4096));
+        let response = synthetic_response(200, &[&body]);
+        let s = read_body_truncated(response, 128).await;
+        assert!(s.ends_with(TRUNCATED_MARKER));
+        assert!(!s.contains("TAIL_SHOULD_NOT_SURVIVE"));
+        assert!(s.len() <= 128 + TRUNCATED_MARKER.len());
+    }
+
+    #[tokio::test]
+    async fn read_body_truncated_zero_cap_returns_only_marker_for_non_empty_body() {
+        let response = synthetic_response(200, &["hello"]);
+        let s = read_body_truncated(response, 0).await;
+        assert_eq!(s, TRUNCATED_MARKER);
     }
 
     #[tokio::test]
@@ -414,14 +565,10 @@ mod tests {
                 body: String::new(),
                 timeout_secs: None,
                 max_body_bytes: None,
+                allowed_hosts: vec!["example.com".to_string()],
+                allow_private_network: false,
             };
-            http_request_impl(
-                client,
-                args,
-                DEFAULT_TIMEOUT,
-                MAX_BODY_BYTES_DEFAULT,
-            )
-            .await
+            http_request_impl(client, args, DEFAULT_TIMEOUT, MAX_BODY_BYTES_DEFAULT).await
         });
         assert!(matches!(result, Err(HttpRequestError::InvalidUrl { .. })));
     }
@@ -441,14 +588,10 @@ mod tests {
                 body: String::new(),
                 timeout_secs: None,
                 max_body_bytes: None,
+                allowed_hosts: vec!["example.com".to_string()],
+                allow_private_network: false,
             };
-            http_request_impl(
-                client,
-                args,
-                DEFAULT_TIMEOUT,
-                MAX_BODY_BYTES_DEFAULT,
-            )
-            .await
+            http_request_impl(client, args, DEFAULT_TIMEOUT, MAX_BODY_BYTES_DEFAULT).await
         });
         match result {
             Err(HttpRequestError::InvalidUrl { url, detail }) => {
@@ -478,15 +621,140 @@ mod tests {
                 body: String::new(),
                 timeout_secs: None,
                 max_body_bytes: None,
+                allowed_hosts: vec!["example.com".to_string()],
+                allow_private_network: false,
             };
-            http_request_impl(
-                client,
-                args,
-                DEFAULT_TIMEOUT,
-                MAX_BODY_BYTES_DEFAULT,
-            )
-            .await
+            http_request_impl(client, args, DEFAULT_TIMEOUT, MAX_BODY_BYTES_DEFAULT).await
         });
-        assert!(matches!(result, Err(HttpRequestError::InvalidHeaderName { .. })));
+        assert!(matches!(
+            result,
+            Err(HttpRequestError::InvalidHeaderName { .. })
+        ));
+    }
+
+    #[test]
+    fn host_allowlist_requires_exact_or_wildcard_match() {
+        assert!(host_is_allowed(
+            "api.example.com",
+            &["api.example.com".to_string()]
+        ));
+        assert!(host_is_allowed(
+            "api.example.com",
+            &["*.example.com".to_string()]
+        ));
+        assert!(!host_is_allowed(
+            "evil-example.com",
+            &["*.example.com".to_string()]
+        ));
+        assert!(!host_is_allowed(
+            "api.example.com",
+            &["api.other.com".to_string()]
+        ));
+    }
+
+    #[test]
+    fn rejects_host_outside_allowed_hosts_before_network() {
+        let args = HttpRequestArgs {
+            allowed_hosts: vec!["api.example.com".to_string()],
+            ..args_for_url("https://metadata.google.internal/computeMetadata/v1")
+        };
+        let parsed = url::Url::parse(&args.url).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(validate_url_host_policy(&parsed, &args))
+            .unwrap_err();
+        assert!(matches!(err, HttpRequestError::InvalidUrl { .. }));
+    }
+
+    #[test]
+    fn rejects_localhost_without_private_network_opt_in() {
+        let args = args_for_url("http://localhost:3000/status");
+        let parsed = url::Url::parse(&args.url).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(validate_url_host_policy(&parsed, &args))
+            .unwrap_err();
+        match err {
+            HttpRequestError::InvalidUrl { detail, .. } => {
+                assert!(detail.contains("allowPrivateNetwork"));
+            }
+            other => panic!("expected InvalidUrl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_private_literal_ip_without_private_network_opt_in() {
+        let args = args_for_url("http://192.168.1.1/status");
+        let parsed = url::Url::parse(&args.url).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(validate_url_host_policy(&parsed, &args))
+            .unwrap_err();
+        match err {
+            HttpRequestError::InvalidUrl { detail, .. } => {
+                assert!(detail.contains("allowPrivateNetwork"));
+            }
+            other => panic!("expected InvalidUrl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_ipv4_mapped_loopback_without_private_network_opt_in() {
+        let args = args_for_url("http://[::ffff:127.0.0.1]/status");
+        let parsed = url::Url::parse(&args.url).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(validate_url_host_policy(&parsed, &args))
+            .unwrap_err();
+        match err {
+            HttpRequestError::InvalidUrl { detail, .. } => {
+                assert!(detail.contains("allowPrivateNetwork"));
+            }
+            other => panic!("expected InvalidUrl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn allows_private_literal_ip_with_explicit_opt_in() {
+        let mut args = args_for_url("http://192.168.1.1/status");
+        args.allow_private_network = true;
+        let parsed = url::Url::parse(&args.url).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(validate_url_host_policy(&parsed, &args))
+            .unwrap();
+    }
+
+    #[test]
+    fn rejects_credentials_in_url() {
+        let args = args_for_url("https://user:pass@example.com/path");
+        let parsed = url::Url::parse(&args.url).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let err = rt
+            .block_on(validate_url_host_policy(&parsed, &args))
+            .unwrap_err();
+        match err {
+            HttpRequestError::InvalidUrl { detail, .. } => {
+                assert!(detail.contains("credentials"));
+            }
+            other => panic!("expected InvalidUrl, got {other:?}"),
+        }
     }
 }

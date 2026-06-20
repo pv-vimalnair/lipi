@@ -1,0 +1,943 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lipi — Dark IDE · Anime Sakura Theme</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #0d0e10;
+    --bg-2: #14171c;
+    --bg-3: #1a1e25;
+    --bg-4: #232831;
+    --line: #232831;
+    --line-2: #2a313c;
+    --text: #e6e8eb;
+    --text-dim: #aab1bb;
+    --text-muted: #6e7682;
+
+    /* Sakura palette — anime cherry blossom */
+    --sakura-1: #ffb7c5;   /* light pink */
+    --sakura-2: #ff6b9d;   /* hot pink */
+    --sakura-3: #e91e63;   /* magenta */
+    --sakura-4: #c026d3;   /* purple */
+    --sakura-glow: rgba(255, 107, 157, 0.4);
+    --sakura-soft: rgba(255, 107, 157, 0.14);
+
+    /* Sakura gradient — for SELECTED pills (like the Dribbble Design tab) */
+    --sakura-gradient: linear-gradient(135deg, #ffb7c5 0%, #ff6b9d 35%, #c026d3 100%);
+
+    /* Code syntax */
+    --code-keyword: #c678dd;
+    --code-string: #ff6b9d;
+    --code-variable: #56b6c2;
+    --code-number: #d19a66;
+    --code-comment: #6e7682;
+    --code-tag: #e06c75;
+    --code-attr: #ff6b9d;
+    --code-punc: #abb2bf;
+    --code-fn: #ffb7c5;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Outfit', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+    overflow: hidden;
+  }
+
+  /* === Page background: teal/green ambient + floating petals === */
+  .page {
+    width: 100vw;
+    height: 100vh;
+    background:
+      radial-gradient(ellipse 80% 60% at 50% 0%, rgba(255, 107, 157, 0.18) 0%, transparent 60%),
+      radial-gradient(ellipse 70% 80% at 50% 100%, rgba(20, 80, 70, 0.6) 0%, transparent 70%),
+      linear-gradient(180deg, #1a3a35 0%, #0d2624 50%, #061814 100%);
+    display: grid;
+    place-items: center;
+    padding: 32px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* === Floating sakura petals in the background === */
+  .petals {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 1;
+  }
+  .petal {
+    position: absolute;
+    top: -40px;
+    width: 18px; height: 18px;
+    opacity: 0.7;
+    animation: fall linear infinite;
+    filter: drop-shadow(0 0 6px var(--sakura-glow));
+  }
+  @keyframes fall {
+    0%   { transform: translate3d(0, 0, 0) rotate(0deg); opacity: 0; }
+    10%  { opacity: 0.8; }
+    90%  { opacity: 0.6; }
+    100% { transform: translate3d(80px, 105vh, 0) rotate(540deg); opacity: 0; }
+  }
+  .petal:nth-child(1)  { left:  4%; animation-duration: 18s; animation-delay:  0s; }
+  .petal:nth-child(2)  { left: 12%; animation-duration: 22s; animation-delay: -4s; width: 14px; height: 14px; }
+  .petal:nth-child(3)  { left: 22%; animation-duration: 16s; animation-delay: -8s; width: 20px; height: 20px; }
+  .petal:nth-child(4)  { left: 33%; animation-duration: 20s; animation-delay: -2s; }
+  .petal:nth-child(5)  { left: 44%; animation-duration: 24s; animation-delay: -12s; width: 16px; height: 16px; }
+  .petal:nth-child(6)  { left: 55%; animation-duration: 19s; animation-delay: -6s; }
+  .petal:nth-child(7)  { left: 66%; animation-duration: 23s; animation-delay: -10s; width: 22px; height: 22px; }
+  .petal:nth-child(8)  { left: 76%; animation-duration: 17s; animation-delay: -1s; }
+  .petal:nth-child(9)  { left: 86%; animation-duration: 21s; animation-delay: -7s; width: 15px; height: 15px; }
+  .petal:nth-child(10) { left: 94%; animation-duration: 25s; animation-delay: -3s; }
+
+  /* === The IDE window === */
+  .ide {
+    width: min(1600px, 100%);
+    height: min(950px, 100%);
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--bg);
+    box-shadow:
+      0 50px 100px rgba(0, 0, 0, 0.5),
+      0 20px 50px rgba(0, 0, 0, 0.3),
+      0 0 0 0.5px rgba(255, 183, 197, 0.08);
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    font-family: 'Outfit', system-ui, sans-serif;
+    color: var(--text);
+    position: relative;
+    z-index: 2;
+  }
+
+  /* === Top bar === */
+  .topbar {
+    display: flex; align-items: center;
+    padding: 0 16px;
+    background: var(--bg-2);
+    border-bottom: 0.5px solid var(--line);
+    gap: 16px;
+    position: relative;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 8px;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .brand .logo {
+    width: 22px; height: 22px;
+    background: var(--sakura-gradient);
+    border-radius: 6px;
+    display: grid; place-items: center;
+    position: relative;
+    box-shadow: 0 0 12px var(--sakura-glow);
+  }
+  .brand .logo svg { width: 14px; height: 14px; }
+  .brand .logo::after {
+    content: '';
+    position: absolute;
+    top: -1px; right: -1px;
+    width: 6px; height: 6px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 4px white;
+  }
+  .workspace {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    padding: 5px 10px;
+    border-radius: 6px;
+    background: var(--bg-3);
+    cursor: pointer;
+  }
+
+  /* === View tabs — sakura styled selected === */
+  .view-tabs {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex; gap: 2px;
+    background: var(--bg-3);
+    border-radius: 8px;
+    padding: 3px;
+    position: relative;
+  }
+  .view-tab {
+    padding: 5px 16px;
+    font-size: 12.5px;
+    color: var(--text-dim);
+    border-radius: 5px;
+    font-weight: 500;
+    position: relative;
+  }
+  .view-tab.active {
+    background: var(--sakura-gradient);
+    color: #2a0a1a;
+    font-weight: 700;
+    box-shadow:
+      0 0 0 1px rgba(255, 183, 197, 0.4),
+      0 0 16px var(--sakura-glow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  }
+  /* Sakura icon next to active tab */
+  .view-tab.active::after {
+    content: '🌸';
+    position: absolute;
+    top: -4px; right: -4px;
+    font-size: 10px;
+    filter: drop-shadow(0 0 4px var(--sakura-glow));
+  }
+
+  .topbar-right {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .avatar {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--sakura-gradient);
+    display: grid; place-items: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #2a0a1a;
+    box-shadow: 0 0 12px var(--sakura-glow);
+  }
+  .invite {
+    padding: 5px 12px;
+    background: var(--sakura-gradient);
+    color: #2a0a1a;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    box-shadow: 0 0 12px var(--sakura-glow);
+  }
+
+  /* === Body (4 columns) === */
+  .body {
+    display: grid;
+    grid-template-columns: 52px 220px 1fr 360px;
+    overflow: hidden;
+  }
+
+  /* === Far-left rail === */
+  .rail {
+    background: var(--bg-2);
+    border-right: 0.5px solid var(--line);
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    gap: 4px;
+  }
+  .rail-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: grid; place-items: center;
+    color: var(--text-dim);
+    font-size: 18px;
+    cursor: pointer;
+    position: relative;
+  }
+  .rail-icon:hover { color: var(--text); background: var(--bg-3); }
+  .rail-icon.active {
+    color: var(--sakura-2);
+    background: var(--sakura-soft);
+  }
+  .rail-icon.active::before {
+    content: '';
+    position: absolute;
+    left: -8px; top: 8px; bottom: 8px;
+    width: 2px;
+    background: var(--sakura-gradient);
+    border-radius: 0 2px 2px 0;
+    box-shadow: 0 0 8px var(--sakura-glow);
+  }
+  .rail .spacer { flex: 1; }
+  .rail-icon .badge {
+    position: absolute;
+    top: 4px; right: 4px;
+    min-width: 14px; height: 14px;
+    border-radius: 7px;
+    background: var(--sakura-gradient);
+    color: #2a0a1a;
+    font-size: 9px;
+    font-weight: 700;
+    display: grid; place-items: center;
+    padding: 0 3px;
+    box-shadow: 0 0 8px var(--sakura-glow);
+  }
+
+  /* === File tree === */
+  .tree-panel {
+    background: var(--bg-2);
+    border-right: 0.5px solid var(--line);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .tree-header {
+    display: flex; align-items: center;
+    padding: 10px 14px 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .tree-header .search {
+    margin-left: auto;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .tree {
+    flex: 1; overflow: auto;
+    padding: 4px 0 12px;
+    font-size: 13px;
+  }
+  .tree-row {
+    display: flex; align-items: center;
+    padding: 3px 14px 3px 8px;
+    cursor: pointer;
+    color: var(--text-dim);
+    gap: 4px;
+    user-select: none;
+  }
+  .tree-row:hover { background: var(--bg-3); color: var(--text); }
+  .tree-row .chev { width: 14px; opacity: 0.5; font-size: 10px; text-align: center; }
+  .tree-row .ico { width: 16px; font-size: 12px; text-align: center; }
+  .tree-row .name { font-size: 13px; }
+  /* ACTIVE file — sakura highlight */
+  .tree-row .name.active {
+    color: var(--sakura-2);
+    font-weight: 500;
+    text-shadow: 0 0 8px var(--sakura-glow);
+  }
+  .tree-section {
+    padding: 4px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-weight: 600;
+  }
+
+  /* === Editor === */
+  .editor {
+    display: flex; flex-direction: column;
+    background: var(--bg);
+    overflow: hidden;
+  }
+  .tabbar {
+    display: flex; align-items: end;
+    background: var(--bg-2);
+    border-bottom: 0.5px solid var(--line);
+    padding: 0 4px 0 12px;
+    overflow-x: auto;
+    flex-shrink: 0;
+  }
+  .edtab {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 9px 12px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    border-right: 0.5px solid var(--line);
+    cursor: pointer;
+    position: relative;
+    white-space: nowrap;
+  }
+  .edtab.active {
+    color: var(--text);
+    background: var(--bg);
+  }
+  .edtab.active::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: var(--sakura-gradient);
+    box-shadow: 0 0 8px var(--sakura-glow);
+  }
+  .edtab .ico-dot { width: 8px; height: 8px; border-radius: 2px; }
+  .edtab.active .ico-dot { background: var(--sakura-2); box-shadow: 0 0 6px var(--sakura-glow); }
+  .edtab .close { margin-left: 4px; color: var(--text-muted); width: 14px; height: 14px; border-radius: 3px; display: grid; place-items: center; font-size: 14px; line-height: 1; }
+  .edtab .add { color: var(--text-muted); padding: 9px 10px; cursor: pointer; }
+
+  .tabbar-right {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 4px; padding: 0 8px;
+  }
+  .zoom { padding: 4px 8px; font-size: 11px; color: var(--text-dim); border-radius: 4px; }
+  .edtab-action { width: 28px; height: 28px; display: grid; place-items: center; color: var(--text-dim); border-radius: 4px; }
+
+  .code-body {
+    flex: 1; overflow: auto;
+    padding: 14px 0 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+  .code-row { display: grid; grid-template-columns: 56px 1fr; }
+  .gutter { text-align: right; padding-right: 16px; color: var(--text-muted); user-select: none; }
+  .src { padding-left: 12px; white-space: pre; }
+  .kw { color: var(--code-keyword); }
+  .str { color: var(--code-string); }
+  .var { color: var(--code-variable); }
+  .num { color: var(--code-number); }
+  .com { color: var(--code-comment); font-style: italic; }
+  .tag { color: var(--code-tag); }
+  .attr { color: var(--code-attr); }
+  .punc { color: var(--code-punc); }
+  .fn { color: var(--code-fn); }
+  .caret {
+    display: inline-block;
+    width: 2px; height: 16px;
+    background: var(--sakura-2);
+    vertical-align: text-bottom;
+    margin-left: 1px;
+    animation: blink 1.2s steps(1) infinite;
+    box-shadow: 0 0 4px var(--sakura-glow);
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* === Mavis panel === */
+  .ai {
+    background: var(--bg-2);
+    border-left: 0.5px solid var(--line);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .ai-header {
+    display: flex; align-items: center;
+    padding: 12px 16px;
+    border-bottom: 0.5px solid var(--line);
+  }
+  .ai-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .ai-chat-btn {
+    margin-left: auto;
+    padding: 5px 12px;
+    background: var(--sakura-gradient);
+    color: #2a0a1a;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    display: inline-flex; align-items: center; gap: 5px;
+    box-shadow: 0 0 12px var(--sakura-glow);
+  }
+
+  .ai-body {
+    flex: 1; overflow: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .ai-msg {
+    background: var(--bg-3);
+    border: 0.5px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+    color: var(--text);
+    line-height: 1.55;
+  }
+  .ai-msg .file-card {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg);
+    border: 0.5px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .ai-msg .file-card .ico {
+    width: 28px; height: 32px;
+    background: var(--sakura-gradient);
+    border-radius: 4px;
+    display: grid; place-items: center;
+    color: #2a0a1a;
+    font-size: 9px;
+    font-weight: 700;
+  }
+  .ai-msg .file-card .name { font-size: 12.5px; font-weight: 500; }
+  .ai-msg .file-card .size { font-size: 11px; color: var(--text-muted); }
+
+  .reasoning-toggle {
+    color: var(--text-dim); font-size: 12px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+
+  .action-row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .action-chip {
+    padding: 5px 12px;
+    border: 0.5px solid var(--sakura-2);
+    color: var(--sakura-2);
+    font-size: 12px; font-weight: 500;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .action-chip:hover { background: var(--sakura-soft); }
+
+  /* Diff blocks — dark */
+  .diff-block {
+    background: var(--bg);
+    border: 0.5px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+  }
+  .diff-block .head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-3);
+    border-bottom: 0.5px solid var(--line);
+    font-family: 'Outfit', system-ui, sans-serif;
+    font-size: 11px; color: var(--text-dim); font-weight: 500;
+  }
+  .diff-block .head .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .diff-block.before .head .dot { background: #e06c75; }
+  .diff-block.after .head .dot { background: var(--sakura-2); }
+  .diff-block .body { padding: 8px 12px; color: var(--text); white-space: pre; }
+  .diff-block .body .minus { color: #e06c75; }
+  .diff-block .body .plus { color: var(--sakura-2); }
+
+  .ai-action-row { display: flex; gap: 8px; align-items: center; }
+  .ai-btn {
+    padding: 7px 14px;
+    background: var(--bg-3);
+    border: 0.5px solid var(--line);
+    color: var(--text);
+    font-size: 12.5px; font-weight: 500;
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  /* APPLY button — sakura gradient with cherry blossom decoration */
+  .ai-btn.primary {
+    background: var(--sakura-gradient);
+    color: #2a0a1a;
+    border-color: transparent;
+    font-weight: 700;
+    box-shadow: 0 0 16px var(--sakura-glow), inset 0 1px 0 rgba(255,255,255,0.4);
+    position: relative;
+  }
+  .ai-btn.primary::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: 6px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.4), transparent 50%, rgba(255,255,255,0.2));
+    z-index: -1;
+  }
+
+  .ai-input-wrap {
+    padding: 12px 16px;
+    border-top: 0.5px solid var(--line);
+    background: var(--bg-2);
+  }
+  .ai-input {
+    background: var(--bg-3);
+    border: 0.5px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+  .ai-input .send {
+    margin-left: auto;
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    background: var(--sakura-gradient);
+    display: grid; place-items: center;
+    color: #2a0a1a;
+    box-shadow: 0 0 8px var(--sakura-glow);
+  }
+  .ai-toolbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 4px; font-size: 12px;
+  }
+  .ai-toolbar .ic-btn {
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    color: var(--text-dim);
+    border-radius: 4px; cursor: pointer;
+  }
+  .ai-toolbar .mode {
+    margin-left: 4px;
+    padding: 4px 12px;
+    background: var(--sakura-soft);
+    border: 0.5px solid var(--sakura-2);
+    border-radius: 6px;
+    color: var(--sakura-2);
+    display: inline-flex; align-items: center; gap: 6px;
+    font-weight: 500;
+  }
+  .ai-toolbar .mode .pulse {
+    width: 6px; height: 6px;
+    background: var(--sakura-2);
+    border-radius: 50%;
+    box-shadow: 0 0 6px var(--sakura-glow);
+  }
+  .ai-toolbar .send-btn {
+    margin-left: auto;
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    background: var(--bg-3);
+    display: grid; place-items: center;
+    color: var(--text-dim);
+  }
+
+  /* === Legend === */
+  .legend {
+    position: fixed;
+    bottom: 16px; left: 16px;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(20px);
+    border: 0.5px solid rgba(255, 107, 157, 0.3);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: white;
+    font-size: 11px;
+    z-index: 100;
+  }
+  .legend b { color: var(--sakura-2); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Floating sakura petals -->
+  <div class="petals">
+    <svg class="petal" style="left:4%" viewBox="0 0 24 24"><g fill="url(#sakuraG)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g><defs><linearGradient id="sakuraG" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffb7c5"/><stop offset="1" stop-color="#ff6b9d"/></linearGradient></defs></svg>
+    <svg class="petal" style="left:12%" viewBox="0 0 24 24"><g fill="url(#sakuraG2)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g><defs><linearGradient id="sakuraG2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffc8d4"/><stop offset="1" stop-color="#ff6b9d"/></linearGradient></defs></svg>
+    <svg class="petal" style="left:22%" viewBox="0 0 24 24"><g fill="url(#sakuraG3)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g><defs><linearGradient id="sakuraG3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffb7c5"/><stop offset="1" stop-color="#c026d3"/></linearGradient></defs></svg>
+    <svg class="petal" style="left:33%" viewBox="0 0 24 24"><g fill="url(#sakuraG)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g></svg>
+    <svg class="petal" style="left:44%" viewBox="0 0 24 24"><g fill="url(#sakuraG2)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g></svg>
+    <svg class="petal" style="left:55%" viewBox="0 0 24 24"><g fill="url(#sakuraG3)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g></svg>
+    <svg class="petal" style="left:66%" viewBox="0 0 24 24"><g fill="url(#sakuraG)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g></svg>
+    <svg class="petal" style="left:76%" viewBox="0 0 24 24"><g fill="url(#sakuraG2)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g></svg>
+    <svg class="petal" style="left:86%" viewBox="0 0 24 24"><g fill="url(#sakuraG3)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g></svg>
+    <svg class="petal" style="left:94%" viewBox="0 0 24 24"><g fill="url(#sakuraG)"><circle cx="12" cy="5" r="4.5"/><circle cx="19" cy="12" r="4.5"/><circle cx="12" cy="19" r="4.5"/><circle cx="5" cy="12" r="4.5"/></g></svg>
+  </div>
+
+  <div class="ide">
+
+    <!-- Top bar -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">
+          <svg viewBox="0 0 24 24" fill="#2a0a1a"><circle cx="12" cy="5" r="3.5"/><circle cx="19" cy="12" r="3.5"/><circle cx="12" cy="19" r="3.5"/><circle cx="5" cy="12" r="3.5"/><circle cx="12" cy="12" r="2" fill="#fff5f7"/></svg>
+        </div>
+        <span>Lipi</span>
+      </div>
+      <div class="workspace">
+        <span>lipi</span>
+        <span class="chev">▾</span>
+      </div>
+
+      <!-- View tabs with sakura selected state -->
+      <div class="view-tabs">
+        <div class="view-tab">Preview</div>
+        <div class="view-tab">Design</div>
+        <div class="view-tab active">Code</div>
+      </div>
+
+      <div class="topbar-right">
+        <div class="avatar">V</div>
+        <div class="invite">Invite</div>
+      </div>
+    </div>
+
+    <!-- Body -->
+    <div class="body">
+
+      <!-- Far-left rail -->
+      <div class="rail">
+        <div class="rail-icon active" title="Explorer">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-6l-2-2H5a2 2 0 0 0-2 2z"/></svg>
+        </div>
+        <div class="rail-icon" title="Search">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+        </div>
+        <div class="rail-icon" title="Source Control">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7"/><path d="M18 9.5c0-2-2-3.5-4-3.5s-4 1.5-4 3.5 2 3.5 4 3.5 4 1.5 4 3.5"/></svg>
+          <span class="badge">3</span>
+        </div>
+        <div class="rail-icon" title="Run & Debug">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </div>
+        <div class="rail-icon" title="Extensions">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        </div>
+        <div class="rail-icon" title="Mavis">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+        <div class="spacer"></div>
+        <div class="rail-icon" title="Settings">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </div>
+      </div>
+
+      <!-- File tree -->
+      <div class="tree-panel">
+        <div class="tree-header">
+          <span>Explorer</span>
+          <span class="search">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          </span>
+        </div>
+        <div class="tree">
+          <div class="tree-section">Open Editors</div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">tokens.css</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">secrets_strongho...</span>
+          </div>
+
+          <div class="tree-section" style="margin-top: 8px">lipi</div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="chev">▾</span>
+            <span class="ico">📁</span>
+            <span class="name">src-tauri</span>
+          </div>
+          <div class="tree-row" style="padding-left: 38px">
+            <span class="chev">▾</span>
+            <span class="ico">📁</span>
+            <span class="name">src</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="ico">📄</span>
+            <span class="name active">🌸 tokens.css</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="ico">📄</span>
+            <span class="name">secrets_stronghold_key_bridge.rs</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="ico">📄</span>
+            <span class="name">stt_capture.rs</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="ico">📄</span>
+            <span class="name">stt_inference.rs</span>
+          </div>
+          <div class="tree-row" style="padding-left: 38px">
+            <span class="chev">▾</span>
+            <span class="ico">📁</span>
+            <span class="name">screens</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="chev">▸</span>
+            <span class="ico">📁</span>
+            <span class="name">EditorWorkspace</span>
+          </div>
+          <div class="tree-row" style="padding-left: 54px">
+            <span class="chev">▸</span>
+            <span class="ico">📁</span>
+            <span class="name">SettingsProvider</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="chev">▸</span>
+            <span class="ico">📁</span>
+            <span class="name">src</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">package.json</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">Cargo.toml</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">tauri.conf.json</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">.gitignore</span>
+          </div>
+          <div class="tree-row" style="padding-left: 22px">
+            <span class="ico">📄</span>
+            <span class="name">README.md</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Editor -->
+      <div class="editor">
+        <div class="tabbar">
+          <div class="edtab active">
+            <span class="ico-dot"></span>
+            <span>tokens.css</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab">
+            <span class="ico-dot" style="background: var(--code-string)"></span>
+            <span>secrets_stronghold_key_bridge.rs</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab">
+            <span class="ico-dot" style="background: var(--code-string)"></span>
+            <span>ChatPanel.tsx</span>
+            <span class="close">×</span>
+          </div>
+          <div class="edtab add">+</div>
+          <div class="tabbar-right">
+            <div class="zoom">88% ▾</div>
+            <div class="edtab-action" title="Split">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="1"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            </div>
+            <div class="edtab-action" title="More">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="code-body">
+<div class="code-row"><div class="gutter">1</div><div class="src"><span class="com">/*</span></div></div>
+<div class="code-row"><div class="gutter">2</div><div class="src"><span class="com"> * Apple Liquid Glass — design tokens (port from WWDC25)</span></div></div>
+<div class="code-row"><div class="gutter">3</div><div class="src"><span class="com"> * The single source of truth for Lipi's design system.</span></div></div>
+<div class="code-row"><div class="gutter">4</div><div class="src"><span class="com"> */</span></div></div>
+<div class="code-row"><div class="gutter">5</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">6</div><div class="src"><span class="kw">:root</span> <span class="punc">{</span></div></div>
+<div class="code-row"><div class="gutter">7</div><div class="src">  <span class="com">/* === Glass surfaces (translucent body) === */</span></div></div>
+<div class="code-row"><div class="gutter">8</div><div class="src">  <span class="attr">--glass-bg</span>:           <span class="str">rgba(255, 255, 255, 0.55)</span>;</div></div>
+<div class="code-row"><div class="gutter">9</div><div class="src">  <span class="attr">--glass-bg-strong</span>:    <span class="str">rgba(255, 255, 255, 0.72)</span>;</div></div>
+<div class="code-row"><div class="gutter">10</div><div class="src">  <span class="attr">--glass-bg-subtle</span>:    <span class="str">rgba(255, 255, 255, 0.40)</span>;</div></div>
+<div class="code-row"><div class="gutter">11</div><div class="src">  <span class="attr">--glass-bg-tinted</span>:    <span class="str">rgba(37, 99, 235, 0.14)</span>;</div></div>
+<div class="code-row"><div class="gutter">12</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">13</div><div class="src">  <span class="com">/* === Sakura theme (anime) === */</span></div></div>
+<div class="code-row"><div class="gutter">14</div><div class="src">  <span class="attr">--sakura-1</span>: <span class="str">#ffb7c5</span>;  <span class="com">/* light pink */</span></div></div>
+<div class="code-row"><div class="gutter">15</div><div class="src">  <span class="attr">--sakura-2</span>: <span class="str">#ff6b9d</span>;  <span class="com">/* hot pink */</span></div></div>
+<div class="code-row"><div class="gutter">16</div><div class="src">  <span class="attr">--sakura-3</span>: <span class="str">#e91e63</span>;  <span class="com">/* magenta */</span></div></div>
+<div class="code-row"><div class="gutter">17</div><div class="src">  <span class="attr">--sakura-4</span>: <span class="str">#c026d3</span>;  <span class="com">/* purple */</span></div></div>
+<div class="code-row"><div class="gutter">18</div><div class="src">  <span class="attr">--sakura-gradient</span>: <span class="str">linear-gradient(135deg, #ffb7c5, #ff6b9d 35%, #c026d3)</span>;</div></div>
+<div class="code-row"><div class="gutter">19</div><div class="src">  <span class="attr">--sakura-glow</span>: <span class="str">rgba(255, 107, 157, 0.4)</span>;</div></div>
+<div class="code-row"><div class="gutter">20</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">21</div><div class="src">  <span class="com">/* === Glass blur (illumination) === */</span></div></div>
+<div class="code-row"><div class="gutter">22</div><div class="src">  <span class="attr">--glass-blur</span>:         <span class="str">blur(30px) saturate(180%)</span>;</div></div>
+<div class="code-row"><div class="gutter">23</div><div class="src">  <span class="attr">--glass-blur-subtle</span>:  <span class="str">blur(15px) saturate(180%)</span>;</div></div>
+<div class="code-row"><div class="gutter">24</div><div class="src"></div></div>
+<div class="code-row"><div class="gutter">25</div><div class="src">  <span class="com">/* === Geometry (squircle) === */</span></div></div>
+<div class="code-row"><div class="gutter">26</div><div class="src">  <span class="attr">--radius-glass</span>:       <span class="num">24px</span>;</div></div>
+<div class="code-row"><div class="gutter">27</div><div class="src">  <span class="attr">--radius-control</span>:     <span class="num">12px</span>;</div></div>
+<div class="code-row"><div class="gutter">28</div><div class="src"><span class="punc">}</span><span class="caret"></span></div></div>
+        </div>
+      </div>
+
+      <!-- Mavis panel -->
+      <div class="ai">
+        <div class="ai-header">
+          <div class="ai-title">Mavis</div>
+          <div class="ai-chat-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Chat
+          </div>
+        </div>
+
+        <div class="ai-body">
+          <div class="ai-msg">
+            <div class="file-card">
+              <div class="ico">FIG</div>
+              <div>
+                <div class="name">sakura-theme.fig</div>
+                <div class="size">182.4 KB</div>
+              </div>
+            </div>
+            <div>Apply the cherry blossom (sakura) anime theme to all selected states. Pink-to-magenta gradient with soft glow, floating petals in ambient.</div>
+          </div>
+
+          <div class="reasoning-toggle">
+            <span class="chev">▸</span> Reasoning
+          </div>
+
+          <div class="action-row">
+            <div class="action-chip">🌸 Add sakura tokens</div>
+            <div class="action-chip">Apply globally</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:12.5px;color:var(--text);font-weight:500">Theme · Add sakura selection style</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.5">
+              Every selected state (view tab, active file, Apply, action chips) gets the sakura gradient + a soft pink glow. Code editor caret turns pink. Background gets floating petals.
+            </div>
+          </div>
+
+          <div class="diff-block before">
+            <div class="head"><span class="dot"></span> Before · tokens.css</div>
+            <div class="body"><span style="color:#e06c75">-</span> <span style="color:#9cdcfe">--accent</span>: <span style="color:#ce9178">#4f8cff</span>;
+<span style="color:#e06c75">-</span> <span style="color:#9cdcfe">--color-success</span>: <span style="color:#ce9178">#4caf82</span>;</div>
+          </div>
+
+          <div class="diff-block after">
+            <div class="head"><span class="dot"></span> After · tokens.css</div>
+            <div class="body"><span style="color:#ff6b9d">+</span> <span style="color:#9cdcfe">--sakura-gradient</span>:
+<span style="color:#ff6b9d">+</span>   <span style="color:#ce9178">linear-gradient(135deg, #ffb7c5, #ff6b9d, #c026d3)</span>;
+<span style="color:#ff6b9d">+</span> <span style="color:#9cdcfe">--sakura-glow</span>: <span style="color:#ce9178">rgba(255, 107, 157, 0.4)</span>;</div>
+          </div>
+
+          <div class="ai-action-row">
+            <div class="ai-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              Explain
+            </div>
+            <div class="ai-btn">Cancel</div>
+            <div class="ai-btn primary" style="margin-left:auto">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              🌸 Apply
+            </div>
+          </div>
+        </div>
+
+        <div class="ai-input-wrap">
+          <div class="ai-input">
+            <span>Ask a follow-up...</span>
+            <div class="send">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </div>
+          </div>
+          <div class="ai-toolbar">
+            <div class="ic-btn" title="Attach">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </div>
+            <div class="ic-btn" title="Voice">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+            </div>
+            <div class="mode">
+              <span class="pulse"></span>
+              🌸 Sakura
+            </div>
+            <div class="send-btn">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="legend">
+    <b>Lipi · Anime Sakura</b> · cherry blossom selected states · floating petals ambient
+  </div>
+</div>
+</body>
+</html>

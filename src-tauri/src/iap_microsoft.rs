@@ -210,24 +210,36 @@ fn parse_iso8601_to_unix(s: &str) -> Result<i64, MicrosoftError> {
             detail: format!("date {s:?} is too short for ISO 8601"),
         });
     }
-    let year: i64 = s[0..4].parse().map_err(|e| MicrosoftError::InvalidResponse {
-        detail: format!("invalid year in {s:?}: {e}"),
-    })?;
-    let month: i64 = s[5..7].parse().map_err(|e| MicrosoftError::InvalidResponse {
-        detail: format!("invalid month in {s:?}: {e}"),
-    })?;
-    let day: i64 = s[8..10].parse().map_err(|e| MicrosoftError::InvalidResponse {
-        detail: format!("invalid day in {s:?}: {e}"),
-    })?;
-    let hour: i64 = s[11..13].parse().map_err(|e| MicrosoftError::InvalidResponse {
-        detail: format!("invalid hour in {s:?}: {e}"),
-    })?;
-    let minute: i64 = s[14..16].parse().map_err(|e| MicrosoftError::InvalidResponse {
-        detail: format!("invalid minute in {s:?}: {e}"),
-    })?;
-    let second: i64 = s[17..19].parse().map_err(|e| MicrosoftError::InvalidResponse {
-        detail: format!("invalid second in {s:?}: {e}"),
-    })?;
+    let year: i64 = s[0..4]
+        .parse()
+        .map_err(|e| MicrosoftError::InvalidResponse {
+            detail: format!("invalid year in {s:?}: {e}"),
+        })?;
+    let month: i64 = s[5..7]
+        .parse()
+        .map_err(|e| MicrosoftError::InvalidResponse {
+            detail: format!("invalid month in {s:?}: {e}"),
+        })?;
+    let day: i64 = s[8..10]
+        .parse()
+        .map_err(|e| MicrosoftError::InvalidResponse {
+            detail: format!("invalid day in {s:?}: {e}"),
+        })?;
+    let hour: i64 = s[11..13]
+        .parse()
+        .map_err(|e| MicrosoftError::InvalidResponse {
+            detail: format!("invalid hour in {s:?}: {e}"),
+        })?;
+    let minute: i64 = s[14..16]
+        .parse()
+        .map_err(|e| MicrosoftError::InvalidResponse {
+            detail: format!("invalid minute in {s:?}: {e}"),
+        })?;
+    let second: i64 = s[17..19]
+        .parse()
+        .map_err(|e| MicrosoftError::InvalidResponse {
+            detail: format!("invalid second in {s:?}: {e}"),
+        })?;
     // Days from Unix epoch (1970-01-01) to the
     // given year-month-day. This is a simplified
     // proleptic Gregorian calendar calculation
@@ -274,9 +286,12 @@ pub fn validate_microsoft_response(
     if let Some(code) = &response.error_code {
         return Err(MicrosoftError::ErrorResponse { code: code.clone() });
     }
-    let product_id = response.product_id.clone().ok_or(MicrosoftError::InvalidResponse {
-        detail: "missing <ProductId> in response".to_string(),
-    })?;
+    let product_id = response
+        .product_id
+        .clone()
+        .ok_or(MicrosoftError::InvalidResponse {
+            detail: "missing <ProductId> in response".to_string(),
+        })?;
     let expected_product_id = expected_product_id_for_plan(plan);
     if product_id != expected_product_id {
         return Err(MicrosoftError::ProductIdMismatch {
@@ -284,12 +299,16 @@ pub fn validate_microsoft_response(
             got: product_id,
         });
     }
-    let purchased_at = response.purchased_at_unix.ok_or(MicrosoftError::InvalidResponse {
-        detail: "missing or invalid <PurchaseDate> in response".to_string(),
-    })?;
-    let expires_at = response.expires_at_unix.ok_or(MicrosoftError::InvalidResponse {
-        detail: "missing or invalid <ExpirationDate> in response".to_string(),
-    })?;
+    let purchased_at = response
+        .purchased_at_unix
+        .ok_or(MicrosoftError::InvalidResponse {
+            detail: "missing or invalid <PurchaseDate> in response".to_string(),
+        })?;
+    let expires_at = response
+        .expires_at_unix
+        .ok_or(MicrosoftError::InvalidResponse {
+            detail: "missing or invalid <ExpirationDate> in response".to_string(),
+        })?;
     if purchased_at > now_unix_secs {
         return Err(MicrosoftError::FuturePurchase {
             purchased_at,
@@ -372,8 +391,12 @@ impl MicrosoftError {
             MicrosoftError::AzureCredentialsMissing => "iap-azure-credentials-missing".to_string(),
             MicrosoftError::OAuthFailed { detail } => format!("iap-oauth-failed: {detail}"),
             MicrosoftError::NetworkError { detail } => format!("iap-network-error: {detail}"),
-            MicrosoftError::InvalidResponse { detail } => format!("iap-malformed-response: {detail}"),
-            MicrosoftError::ErrorResponse { code } => format!("iap-rejected-by-microsoft: Microsoft error code {code}"),
+            MicrosoftError::InvalidResponse { detail } => {
+                format!("iap-malformed-response: {detail}")
+            }
+            MicrosoftError::ErrorResponse { code } => {
+                format!("iap-rejected-by-microsoft: Microsoft error code {code}")
+            }
             MicrosoftError::ProductIdMismatch { expected, got } => {
                 format!("iap-product-id-mismatch: expected {expected:?} for this plan, got {got:?}")
             }
@@ -461,9 +484,12 @@ pub async fn verify_microsoft_receipt(
             detail: format!("Microsoft returned HTTP {status}"),
         });
     }
-    let body = response.text().await.map_err(|e| MicrosoftError::InvalidResponse {
-        detail: format!("failed to read response body: {e}"),
-    })?;
+    let body = response
+        .text()
+        .await
+        .map_err(|e| MicrosoftError::InvalidResponse {
+            detail: format!("failed to read response body: {e}"),
+        })?;
     let parsed = parse_microsoft_response(&body);
     validate_microsoft_response(&parsed, plan, now_unix_secs)
 }
@@ -656,7 +682,9 @@ mod tests {
 
     #[test]
     fn microsoft_error_reason_for_network_error() {
-        let err = MicrosoftError::NetworkError { detail: "connection refused".to_string() };
+        let err = MicrosoftError::NetworkError {
+            detail: "connection refused".to_string(),
+        };
         let reason = err.reason();
         assert!(reason.starts_with("iap-network-error:"));
     }

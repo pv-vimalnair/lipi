@@ -55,6 +55,8 @@ const HTTP_TEMPLATE: LipiToolEntry = {
   method: 'GET',
   headers: {},
   body: '',
+  allowedHosts: ['api.example.com'],
+  allowPrivateNetwork: false,
   argsSpec: [
     { name: 'path', type: 'string', description: 'URL path.' },
   ],
@@ -163,7 +165,7 @@ export function CustomToolEditor({
       useCustomToolsStore.setState({ lastError: null });
     }
     if (isEditing && existing) {
-      await updateTool(parsed as LipiToolEntry);
+      await updateTool(parsed as LipiToolEntry, existing.name);
     } else {
       await addTool(parsed as LipiToolEntry);
     }

@@ -470,11 +470,9 @@ pub async fn start_listening(
     // device may not *support* 16 kHz capture). Trusting
     // the device default + resampling is the safer
     // cross-platform choice.
-    let config = device
-        .default_input_config()
-        .map_err(|e| SttError::Io {
-            message: format!("failed to query default input config: {e}"),
-        })?;
+    let config = device.default_input_config().map_err(|e| SttError::Io {
+        message: format!("failed to query default input config: {e}"),
+    })?;
     let sample_format = config.sample_format();
     let source_hz = config.sample_rate().0;
     let channels = config.channels() as usize;
@@ -645,8 +643,7 @@ where
                 // ±1.0. That's exactly the convention
                 // whisper expects.
                 let mono = downmix_to_mono_typed(data, channels);
-                let mut out =
-                    Vec::with_capacity(resampler.output_capacity_for(mono.len()));
+                let mut out = Vec::with_capacity(resampler.output_capacity_for(mono.len()));
                 resampler.process(&mono, &mut out);
                 if !out.is_empty() {
                     if let Ok(mut guard) = buffer_clone.lock() {
@@ -660,9 +657,7 @@ where
             None,
         )
         .map_err(|e| SttError::Io {
-            message: format!(
-                "failed to build input stream for sample format: {e}"
-            ),
+            message: format!("failed to build input stream for sample format: {e}"),
         })?;
     Ok(SendStream(stream))
 }
@@ -692,10 +687,7 @@ where
     f32: dasp_sample::conv::FromSample<T>,
 {
     if channels == 1 {
-        return interleaved
-            .iter()
-            .map(|&s| s.to_sample::<f32>())
-            .collect();
+        return interleaved.iter().map(|&s| s.to_sample::<f32>()).collect();
     }
     let frame_count = interleaved.len() / channels;
     let mut mono = Vec::with_capacity(frame_count);
@@ -761,10 +753,7 @@ fn downmix_to_mono(interleaved: &[f32], channels: usize) -> Vec<f32> {
 /// a previous explicit stop). The `voice/store` on the
 /// JS side can rely on "at most one transcript event per
 /// session" without tracking the stop's success.
-pub async fn stop_listening(
-    app: &AppHandle,
-    session_id: &str,
-) -> Result<(), SttError> {
+pub async fn stop_listening(app: &AppHandle, session_id: &str) -> Result<(), SttError> {
     let registry = get_registry(app)?;
     // Step 1-5: pull the session out of the registry and
     // drain the buffer. We do this in a single `lock()` so
@@ -888,9 +877,7 @@ fn dispatch_inference(audio: &[f32]) -> String {
         // on the default build.
         crate::stt_inference::run_inference(audio).unwrap_or_else(|e| {
             eprintln!("[stt_capture] whisper inference failed: {e}");
-            format!(
-                "(whisper inference failed: {e} — see stderr for the full error)"
-            )
+            format!("(whisper inference failed: {e} — see stderr for the full error)")
         })
     }
     #[cfg(not(feature = "m2c-native"))]
@@ -1042,10 +1029,7 @@ mod tests {
         // The output should stay in [-1.0, 1.0] (no
         // clipping from interpolation).
         for &s in &out {
-            assert!(
-                (-1.0..=1.0).contains(&s),
-                "out-of-range sample: {s}"
-            );
+            assert!((-1.0..=1.0).contains(&s), "out-of-range sample: {s}");
         }
     }
 
@@ -1196,10 +1180,7 @@ mod tests {
         // that doesn't exist must return `None` so
         // `stop_listening` can decide "nothing to do."
         let registry: SessionRegistry = Arc::new(Mutex::new(HashMap::new()));
-        let removed = registry
-            .lock()
-            .unwrap()
-            .remove("nonexistent");
+        let removed = registry.lock().unwrap().remove("nonexistent");
         assert!(removed.is_none());
     }
 
@@ -1217,8 +1198,7 @@ mod tests {
 
     #[test]
     fn default_max_duration_yields_a_manageable_buffer() {
-        let max_samples =
-            (DEFAULT_MAX_DURATION_MS as usize) * (WHISPER_SAMPLES_PER_MS as usize);
+        let max_samples = (DEFAULT_MAX_DURATION_MS as usize) * (WHISPER_SAMPLES_PER_MS as usize);
         let buffer_bytes = max_samples * std::mem::size_of::<f32>();
         assert!(buffer_bytes < 4 * 1024 * 1024, "buffer should be < 4 MB");
     }
@@ -1262,6 +1242,7 @@ mod tests {
 
     // --- dispatch_inference tests --------------------------------------
 
+    #[cfg(not(feature = "m2c-native"))]
     #[test]
     fn dispatch_inference_includes_sample_count_in_stub_mode() {
         // The default-build stub marker must include
@@ -1277,6 +1258,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "m2c-native"))]
     #[test]
     fn dispatch_inference_handles_empty_audio() {
         // The stub marker should still produce *some*

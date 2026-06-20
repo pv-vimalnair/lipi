@@ -43,14 +43,10 @@
 //!   `<app_local_data_dir>/lipi.stronghold.hold`.
 //!   The `app_local_data_dir()` is platform-correct
 //!   (Android: `/data/data/app.lipi.ide/files/`).
-//! - **Encryption key** — `KeyProvider::try_from` with
-//!   a 32-byte buffer. The buffer is a **hardcoded
-//!   placeholder** for v1 (the v1 password-flow design
-//!   — derive from Android Keystore, per-install random,
-//!   or user-entered prompt — is the future Mac / Linux
-//!   session's task; the v1 placeholder matches the
-//!   `tauri-plugin-stronghold` plugin's own convention
-//!   of a closure-derived key).
+//! - **Encryption key** - production builds derive the
+//!   Stronghold key from Android Keystore bridge material.
+//!   If the bridge is unavailable, Stronghold fails closed
+//!   instead of falling back to a hardcoded key.
 //!
 //! ## Persistence flow
 //!
@@ -86,9 +82,9 @@ use std::sync::Mutex;
 
 use zeroize::Zeroizing;
 
-use iota_stronghold::{
-    KeyProvider, SnapshotPath, Stronghold,
-};
+use iota_stronghold::{KeyProvider, SnapshotPath, Stronghold};
+#[cfg(not(test))]
+use sha2::{Digest, Sha256};
 
 use crate::secrets::{SecretError, SERVICE};
 
@@ -103,23 +99,10 @@ const CLIENT_PATH: &[u8] = b"lipi";
 /// `Stronghold.load(vaultPath, vaultPassword)` example).
 const SNAPSHOT_FILENAME: &str = "lipi.stronghold.hold";
 
-/// Placeholder 32-byte key for the v1 build. The
-/// real password-flow design (Android Keystore
-/// derivation, per-install random, or user-entered
-/// prompt) is the future Mac / Linux session's task
-/// (see HANDOFF §9.48 "What does NOT ship in Phase A").
-/// This placeholder is **not** a real secret — it
-/// just satisfies the `KeyProvider` length requirement
-/// (the `try_from(Zeroizing<Vec<u8>>)` impl wants
-/// exactly 32 bytes). A real password-flow design
-/// replaces this constant with a per-install random
-/// value, persisted via Android Keystore (a one-file
-/// change: `KEY` constant → `load_key_from_keystore()`).
-const PLACEHOLDER_KEY: [u8; 32] = [
-    0x4c, 0x69, 0x70, 0x69, 0x2d, 0x73, 0x74, 0x72, 0x6f, 0x6e, 0x67, 0x68, 0x6f, 0x6c, 0x64, 0x2d,
-    0x76, 0x31, 0x2d, 0x70, 0x6c, 0x61, 0x63, 0x65, 0x68, 0x6f, 0x6c, 0x64, 0x65, 0x72, 0x21, 0x21,
-]; // "Lipi-stronghold-v1-placeholder!!"
-
+/// Stronghold keys are derived from Android Keystore
+/// bridge material in production. Unit tests use a
+/// deterministic test-only key so they can run on
+/// non-Android development machines.
 /// Process-wide Stronghold state. The `Option` lets us
 /// reset for tests (the production code never resets).
 /// The `PathBuf` is the snapshot path the `Stronghold`
@@ -158,17 +141,11 @@ fn get_or_init(snapshot_path: &Path) -> Result<(), SecretError> {
     let stronghold = Stronghold::default();
     let snapshot = SnapshotPath::from_path(snapshot_path);
     if snapshot.exists() {
-        // Existing snapshot — load + decrypt with the
-        // placeholder key. The key must match what
-        // was used to write the snapshot. v1 always
-        // uses `PLACEHOLDER_KEY`; the future Mac /
-        // Linux session replaces this with a real
-        // password-flow design.
-        let key = Zeroizing::new(PLACEHOLDER_KEY.to_vec());
-        let keyprovider = KeyProvider::try_from(key)
-            .map_err(|e| SecretError::KeychainUnavailable {
-                detail: format!("keyprovider init failed: {e}"),
-            })?;
+        // Existing snapshot: load + decrypt with the
+        // Android-Keystore-derived key. If the bridge
+        // is unavailable, fail closed instead of using
+        // a known fallback key.
+        let keyprovider = keyprovider()?;
         stronghold
             .load_snapshot(&keyprovider, &snapshot)
             .map_err(|e| SecretError::KeychainUnavailable {
@@ -212,14 +189,28 @@ fn lock() -> Result<std::sync::MutexGuard<'static, State>, SecretError> {
     })
 }
 
-/// Build the `KeyProvider` from the placeholder key.
+/// Build the `KeyProvider` from Android-Keystore material.
 /// `commit_with_keyprovider` takes it by value; the
 /// `KeyProvider` zeroizes the key on drop.
 fn keyprovider() -> Result<KeyProvider, SecretError> {
-    let key = Zeroizing::new(PLACEHOLDER_KEY.to_vec());
+    let key = stronghold_key()?;
     KeyProvider::try_from(key).map_err(|e| SecretError::KeychainUnavailable {
         detail: format!("keyprovider init failed: {e}"),
     })
+}
+
+fn stronghold_key() -> Result<Zeroizing<Vec<u8>>, SecretError> {
+    #[cfg(test)]
+    {
+        return Ok(Zeroizing::new(b"lipi-stronghold-test-key-32bytes".to_vec()));
+    }
+
+    #[cfg(not(test))]
+    {
+        let material = crate::secrets_stronghold_key_bridge::load_key_from_keystore()?;
+        let digest = Sha256::digest(material.as_slice());
+        Ok(Zeroizing::new(digest.to_vec()))
+    }
 }
 
 /// Save (or overwrite) the API key for the given
@@ -227,22 +218,16 @@ fn keyprovider() -> Result<KeyProvider, SecretError> {
 /// snapshot, never logged, never returned. On
 /// success, the frontend should clear its input
 /// field.
-pub fn set_api_key(
-    provider: &str,
-    key: &str,
-    snapshot_path: &Path,
-) -> Result<(), SecretError> {
+pub fn set_api_key(provider: &str, key: &str, snapshot_path: &Path) -> Result<(), SecretError> {
     // Validate first — same rules as the Keyring path
     // (provider / key non-empty, ASCII).
     crate::secrets::validate_stronghold_input(provider, key, true)?;
 
     get_or_init(snapshot_path)?;
     let mut guard = lock()?;
-    let (_, stronghold) = guard
-        .as_mut()
-        .ok_or_else(|| SecretError::Platform {
-            detail: "stronghold not initialised after get_or_init".to_string(),
-        })?;
+    let (_, stronghold) = guard.as_mut().ok_or_else(|| SecretError::Platform {
+        detail: "stronghold not initialised after get_or_init".to_string(),
+    })?;
     let client = stronghold
         .get_client(CLIENT_PATH)
         .map_err(|e| SecretError::Platform {
@@ -268,10 +253,7 @@ pub fn set_api_key(
 /// Returns `true` if the provider has a key in the
 /// Stronghold store, `false` if not. Pure read; no
 /// commit.
-pub fn has_api_key(
-    provider: &str,
-    snapshot_path: &Path,
-) -> Result<bool, SecretError> {
+pub fn has_api_key(provider: &str, snapshot_path: &Path) -> Result<bool, SecretError> {
     crate::secrets::validate_stronghold_input(provider, "", false)?;
     get_or_init(snapshot_path)?;
     let guard = lock()?;
@@ -294,10 +276,7 @@ pub fn has_api_key(
 /// Read the API key for the given provider. Returns
 /// `Ok(None)` if no key is stored. Pure read; no
 /// commit.
-pub fn get_api_key(
-    provider: &str,
-    snapshot_path: &Path,
-) -> Result<Option<String>, SecretError> {
+pub fn get_api_key(provider: &str, snapshot_path: &Path) -> Result<Option<String>, SecretError> {
     crate::secrets::validate_stronghold_input(provider, "", false)?;
     get_or_init(snapshot_path)?;
     let guard = lock()?;
@@ -315,11 +294,11 @@ pub fn get_api_key(
         .map_err(|e| SecretError::Platform {
             detail: format!("store.get failed: {e}"),
         })? {
-        Some(bytes) => Ok(Some(
-            String::from_utf8(bytes).map_err(|e| SecretError::Platform {
+        Some(bytes) => Ok(Some(String::from_utf8(bytes).map_err(|e| {
+            SecretError::Platform {
                 detail: format!("stored key is not valid UTF-8: {e}"),
-            })?,
-        )),
+            }
+        })?)),
         None => Ok(None),
     }
 }
@@ -327,18 +306,13 @@ pub fn get_api_key(
 /// Delete the API key for the given provider.
 /// Idempotent: deleting a non-existent key returns
 /// `Ok(())`. Commits the change to the snapshot.
-pub fn delete_api_key(
-    provider: &str,
-    snapshot_path: &Path,
-) -> Result<(), SecretError> {
+pub fn delete_api_key(provider: &str, snapshot_path: &Path) -> Result<(), SecretError> {
     crate::secrets::validate_stronghold_input(provider, "", false)?;
     get_or_init(snapshot_path)?;
     let mut guard = lock()?;
-    let (_, stronghold) = guard
-        .as_mut()
-        .ok_or_else(|| SecretError::Platform {
-            detail: "stronghold not initialised after get_or_init".to_string(),
-        })?;
+    let (_, stronghold) = guard.as_mut().ok_or_else(|| SecretError::Platform {
+        detail: "stronghold not initialised after get_or_init".to_string(),
+    })?;
     let client = stronghold
         .get_client(CLIENT_PATH)
         .map_err(|e| SecretError::Platform {
@@ -418,6 +392,28 @@ mod tests {
         let (_dir, path) = fresh_snapshot();
         set_api_key("openai", "sk-test-1234", &path).expect("set");
         assert_eq!(has_api_key("openai", &path).expect("has"), true);
+    }
+
+    #[test]
+    fn test_stronghold_key_is_32_bytes_and_not_legacy_placeholder() {
+        let key = stronghold_key().expect("test key");
+        assert_eq!(key.len(), 32);
+        let legacy = [
+            b"Lipi-stronghold-v1-".as_slice(),
+            b"placeholder!!".as_slice(),
+        ]
+        .concat();
+        assert_ne!(key.as_slice(), legacy.as_slice());
+    }
+
+    #[test]
+    fn source_does_not_define_legacy_placeholder_key_constant() {
+        let source = include_str!("secrets_stronghold.rs");
+        let forbidden = concat!("const ", "PLACEHOLDER_KEY");
+        assert!(
+            !source.contains(forbidden),
+            "production code must not define the legacy placeholder key"
+        );
     }
 
     #[test]

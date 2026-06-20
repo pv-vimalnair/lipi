@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lipi — 5 Themes</title>
+<style>
+  :root {
+    --bg-page: #0d0e10;
+    --ide-bg: #14171c;
+    --ide-bg-2: #1a1e25;
+    --ide-text: #e6e8eb;
+    --ide-text-dim: #aab1bb;
+    --line: #232831;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: var(--bg-page); color: var(--ide-text); }
+  .head { padding: 24px 32px; border-bottom: 1px solid var(--line); background: var(--ide-bg); }
+  .head h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
+  .head p { margin: 0; color: var(--ide-text-dim); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; padding: 32px; max-width: 1600px; margin: 0 auto; }
+  .card { background: var(--ide-bg); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .card .art { aspect-ratio: 4 / 5; background-size: cover; background-position: center; background-repeat: no-repeat; position: relative; }
+  .card .meta { padding: 14px 18px; border-top: 1px solid var(--line); }
+  .card .name { font-size: 15px; font-weight: 600; }
+  .card .mood { font-size: 12px; color: var(--ide-text-dim); margin-top: 4px; }
+  .badge { position: absolute; top: 12px; left: 12px; padding: 4px 10px; background: rgba(0,0,0,0.55); border-radius: 999px; font-size: 11px; color: white; backdrop-filter: blur(8px); font-weight: 500; }
+
+  /* === Editor-tab demo: a single tab with each theme painted behind the code === */
+  .demo-section { padding: 0 32px 64px; max-width: 1600px; margin: 0 auto; }
+  .demo-section h2 { font-size: 16px; font-weight: 600; margin: 0 0 16px; }
+  .demo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 20px; }
+  .editor-card { background: var(--ide-bg); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .editor-card .label { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .editor-card .label .dot { width: 8px; height: 8px; border-radius: 2px; background: #4f8cff; }
+  .editor-card .label .name { font-weight: 600; }
+  .editor-card .label .file { font-family: 'JetBrains Mono', monospace; color: var(--ide-text-dim); }
+  .editor-tab {
+    position: relative;
+    height: 320px;
+    overflow: hidden;
+    background-size: cover;
+    background-position: center;
+    display: flex;
+    flex-direction: column;
+  }
+  .editor-tab::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(13,14,16,0.55) 0%, rgba(13,14,16,0.85) 100%);
+  }
+  .editor-tab .code {
+    position: relative;
+    padding: 18px 22px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--ide-text-dim);
+    z-index: 1;
+    flex: 1;
+  }
+  .editor-tab .code .kw { color: #c678dd; }
+  .editor-tab .code .str { color: #e0a458; }
+  .editor-tab .code .com { color: #6e7682; font-style: italic; }
+  .editor-tab .code .fn { color: #61afef; }
+  .editor-tab .accent-strip {
+    position: relative;
+    height: 4px;
+    background: var(--accent);
+    z-index: 2;
+  }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>Lipi — Theme 1 → Theme 5 (5 vintage scenes)</h1>
+    <p>The 5 shipped themes wired to the 5 source images. Each theme paints the active editor tab with the chosen vintage print.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="art" style="background-image: url('/themes/01-hickory-hollow.png');"><span class="badge">01</span></div>
+      <div class="meta"><div class="name">Hickory Hollow</div><div class="mood">October · warm · nostalgic</div></div>
+    </div>
+    <div class="card">
+      <div class="art" style="background-image: url('/themes/02-whispering-pines.jpg');"><span class="badge">02</span></div>
+      <div class="meta"><div class="name">Whispering Pines</div><div class="mood">Midnight · cool · still</div></div>
+    </div>
+    <div class="card">
+      <div class="art" style="background-image: url('/themes/03-marigold-field.jpg');"><span class="badge">03</span></div>
+      <div class="meta"><div class="name">Marigold Field</div><div class="mood">August · warm · lively</div></div>
+    </div>
+    <div class="card">
+      <div class="art" style="background-image: url('/themes/04-wildflower-field.png');"><span class="badge">04</span></div>
+      <div class="meta"><div class="name">Wildflower Field</div><div class="mood">May · bright · airy</div></div>
+    </div>
+    <div class="card">
+      <div class="art" style="background-image: url('/themes/05-quiet-valley.png');"><span class="badge">05</span></div>
+      <div class="meta"><div class="name">Quiet Valley</div><div class="mood">June · cool · reflective</div></div>
+    </div>
+  </div>
+
+  <div class="demo-section">
+    <h2>How each theme paints the active editor tab</h2>
+    <div class="demo-grid">
+      <div class="editor-card">
+        <div class="label"><span class="dot" style="background:#8a5a2a"></span><span class="name">Hickory Hollow</span><span class="file">tokens.css</span></div>
+        <div class="editor-tab" style="--accent:#8a5a2a;background-image:url('/themes/01-hickory-hollow.png');">
+          <div class="accent-strip"></div>
+          <div class="code">
+            <span class="com">/* Hickory Hollow — warm + nostalgic */</span><br>
+            <span class="kw">:root</span> {<br>
+            &nbsp;&nbsp;<span class="fn">--theme-img-crop</span>: <span class="str">"top-center"</span>;<br>
+            &nbsp;&nbsp;<span class="fn">--theme-accent</span>: <span class="str">#8a5a2a</span>;<br>
+            }
+          </div>
+        </div>
+      </div>
+      <div class="editor-card">
+        <div class="label"><span class="dot" style="background:#3a5a4a"></span><span class="name">Whispering Pines</span><span class="file">tokens.css</span></div>
+        <div class="editor-tab" style="--accent:#3a5a4a;background-image:url('/themes/02-whispering-pines.jpg');">
+          <div class="accent-strip"></div>
+          <div class="code">
+            <span class="com">/* Whispering Pines — cool + still */</span><br>
+            <span class="kw">:root</span> {<br>
+            &nbsp;&nbsp;<span class="fn">--theme-img-crop</span>: <span class="str">"center"</span>;<br>
+            &nbsp;&nbsp;<span class="fn">--theme-accent</span>: <span class="str">#3a5a4a</span>;<br>
+            }
+          </div>
+        </div>
+      </div>
+      <div class="editor-card">
+        <div class="label"><span class="dot" style="background:#d97706"></span><span class="name">Marigold Field</span><span class="file">tokens.css</span></div>
+        <div class="editor-tab" style="--accent:#d97706;background-image:url('/themes/03-marigold-field.jpg');">
+          <div class="accent-strip"></div>
+          <div class="code">
+            <span class="com">/* Marigold Field — warm + lively */</span><br>
+            <span class="kw">:root</span> {<br>
+            &nbsp;&nbsp;<span class="fn">--theme-img-crop</span>: <span class="str">"bottom-left"</span>;<br>
+            &nbsp;&nbsp;<span class="fn">--theme-accent</span>: <span class="str">#d97706</span>;<br>
+            }
+          </div>
+        </div>
+      </div>
+      <div class="editor-card">
+        <div class="label"><span class="dot" style="background:#a855f7"></span><span class="name">Wildflower Field</span><span class="file">tokens.css</span></div>
+        <div class="editor-tab" style="--accent:#a855f7;background-image:url('/themes/04-wildflower-field.png');">
+          <div class="accent-strip"></div>
+          <div class="code">
+            <span class="com">/* Wildflower Field — bright + airy */</span><br>
+            <span class="kw">:root</span> {<br>
+            &nbsp;&nbsp;<span class="fn">--theme-img-crop</span>: <span class="str">"top-left"</span>;<br>
+            &nbsp;&nbsp;<span class="fn">--theme-accent</span>: <span class="str">#a855f7</span>;<br>
+            }
+          </div>
+        </div>
+      </div>
+      <div class="editor-card">
+        <div class="label"><span class="dot" style="background:#16a34a"></span><span class="name">Quiet Valley</span><span class="file">tokens.css</span></div>
+        <div class="editor-tab" style="--accent:#16a34a;background-image:url('/themes/05-quiet-valley.png');">
+          <div class="accent-strip"></div>
+          <div class="code">
+            <span class="com">/* Quiet Valley — cool + reflective */</span><br>
+            <span class="kw">:root</span> {<br>
+            &nbsp;&nbsp;<span class="fn">--theme-img-crop</span>: <span class="str">"center"</span>;<br>
+            &nbsp;&nbsp;<span class="fn">--theme-accent</span>: <span class="str">#16a34a</span>;<br>
+            }
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

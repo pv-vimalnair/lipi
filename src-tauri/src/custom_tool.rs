@@ -336,10 +336,7 @@ mod tests {
             },
         ];
         // Whitelist: only get_file_contents and run_npm_test.
-        let enabled = vec![
-            "get_file_contents".to_string(),
-            "run_npm_test".to_string(),
-        ];
+        let enabled = vec!["get_file_contents".to_string(), "run_npm_test".to_string()];
         let merged = merge_tool_list(build_builtins, &customs, &enabled);
         // The OpenAI shape nests the name under
         // `function.name`. We check that.

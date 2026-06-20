@@ -96,7 +96,11 @@ fn open_and_status_round_trip_on_a_real_temp_repo() {
 
     let s = status(&handle).expect("status should succeed on a real repo");
     assert_eq!(s.branch.as_deref(), Some("main"));
-    assert!(s.is_clean, "freshly committed repo should be clean, got {:?}", s.changed_files);
+    assert!(
+        s.is_clean,
+        "freshly committed repo should be clean, got {:?}",
+        s.changed_files
+    );
     assert!(s.changed_files.is_empty());
     assert!(!s.is_detached);
 
@@ -193,7 +197,10 @@ fn file_diff_serialises_with_camel_case_field_names() {
         serde_json::Value::String(tracked.to_string_lossy().to_string())
     );
     assert_eq!(json["old"], serde_json::Value::String("hello\n".into()));
-    assert_eq!(json["new"], serde_json::Value::String("v2-content\n".into()));
+    assert_eq!(
+        json["new"],
+        serde_json::Value::String("v2-content\n".into())
+    );
     assert_eq!(json["isBinary"], serde_json::Value::Bool(false));
     assert_eq!(json["isNew"], serde_json::Value::Bool(false));
     assert_eq!(json["isDeleted"], serde_json::Value::Bool(false));
@@ -253,7 +260,10 @@ fn discard_is_idempotent_on_already_clean_files() {
     assert_eq!(before, after, "clean file should not be touched");
 
     let s = status(&h).expect("status");
-    assert!(s.is_clean, "clean repo stays clean after idempotent discard");
+    assert!(
+        s.is_clean,
+        "clean repo stays clean after idempotent discard"
+    );
 
     fs::remove_dir_all(&dir).ok();
 }

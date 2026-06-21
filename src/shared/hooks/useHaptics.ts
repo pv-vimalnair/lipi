@@ -22,6 +22,7 @@
 import { useCallback } from 'react';
 
 import { haptic, type HapticIntensity } from '@/ipc';
+import { logger } from '@/shared/logger';
 
 let warned = false;
 
@@ -36,8 +37,7 @@ export async function fireHaptic(intensity: HapticIntensity): Promise<void> {
     await haptic(intensity);
   } catch (e) {
     if (!warned) {
-      // eslint-disable-next-line no-console
-      console.warn('useHaptics: haptic IPC unavailable; future calls will be silent', e);
+      logger.warn('useHaptics: haptic IPC unavailable; future calls will be silent', e);
       warned = true;
     }
   }

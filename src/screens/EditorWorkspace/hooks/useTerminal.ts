@@ -30,6 +30,7 @@ import {
   type OpenResult,
   type TerminalError,
 } from '@/ipc';
+import { logger } from '@/shared/logger';
 
 import {
   clearSink,
@@ -156,8 +157,7 @@ export function useTerminal(): UseTerminal {
         err && typeof err === 'object' && 'message' in err
           ? String((err as { message: unknown }).message)
           : String(err);
-      // eslint-disable-next-line no-console
-      console.warn('[useTerminal] close failed for', sessionId, message);
+      logger.warn('[useTerminal] close failed for', sessionId, message);
     }
   }, []);
 

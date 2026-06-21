@@ -28,6 +28,7 @@ import {
   rejectionReasonFromValidationError,
   validateDeepLinkPath,
 } from '@/ipc';
+import { logger } from '@/shared/logger';
 import { useWorkspaceStore } from '@/shared/state/workspaceStore';
 import { openWorkspace } from '@/screens/Welcome/hooks/useOpenWorkspace';
 
@@ -52,8 +53,7 @@ export function useDeepLinkRouting(): void {
         // `getCurrentWebview()` call inside `onDeepLink` throws.
         // The Welcome / Editor UIs still work; only the
         // deep-link path is missing. Log once and move on.
-        // eslint-disable-next-line no-console
-        console.warn('useDeepLinkRouting: not in a Tauri webview, deep links disabled', e);
+        logger.warn('useDeepLinkRouting: not in a Tauri webview, deep links disabled', e);
       }
     };
 

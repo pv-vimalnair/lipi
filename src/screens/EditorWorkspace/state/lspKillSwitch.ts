@@ -47,6 +47,7 @@
  */
 
 import type { LspServerKind } from '@/ipc/lsp';
+import { logger } from '@/shared/logger';
 
 /** Master kill switch (Phase 9 v1, now superseded
  *  by the per-kind `useRealServerByKind` v2 record).
@@ -303,9 +304,7 @@ function writeBool(key: string, value: boolean, name: string): void {
   try {
     localStorage.setItem(key, value ? 'true' : 'false');
   } catch (e) {
-    if (typeof console !== 'undefined' && console.warn) {
-      console.warn(`[lspKillSwitch] failed to persist ${name}:`, e);
-    }
+    logger.warn(`[lspKillSwitch] failed to persist ${name}:`, e);
   }
 }
 
@@ -323,8 +322,6 @@ function writeJson(
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
-    if (typeof console !== 'undefined' && console.warn) {
-      console.warn(`[lspKillSwitch] failed to persist ${name}:`, e);
-    }
+    logger.warn(`[lspKillSwitch] failed to persist ${name}:`, e);
   }
 }

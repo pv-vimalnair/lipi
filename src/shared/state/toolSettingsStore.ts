@@ -103,6 +103,7 @@
  */
 
 import { create } from 'zustand';
+import { logger } from '@/shared/logger';
 import type { ExportedToolSettings } from '@/shared/settingsIO';
 
 const STORAGE_KEY = 'lipi:toolSettings:v2';
@@ -257,7 +258,7 @@ function saveToStorage(state: PersistedStateV2): void {
     // non-fatal. The in-memory state still
     // works; the user's choices just don't
     // survive a reload.
-    console.warn('[toolSettings] failed to persist:', e);
+    logger.warn('[toolSettings] failed to persist:', e);
   }
 }
 
@@ -309,7 +310,7 @@ function replaceWithUndo(
     // subsequent save. The user
     // simply won't be able to undo
     // (no buffer).
-    console.warn('[toolSettings] failed to write undo buffer:', e);
+    logger.warn('[toolSettings] failed to write undo buffer:', e);
   }
   // Apply the new state. Persistence
   // is wired below `subscribe` — the
@@ -692,13 +693,13 @@ export const useToolSettingsStore = create<ToolSettingsState>((set, get) => ({
       // defensively. We do NOT
       // auto-restore junk; the user
       // gets a "reset" effect.
-      console.warn('[toolSettings] malformed undo buffer — dropping');
+      logger.warn('[toolSettings] malformed undo buffer — dropping');
       localStorage.removeItem(STORAGE_KEY_UNDO);
       set({ pendingUndo: false });
     } catch (e) {
       // JSON parse failure —
       // same defensive drop.
-      console.warn('[toolSettings] undo buffer parse failed:', e);
+      logger.warn('[toolSettings] undo buffer parse failed:', e);
       localStorage.removeItem(STORAGE_KEY_UNDO);
       set({ pendingUndo: false });
     }

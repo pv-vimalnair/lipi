@@ -1,9 +1,12 @@
+import { useCallback } from 'react';
 import type { CSSProperties } from 'react';
 import styles from './TitleBar.module.css';
 import { fileTreeSelectors, useFileTreeStore } from '../../state/fileTreeStore';
 import { useAppStore } from '@/shared/state/appStore';
 import { IconButton } from '@/shared/components/IconButton';
 import { TrialBadge } from '@/shared/components/TrialBadge';
+import { useThemeStore, themeSelectors } from '@/shared/state/themeStore';
+import { THEMES } from '@/shared/state/themes';
 
 export interface TitleBarProps {
   title?: string;
@@ -37,8 +40,16 @@ export function TitleBar({
       ? status.rootPath
       : null;
   const setActiveScreen = useAppStore((s) => s.setActiveScreen);
+  const currentThemeId = useThemeStore(themeSelectors.themeId);
+  const setThemeId = useThemeStore((s) => s.setThemeId);
 
   const onSettings = () => setActiveScreen('settings');
+
+  const onCycleTheme = useCallback(() => {
+    const idx = THEMES.findIndex((t) => t.id === currentThemeId);
+    const next = THEMES[(idx + 1) % THEMES.length];
+    setThemeId(next.id as 'hickory-hollow' | 'whispering-pines' | 'marigold-field' | 'wildflower-field' | 'quiet-valley');
+  }, [currentThemeId, setThemeId]);
 
   return (
     <header className={styles.bar} style={wrapperStyle} role="banner">
@@ -73,14 +84,35 @@ export function TitleBar({
             activation screen on click. */}
         <TrialBadge />
         {showSettingsButton && (
-          <span className={styles.dragBlocker}>
-            <IconButton
-              variant="subtle"
-              size="sm"
-              onClick={onSettings}
-              aria-label="Open AI provider settings"
-              title="AI provider settings"
-            >
+          <>
+            <span className={styles.dragBlocker}>
+              <IconButton
+                variant="subtle"
+                size="sm"
+                onClick={onCycleTheme}
+                aria-label="Cycle theme"
+                title="Cycle theme"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  {/* Palette / brush icon for theme cycling */}
+                  <path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10a2.5 2.5 0 0 0 2.5-2.5c0-.61-.23-1.2-.64-1.67a.528.528 0 0 1-.13-.33c0-.29.24-.5.53-.5H16c3.31 0 6-2.69 6-6 0-4.96-4.49-9-10-9zm-5.5 9a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3-4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm5 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3zm3 4a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z" />
+                </svg>
+              </IconButton>
+            </span>
+            <span className={styles.dragBlocker}>
+              <IconButton
+                variant="subtle"
+                size="sm"
+                onClick={onSettings}
+                aria-label="Open AI provider settings"
+                title="AI provider settings"
+              >
               <svg
                 viewBox="0 0 24 24"
                 width="16"
@@ -93,6 +125,7 @@ export function TitleBar({
               </svg>
             </IconButton>
           </span>
+          </>
         )}
       </div>
     </header>

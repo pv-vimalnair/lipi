@@ -39,6 +39,7 @@
 import { create } from 'zustand';
 import { getVoicePlatformCapabilities } from '@/voice/capabilities';
 import type { VoicePlatformCapabilities } from '@/ipc/voicePlatform';
+import { logger } from '@/shared/logger';
 
 export interface VoiceCapabilitiesState {
   /**
@@ -89,7 +90,7 @@ export const useVoiceCapabilitiesStore = create<VoiceCapabilitiesState>((set, ge
       // A console.warn gives a developer a clue
       // that something is wrong without flooding
       // the user.
-      console.warn('[voiceCapabilities] hydrate failed; capabilities will stay null');
+      logger.warn('[voiceCapabilities] hydrate failed; capabilities will stay null');
     }
   },
 }));

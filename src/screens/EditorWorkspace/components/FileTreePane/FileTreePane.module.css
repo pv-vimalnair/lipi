@@ -48,7 +48,7 @@
 }
 
 .row[data-selected] {
-  background-color: var(--color-accent-soft);
+  background-color: var(--theme-accent-soft, var(--color-accent-soft));
   color: var(--color-text-primary);
 }
 

@@ -43,6 +43,7 @@
 import { create } from 'zustand';
 
 import type { VoiceProviderId } from '@/voice';
+import { logger } from '@/shared/logger';
 
 const STORAGE_KEY = 'lipi:voicePreferences:v1';
 
@@ -127,7 +128,7 @@ function saveToStorage(state: PersistedState): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
     // Quota / private-mode failures are non-fatal.
-    console.warn('[voicePreferences] failed to persist:', e);
+    logger.warn('[voicePreferences] failed to persist:', e);
   }
 }
 

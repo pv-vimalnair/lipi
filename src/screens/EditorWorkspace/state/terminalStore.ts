@@ -52,6 +52,7 @@ import {
   type TerminalExitEvent,
   type TerminalOutputEvent,
 } from '@/ipc';
+import { logger } from '@/shared/logger';
 
 /** Per-session status. Mirrors the 4a hook's discriminator. */
 export type SessionStatus =
@@ -205,8 +206,7 @@ export function ensureTerminalEventSubscription(): void {
       sink(new Uint8Array(event.data));
     }
   }).catch((err) => {
-    // eslint-disable-next-line no-console
-    console.error('[terminalStore] failed to subscribe to output:', err);
+    logger.error('[terminalStore] failed to subscribe to output:', err);
     subscribed = false;
   });
 
@@ -220,8 +220,7 @@ export function ensureTerminalEventSubscription(): void {
     });
     clearSink(event.sessionId);
   }).catch((err) => {
-    // eslint-disable-next-line no-console
-    console.error('[terminalStore] failed to subscribe to exit:', err);
+    logger.error('[terminalStore] failed to subscribe to exit:', err);
     subscribed = false;
   });
 }

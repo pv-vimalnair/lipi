@@ -51,6 +51,7 @@
  */
 
 import { create } from 'zustand';
+import { logger } from '@/shared/logger';
 import {
   licenseActivate,
   licenseDeactivate,
@@ -154,7 +155,7 @@ export const useLicenseStore = create<LicenseState>((set, get) => ({
       //
       // A console.warn gives a developer a clue without
       // flooding the user.
-      console.warn('[license] hydrate failed; status will stay null', err);
+      logger.warn('[license] hydrate failed; status will stay null', err);
     }
   },
 
@@ -163,7 +164,7 @@ export const useLicenseStore = create<LicenseState>((set, get) => ({
       const status = await licenseGetStatus();
       set({ status });
     } catch (err) {
-      console.warn('[license] refresh failed; status will stay stale', err);
+      logger.warn('[license] refresh failed; status will stay stale', err);
     }
   },
 

@@ -38,6 +38,7 @@
  */
 
 import { create } from 'zustand';
+import { logger } from '@/shared/logger';
 
 import {
   DEFAULT_CROP_INDEX,
@@ -101,7 +102,7 @@ function saveToStorage(state: PersistedState): void {
     // Quota / private-mode failures are non-fatal — the user
     // just won't see their selection persist across reloads.
     // The store keeps the in-memory selection.
-    console.warn('[themeStore] failed to persist:', e);
+    logger.warn('[themeStore] failed to persist:', e);
   }
 }
 

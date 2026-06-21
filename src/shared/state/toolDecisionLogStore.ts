@@ -91,6 +91,7 @@
  */
 
 import { create } from 'zustand';
+import { logger } from '@/shared/logger';
 
 const STORAGE_KEY = 'lipi:toolDecisionLog:v1';
 
@@ -308,7 +309,7 @@ function saveToStorage(state: PersistedState): void {
     // are non-fatal. The in-memory
     // state still works; the log
     // just doesn't survive a reload.
-    console.warn('[toolDecisionLog] failed to persist:', e);
+    logger.warn('[toolDecisionLog] failed to persist:', e);
   }
 }
 

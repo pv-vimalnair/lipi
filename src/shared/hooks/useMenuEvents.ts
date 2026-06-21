@@ -36,6 +36,7 @@ import { useEffect } from 'react';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { pickFolder } from '@/ipc/fs';
 import { openDevtools } from '@/ipc/app';
+import { logger } from '@/shared/logger';
 import { useAppStore } from '@/shared/state/appStore';
 import { useAboutStore } from '@/shared/state/aboutStore';
 import { useCommandPaletteStore } from '@/shared/state/commandPaletteStore';
@@ -74,8 +75,7 @@ export function useMenuEvents(): void {
         // Outside a Tauri webview (tests, browser preview). The
         // command palette + the in-app Settings button still
         // work; only the native menu is missing. Log once.
-        // eslint-disable-next-line no-console
-        console.warn('useMenuEvents: not in a Tauri webview, menu events disabled', e);
+        logger.warn('useMenuEvents: not in a Tauri webview, menu events disabled', e);
       }
     };
 
@@ -123,14 +123,12 @@ async function routeMenuCommand(commandId: string): Promise<void> {
         // `open_devtools` command wraps `WebviewWindow::open_devtools()`).
         await openDevtools();
       } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('failed to open devtools', e);
+        logger.warn('failed to open devtools', e);
       }
       return;
     default:
       // Unknown command id — likely a future menu item we
       // haven't wired yet, or a typo in the Rust side.
-      // eslint-disable-next-line no-console
-      console.warn('useMenuEvents: unknown commandId', commandId);
+      logger.warn('useMenuEvents: unknown commandId', commandId);
   }
 }

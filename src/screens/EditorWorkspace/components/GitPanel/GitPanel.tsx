@@ -2,6 +2,7 @@ import { useCallback, useMemo, type MouseEvent } from 'react';
 
 import { Button, IconButton } from '@/shared/components';
 import { changeKindBadge, changeKindLabel, gitDiscard } from '@/ipc';
+import { logger } from '@/shared/logger';
 import type { ChangedFile } from '@/ipc';
 import { PaneShell } from '../PaneShell';
 
@@ -328,8 +329,7 @@ function ChangedFileRow({ file }: ChangedFileRowProps) {
         await refresh();
       } catch (err) {
         // Surface in console for now; future phases add a toast system.
-        // eslint-disable-next-line no-console
-        console.error('[GitPanel] discard failed', err);
+        logger.error('[GitPanel] discard failed', err);
       }
     },
     [file.path, refresh],

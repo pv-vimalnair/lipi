@@ -130,11 +130,11 @@ describe('convertContentChanges', () => {
       }),
     ]);
     expect(result).toHaveLength(1);
-    expect(result[0]!.text).toBe('line 1\nline 2\nline 3\n');
+    expect(result[0].text).toBe('line 1\nline 2\nline 3\n');
     // Range is a single point (the paste
     // position), LSP-legal. The server
     // expands it to 3 new lines.
-    expect(result[0]!.range).toEqual({
+    expect(result[0].range).toEqual({
       start: { line: 1, character: 0 },
       end: { line: 1, character: 0 },
     });
@@ -168,13 +168,13 @@ describe('convertContentChanges', () => {
       }),
     ]);
     expect(result).toHaveLength(2);
-    expect(result[0]!.text).toBe('AAAA');
-    expect(result[0]!.range).toEqual({
+    expect(result[0].text).toBe('AAAA');
+    expect(result[0].range).toEqual({
       start: { line: 0, character: 0 },
       end: { line: 0, character: 4 },
     });
-    expect(result[1]!.text).toBe('BBBB');
-    expect(result[1]!.range).toEqual({
+    expect(result[1].text).toBe('BBBB');
+    expect(result[1].range).toEqual({
       start: { line: 4, character: 0 },
       end: { line: 4, character: 4 },
     });
@@ -245,9 +245,9 @@ describe('convertContentChanges', () => {
         text: emoji,
       }),
     ]);
-    expect(result[0]!.text).toBe(emoji);
+    expect(result[0].text).toBe(emoji);
     // Length is 0 (insertion, not replacement).
-    expect(result[0]!.rangeLength).toBe(0);
+    expect(result[0].rangeLength).toBe(0);
   });
 
   it('preserves tab characters and CRLF line endings in `text`', () => {
@@ -265,7 +265,7 @@ describe('convertContentChanges', () => {
         text: 'a\tb\r\nc',
       }),
     ]);
-    expect(result[0]!.text).toBe('a\tb\r\nc');
+    expect(result[0].text).toBe('a\tb\r\nc');
   });
 
   it('does not mutate the input array', () => {

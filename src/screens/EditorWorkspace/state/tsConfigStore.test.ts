@@ -1,5 +1,5 @@
-/**
- * Tests for `tsConfigStore.ts` — Phase 7's bridge
+﻿/**
+ * Tests for `tsConfigStore.ts` â€” Phase 7's bridge
  * between the workspace's `tsconfig.json` and
  * Monaco's built-in TypeScript language service.
  *
@@ -15,11 +15,11 @@
  *   - The `updatedAt` bump behaviour
  *
  * The actual Monaco interaction (`setCompilerOptions`)
- * is not tested here — it's tested in
+ * is not tested here â€” it's tested in
  * `EditorPane.test.tsx` (a follow-up) and verified
  * by the manual UAT. The store's contract is "I
  * parsed the file correctly and exposed the right
- * `compilerOptions`" — that's what these tests
+ * `compilerOptions`" â€” that's what these tests
  * assert.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -125,9 +125,13 @@ describe('parseTsConfig', () => {
     });
     const parsed = parseTsConfig(body);
     expect(parsed).not.toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed!.compilerOptions).toEqual({ strict: true, target: 'ES2020' });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed!.include).toEqual(['src/**/*']);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed!.exclude).toEqual(['node_modules']);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed!.raw.extends).toBe('@foo/config');
   });
 
@@ -140,7 +144,9 @@ describe('parseTsConfig', () => {
     }`;
     const parsed = parseTsConfig(body);
     expect(parsed).not.toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed!.compilerOptions).toEqual({ strict: true });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed!.include).toEqual(['src/**/*']);
   });
 
@@ -156,7 +162,9 @@ describe('parseTsConfig', () => {
   it('tolerates a missing compilerOptions block (returns empty object)', () => {
     const parsed = parseTsConfig('{"include": ["src/**/*"]}');
     expect(parsed).not.toBeNull();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed!.compilerOptions).toEqual({});
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed!.include).toEqual(['src/**/*']);
   });
 });
@@ -195,7 +203,7 @@ describe('useTsConfigStore', () => {
     await useTsConfigStore.getState().setFromWorkspace('/ws');
     const s = useTsConfigStore.getState();
     expect(s.workspaceRoot).toBe('/ws');
-    // On Windows the join is '\\' — we don't pin the
+    // On Windows the join is '\\' â€” we don't pin the
     // exact separator; we just confirm the file name
     // is on the end and the root is on the front.
     expect(s.tsconfigPath).toMatch(/tsconfig\.json$/);
@@ -213,7 +221,7 @@ describe('useTsConfigStore', () => {
     expect(s.tsconfigPath).toBeNull();
     expect(s.compilerOptions).toBeNull();
     expect(s.config).toBeNull();
-    // The store still bumps updatedAt — the editor
+    // The store still bumps updatedAt â€” the editor
     // pane uses that as a "settings changed" signal.
     expect(s.updatedAt).toBeGreaterThan(0);
   });
@@ -297,7 +305,7 @@ describe('useTsConfigStore', () => {
       // want to trigger a Monaco re-validation
       // for an `updatedAt` change that came from
       // a no-op re-read). So this test asserts the
-      // DEBOUNCE behaviour: the watcher fires →
+      // DEBOUNCE behaviour: the watcher fires â†’
       // after the debounce window, the
       // `setFromWorkspace` call is scheduled.
       type RegisteredHandler = (event: {
@@ -305,7 +313,9 @@ describe('useTsConfigStore', () => {
       }) => void;
       const lastListen = listenMock.mock.calls.at(-1);
       expect(lastListen).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const handler = lastListen![1] as RegisteredHandler;
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       handler!({
         payload: {
           kind: 'modify',

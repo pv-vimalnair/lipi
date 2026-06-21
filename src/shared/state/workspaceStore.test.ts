@@ -1,5 +1,6 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior open()/hydrate() setup */
 /**
- * Tests for `useWorkspaceStore` —
+ * Tests for `useWorkspaceStore` --
  * the cross-screen source of
  * truth for the currently-open
  * folder(s).
@@ -17,7 +18,7 @@
  * a string.
  *
  * We test the store in
- * isolation — no React, no
+ * isolation -- no React, no
  * Tauri mocks. The store is
  * pure Zustand + localStorage;
  * the React-side effects (auto-
@@ -114,7 +115,7 @@ describe('useWorkspaceStore', () => {
       expect(s.status).toEqual({ kind: 'idle' });
     });
 
-    it('is idempotent — calling hydrate twice is a no-op', () => {
+    it('is idempotent -- calling hydrate twice is a no-op', () => {
       const tab = makeTab('/first', 't1', 1);
       localStorage.setItem(
         STORAGE_KEY_WORKSPACES_V2,
@@ -206,7 +207,7 @@ describe('useWorkspaceStore', () => {
     });
   });
 
-  describe('v1 → v2 migration on first hydrate', () => {
+  describe('v1 â†’ v2 migration on first hydrate', () => {
     it('migrates a v1 currentPath + recents into a single workspace tab', () => {
       // Pre-M6a persistence
       // shape: the
@@ -282,7 +283,7 @@ describe('useWorkspaceStore', () => {
       );
       localStorage.setItem(STORAGE_KEY_ACTIVE_ID_V2, JSON.stringify('t1'));
       // The v1 key is
-      // ALSO present —
+      // ALSO present --
       // a user who has
       // both an old binary
       // and a new binary
@@ -403,9 +404,11 @@ describe('useWorkspaceStore', () => {
       useWorkspaceStore.getState().open('/c');
       // Currently active: /c
       // (last opened).
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const aTab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.path === '/a')!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       useWorkspaceStore.getState().close(aTab.id);
       const s = useWorkspaceStore.getState();
       expect(s.workspaces).toHaveLength(2);
@@ -425,12 +428,14 @@ describe('useWorkspaceStore', () => {
       // tab, then close
       // it. /a is at
       // index 0, /b is at
-      // index 1 — the
+      // index 1 -- the
       // "next to the
       // right" is /b.
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const aTab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.path === '/a')!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       useWorkspaceStore.getState().setActive(aTab.id);
       useWorkspaceStore.getState().close(aTab.id);
       const s = useWorkspaceStore.getState();
@@ -443,9 +448,11 @@ describe('useWorkspaceStore', () => {
       useWorkspaceStore.getState().open('/b');
       // Currently active:
       // /b. Close /b.
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const bTab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.path === '/b')!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       useWorkspaceStore.getState().close(bTab.id);
       const s = useWorkspaceStore.getState();
       expect(s.workspaces).toHaveLength(1);
@@ -455,9 +462,11 @@ describe('useWorkspaceStore', () => {
 
     it('flips activeId to null when the last tab is closed', () => {
       useWorkspaceStore.getState().open('/a');
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const aTab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.path === '/a')!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       useWorkspaceStore.getState().close(aTab.id);
       const s = useWorkspaceStore.getState();
       expect(s.workspaces).toEqual([]);
@@ -480,9 +489,11 @@ describe('useWorkspaceStore', () => {
       useWorkspaceStore.getState().open('/a');
       useWorkspaceStore.getState().open('/b');
       expect(useWorkspaceStore.getState().recents).toEqual(['/b', '/a']);
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const aTab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.path === '/a')!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       useWorkspaceStore.getState().close(aTab.id);
       // The recents list is
       // unchanged.
@@ -501,9 +512,11 @@ describe('useWorkspaceStore', () => {
     it('persists the post-close workspaces + activeId', () => {
       useWorkspaceStore.getState().open('/a');
       useWorkspaceStore.getState().open('/b');
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const aTab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.path === '/a')!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       useWorkspaceStore.getState().close(aTab.id);
       // The v2 keys reflect
       // the post-close state.
@@ -521,9 +534,11 @@ describe('useWorkspaceStore', () => {
     it('switches the active tab', () => {
       useWorkspaceStore.getState().open('/a');
       useWorkspaceStore.getState().open('/b');
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const aTab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.path === '/a')!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       useWorkspaceStore.getState().setActive(aTab.id);
       expect(useActivePath(useWorkspaceStore.getState())).toBe('/a');
     });
@@ -531,9 +546,11 @@ describe('useWorkspaceStore', () => {
     it('persists the new activeId', () => {
       useWorkspaceStore.getState().open('/a');
       useWorkspaceStore.getState().open('/b');
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const aTab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.path === '/a')!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       useWorkspaceStore.getState().setActive(aTab.id);
       expect(localStorage.getItem(STORAGE_KEY_ACTIVE_ID_V2)).toBe(
         JSON.stringify(aTab.id),
@@ -657,7 +674,7 @@ describe('useWorkspaceStore', () => {
   });
 
   // -----------------------------------------------------------------
-  // M6b — per-tab state keying
+  // M6b -- per-tab state keying
   // -----------------------------------------------------------------
   // Each tab now carries a
   // `state: WorkspaceTabState`
@@ -689,9 +706,10 @@ describe('useWorkspaceStore', () => {
   //      active tab's state, or
   //      `EMPTY_TAB_STATE` if no
   //      tab is active.
-  describe('M6b — per-tab state keying', () => {
+  describe('M6b -- per-tab state keying', () => {
     it('creates a new tab with EMPTY_TAB_STATE', () => {
       useWorkspaceStore.getState().open('/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tab = useWorkspaceStore.getState().workspaces[0]!;
       expect(tab.state).toEqual({
         expandedDirs: [],
@@ -705,10 +723,12 @@ describe('useWorkspaceStore', () => {
 
     it('setTabState merges the partial into the tab state', () => {
       useWorkspaceStore.getState().open('/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
       useWorkspaceStore.getState().setTabState(tabId, {
         expandedDirs: ['/proj/src', '/proj/src/components'],
       });
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const after = useWorkspaceStore.getState().workspaces[0]!;
       expect(after.state.expandedDirs).toEqual([
         '/proj/src',
@@ -723,20 +743,24 @@ describe('useWorkspaceStore', () => {
 
     it('setTabState is a no-op for an unknown tab id', () => {
       useWorkspaceStore.getState().open('/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const before = useWorkspaceStore.getState().workspaces[0]!.state;
       useWorkspaceStore.getState().setTabState('nonsense', {
         selectedPath: '/proj/x',
       });
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const after = useWorkspaceStore.getState().workspaces[0]!.state;
-      expect(after).toBe(before); // same reference — no-op
+      expect(after).toBe(before); // same reference -- no-op
     });
 
     it('setTabState is a no-op if the merge is structurally identical', () => {
       useWorkspaceStore.getState().open('/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
       useWorkspaceStore.getState().setTabState(tabId, {
         expandedDirs: ['/proj/src'],
       });
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const before = useWorkspaceStore.getState().workspaces[0]!.state;
       // Setting the same
       // expandedDirs array
@@ -746,12 +770,14 @@ describe('useWorkspaceStore', () => {
       useWorkspaceStore.getState().setTabState(tabId, {
         expandedDirs: before.expandedDirs,
       });
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const after = useWorkspaceStore.getState().workspaces[0]!.state;
-      expect(after).toBe(before); // same reference — no-op
+      expect(after).toBe(before); // same reference -- no-op
     });
 
     it('replaceTabState replaces the whole state', () => {
       useWorkspaceStore.getState().open('/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
       const next = {
         expandedDirs: ['/proj/src'],
@@ -762,22 +788,26 @@ describe('useWorkspaceStore', () => {
         fileTreeScrollAnchor: null,
       };
       useWorkspaceStore.getState().replaceTabState(tabId, next);
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const after = useWorkspaceStore.getState().workspaces[0]!;
       expect(after.state).toEqual(next);
     });
 
     it('replaceTabState is a no-op for an unknown tab id', () => {
       useWorkspaceStore.getState().open('/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const before = useWorkspaceStore.getState().workspaces[0]!.state;
       useWorkspaceStore.getState().replaceTabState('nonsense', {
         ...before,
         selectedPath: '/x',
       });
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       expect(useWorkspaceStore.getState().workspaces[0]!.state).toBe(before);
     });
 
     it('setTabState persists the new state to localStorage', () => {
       useWorkspaceStore.getState().open('/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
       useWorkspaceStore.getState().setTabState(tabId, {
         openEditorTabPaths: ['/proj/a.ts', '/proj/b.ts'],
@@ -812,6 +842,7 @@ describe('useWorkspaceStore', () => {
       );
       localStorage.setItem(STORAGE_KEY_ACTIVE_ID_V2, JSON.stringify('t1'));
       useWorkspaceStore.getState().hydrate();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tab = useWorkspaceStore.getState().workspaces[0]!;
       expect(tab.state).toEqual({
         expandedDirs: [],
@@ -846,6 +877,7 @@ describe('useWorkspaceStore', () => {
       );
       localStorage.setItem(STORAGE_KEY_ACTIVE_ID_V2, JSON.stringify('t1'));
       useWorkspaceStore.getState().hydrate();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tab = useWorkspaceStore.getState().workspaces[0]!;
       expect(tab.state).toEqual({
         expandedDirs: ['/proj/src'],
@@ -872,6 +904,7 @@ describe('useWorkspaceStore', () => {
       );
       localStorage.setItem(STORAGE_KEY_ACTIVE_ID_V2, JSON.stringify('t1'));
       useWorkspaceStore.getState().hydrate();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tab = useWorkspaceStore.getState().workspaces[0]!;
       // The wrong-type field
       // is reset to the
@@ -885,7 +918,7 @@ describe('useWorkspaceStore', () => {
 
     it('useActiveTabState returns the active tab state, or EMPTY_TAB_STATE if none', async () => {
       const { useActiveTabState } = await import('./workspaceStore');
-      // No active tab —
+      // No active tab --
       // returns empty.
       expect(
         useActiveTabState({
@@ -900,7 +933,7 @@ describe('useWorkspaceStore', () => {
         editorCursorByPath: {},
         fileTreeScrollAnchor: null,
       });
-      // With an active tab —
+      // With an active tab --
       // returns its state.
       const tab = createWorkspaceTab('/proj', 't1', 1000, {
         expandedDirs: ['/proj/src'],
@@ -918,10 +951,10 @@ describe('useWorkspaceStore', () => {
       ).toEqual(tab.state);
     });
 
-    it('close preserves the closed tab’s state (with the tab itself)', () => {
+    it('close preserves the closed tabâ€™s state (with the tab itself)', () => {
       // M6b doesn't change
       // close behaviour
-      // relative to M6a —
+      // relative to M6a --
       // the closed tab goes
       // away, and its
       // per-tab `state` goes
@@ -934,6 +967,7 @@ describe('useWorkspaceStore', () => {
       // documents the
       // behaviour.
       useWorkspaceStore.getState().open('/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tabId = useWorkspaceStore.getState().workspaces[0]!.id;
       useWorkspaceStore.getState().setTabState(tabId, {
         openEditorTabPaths: ['/proj/a.ts'],
@@ -942,7 +976,7 @@ describe('useWorkspaceStore', () => {
       expect(useWorkspaceStore.getState().workspaces).toEqual([]);
       // The path is still in
       // recents (closing is
-      // not forgetting —
+      // not forgetting --
       // Decision #80).
       expect(useWorkspaceStore.getState().recents).toContain('/proj');
     });
@@ -967,7 +1001,7 @@ describe('useWorkspaceStore', () => {
   });
 
   // -----------------------------------------------------------------
-  // M6c — per-file editor cursor (new field on WorkspaceTabState)
+  // M6c -- per-file editor cursor (new field on WorkspaceTabState)
   // -----------------------------------------------------------------
   // M6c adds two new fields to
   // WorkspaceTabState:
@@ -983,7 +1017,7 @@ describe('useWorkspaceStore', () => {
   //     file in one tab, with an
   //     equality short-circuit
   //     (line+column match = no-op).
-  describe('EMPTY_TAB_STATE — M6c fields', () => {
+  describe('EMPTY_TAB_STATE -- M6c fields', () => {
     it('has editorCursorByPath = {} and fileTreeScrollAnchor = null', () => {
       expect(EMPTY_TAB_STATE.editorCursorByPath).toEqual({});
       expect(EMPTY_TAB_STATE.fileTreeScrollAnchor).toBeNull();
@@ -997,7 +1031,7 @@ describe('useWorkspaceStore', () => {
       // each test (the outer
       // `beforeEach(reset)` at
       // line 59 already does
-      // this — but we re-assert
+      // this -- but we re-assert
       // it for clarity here).
       useWorkspaceStore.setState({
         hydrated: true,
@@ -1010,13 +1044,16 @@ describe('useWorkspaceStore', () => {
 
     it('writes the cursor into the active tab editorCursorByPath', () => {
       useWorkspaceStore.getState().open('C:/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tabId = useWorkspaceStore.getState().activeId!;
       useWorkspaceStore
         .getState()
         .setEditorCursor(tabId, 'C:/proj/index.ts', { line: 12, column: 4 });
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const tab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.id === tabId)!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       expect(tab.state.editorCursorByPath['C:/proj/index.ts']).toEqual({
         line: 12,
         column: 4,
@@ -1025,6 +1062,7 @@ describe('useWorkspaceStore', () => {
 
     it('merges new entries without overwriting existing ones', () => {
       useWorkspaceStore.getState().open('C:/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tabId = useWorkspaceStore.getState().activeId!;
       useWorkspaceStore
         .getState()
@@ -1032,9 +1070,11 @@ describe('useWorkspaceStore', () => {
       useWorkspaceStore
         .getState()
         .setEditorCursor(tabId, 'C:/proj/b.ts', { line: 5, column: 2 });
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       const tab = useWorkspaceStore
         .getState()
         .workspaces.find((w) => w.id === tabId)!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       expect(tab.state.editorCursorByPath).toEqual({
         'C:/proj/a.ts': { line: 1, column: 1 },
         'C:/proj/b.ts': { line: 5, column: 2 },
@@ -1043,6 +1083,7 @@ describe('useWorkspaceStore', () => {
 
     it('is a no-op when the incoming cursor matches the existing one (line+column)', () => {
       useWorkspaceStore.getState().open('C:/proj');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const tabId = useWorkspaceStore.getState().activeId!;
       useWorkspaceStore
         .getState()
@@ -1059,10 +1100,12 @@ describe('useWorkspaceStore', () => {
 
     it('is a no-op when the tab id is unknown', () => {
       useWorkspaceStore.getState().open('C:/proj');
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       useWorkspaceStore
         .getState()
         .setEditorCursor('not-a-tab', 'C:/proj/a.ts', { line: 1, column: 1 });
       const tab = useWorkspaceStore.getState().workspaces[0]!;
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
       expect(tab.state.editorCursorByPath).toEqual({});
     });
   });

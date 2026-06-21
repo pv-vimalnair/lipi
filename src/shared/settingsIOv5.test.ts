@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior length/existence checks */
 /**
  * Tests for the v5 schema, parser,
  * builder, and serialiser.
@@ -5,12 +6,12 @@
  * The v5 schema is the M6c upgrade to
  * the v4 file format: a v5 file's
  * `WorkspaceTabState` carries the 2
- * new per-tab fields — `editorCursorByPath`
+ * new per-tab fields -- `editorCursorByPath`
  * (per-file cursor memory) and
  * `fileTreeScrollAnchor` (the topmost
  * visible file-tree row's path). The
  * parser auto-detects v4 input and
- * runs an in-memory v4 → v5 migration
+ * runs an in-memory v4 â†’ v5 migration
  * (synthesising empty defaults for the
  * 2 new fields). v3 input is
  * auto-migrated to v4 (via the v4
@@ -105,7 +106,7 @@ describe('suggestLipiStateV5Filename', () => {
   });
 });
 
-describe('parseLipiStateV5 — v5 native input', () => {
+describe('parseLipiStateV5 -- v5 native input', () => {
   it('parses a v5 file (version 5) and returns sourceFormat: v5', () => {
     const file = buildLipiStateV5(sampleData);
     const parsed = parseLipiStateV5(serialiseLipiStateV5(file));
@@ -159,7 +160,7 @@ describe('parseLipiStateV5 — v5 native input', () => {
             addedAt: 1,
             state: {
               ...tabWithCursorState('C:/proj').state,
-              // @ts-expect-error — intentionally wrong shape for the test
+              // @ts-expect-error -- intentionally wrong shape for the test
               editorCursorByPath: 'not-an-object',
             },
           },
@@ -175,7 +176,7 @@ describe('parseLipiStateV5 — v5 native input', () => {
   });
 });
 
-describe('parseLipiStateV5 — v4 input (auto-migrated)', () => {
+describe('parseLipiStateV5 -- v4 input (auto-migrated)', () => {
   it('migrates a v4 file (version 4) by synthesising the 2 new fields', () => {
     // Build a v4 file shape (version 4) by hand.
     const v4Data = {
@@ -210,13 +211,15 @@ describe('parseLipiStateV5 — v4 input (auto-migrated)', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.sourceFormat).toBe('v4');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(r.data.workspace.workspaces[0]!.state.editorCursorByPath).toEqual({});
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(r.data.workspace.workspaces[0]!.state.fileTreeScrollAnchor).toBeNull();
   });
 });
 
-describe('parseLipiStateV5 — v3 input (auto-migrated via v4)', () => {
-  it('migrates a v3 file (no version field, has workspace.currentPath) by going v3 → v4 → v5', () => {
+describe('parseLipiStateV5 -- v3 input (auto-migrated via v4)', () => {
+  it('migrates a v3 file (no version field, has workspace.currentPath) by going v3 â†’ v4 â†’ v5', () => {
     const v3Data = {
       workspace: { currentPath: 'C:/proj', recents: ['C:/proj'] },
       voicePreferences: { provider: 'wispr' },
@@ -229,7 +232,9 @@ describe('parseLipiStateV5 — v3 input (auto-migrated via v4)', () => {
     expect(r.sourceFormat).toBe('v3');
     // Wrapped into a single tab, with the 2 new fields defaulted.
     expect(r.data.workspace.workspaces).toHaveLength(1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(r.data.workspace.workspaces[0]!.state.editorCursorByPath).toEqual({});
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(r.data.workspace.workspaces[0]!.state.fileTreeScrollAnchor).toBeNull();
   });
 });
@@ -263,6 +268,7 @@ describe('migrateV4DataToV5', () => {
       },
     };
     const v5 = migrateV4DataToV5(v4);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(v5.workspace.workspaces[0]!.state).toEqual({
       expandedDirs: ['a'],
       selectedPath: 'b',

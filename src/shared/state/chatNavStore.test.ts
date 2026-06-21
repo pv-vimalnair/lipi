@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().not.toBeNull() */
 /**
  * Tests for `chatNavStore` (Phase 5f).
  *
@@ -10,7 +11,7 @@
  *     reading
  *   - Expiry: a jump older than
  *     `JUMP_MAX_AGE_MS` is stale
- *     (the AIPanel will ignore it —
+ *     (the AIPanel will ignore it --
  *     we test the `issuedAt` stamp
  *     and the `JUMP_MAX_AGE_MS`
  *     constant directly here)
@@ -42,7 +43,9 @@ describe('chatNavStore', () => {
       expect(j).not.toBeNull();
       expect(j?.messageId).toBe('msg_1');
       expect(j?.toolCallId).toBe('call_1');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       expect(j!.issuedAt).toBeGreaterThanOrEqual(before);
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       expect(j!.issuedAt).toBeLessThanOrEqual(after);
     });
 
@@ -70,7 +73,7 @@ describe('chatNavStore', () => {
       const consumed = useChatNavStore.getState().consumeJump();
       expect(consumed).not.toBeNull();
       expect(consumed?.messageId).toBe('msg_1');
-      // The store is now cleared —
+      // The store is now cleared --
       // a second consume returns
       // `null` (the same jump does
       // NOT fire twice).
@@ -97,7 +100,7 @@ describe('chatNavStore', () => {
 
   describe('expiry', () => {
     it('JUMP_MAX_AGE_MS is 30s', () => {
-      // Lock the constant — the
+      // Lock the constant -- the
       // AIPanel uses this to
       // decide whether to honour a
       // jump. If a future change
@@ -122,6 +125,7 @@ describe('chatNavStore', () => {
           issuedAt: Date.now() - JUMP_MAX_AGE_MS - 1,
         },
       });
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const j = useChatNavStore.getState().pendingJump!;
       // The AIPanel would check
       // `Date.now() - issuedAt` and

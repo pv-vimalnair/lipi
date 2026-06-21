@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior length/existence checks */
 /**
  * Tests for the v4 schema, parser,
  * builder, and serialiser.
@@ -11,7 +12,7 @@
  * parser auto-detects v3 input
  * (no `version` field, has
  * `workspace.currentPath`) and
- * runs an in-memory v3 → v4
+ * runs an in-memory v3 â†’ v4
  * migration.
  *
  * The schema, builder, and
@@ -126,7 +127,7 @@ describe('suggestLipiStateV4Filename', () => {
   });
 });
 
-describe('parseLipiStateV4 — v4 native input', () => {
+describe('parseLipiStateV4 -- v4 native input', () => {
   it('parses a v4 file (version 4) and returns sourceFormat: v4', () => {
     const file = buildLipiStateV4(sampleData);
     const parsed = parseLipiStateV4(serialiseLipiStateV4(file));
@@ -254,7 +255,7 @@ describe('parseLipiStateV4 — v4 native input', () => {
   });
 });
 
-describe('parseLipiStateV4 — v3 → v4 migration', () => {
+describe('parseLipiStateV4 -- v3 â†’ v4 migration', () => {
   // A v3 file is the S2/S3
   // export format: no
   // `version` field (or
@@ -279,7 +280,7 @@ describe('parseLipiStateV4 — v3 → v4 migration', () => {
     },
   };
 
-  it('parses a v3 file and runs the in-memory v3 → v4 migration', () => {
+  it('parses a v3 file and runs the in-memory v3 â†’ v4 migration', () => {
     const text = JSON.stringify(v3);
     const parsed = parseLipiStateV4(text);
     expect(parsed.ok).toBe(true);
@@ -290,7 +291,9 @@ describe('parseLipiStateV4 — v3 → v4 migration', () => {
     // tab with empty per-tab
     // state.
     expect(parsed.data.workspace.workspaces).toHaveLength(1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed.data.workspace.workspaces[0]!.path).toBe('C:/Users/me/proj');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(parsed.data.workspace.workspaces[0]!.state).toEqual({
       expandedDirs: [],
       selectedPath: null,
@@ -300,6 +303,7 @@ describe('parseLipiStateV4 — v3 → v4 migration', () => {
       fileTreeScrollAnchor: null,
     });
     expect(parsed.data.workspace.activeId).toBe(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       parsed.data.workspace.workspaces[0]!.id,
     );
     // recents carries over.
@@ -377,9 +381,13 @@ describe('migrateV3DataToV4 (pure)', () => {
     };
     const v4 = migrateV3DataToV4(v3, 1000, () => 'fixed-id');
     expect(v4.workspace.workspaces).toHaveLength(1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(v4.workspace.workspaces[0]!.id).toBe('fixed-id');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(v4.workspace.workspaces[0]!.path).toBe('C:/x');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(v4.workspace.workspaces[0]!.addedAt).toBe(1000);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(v4.workspace.workspaces[0]!.state).toEqual({
       expandedDirs: [],
       selectedPath: null,

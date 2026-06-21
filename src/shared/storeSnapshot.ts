@@ -192,7 +192,8 @@ export function restoreSnapshots(
   snapshots: readonly { restore: () => void }[],
 ): number {
   for (let i = snapshots.length - 1; i >= 0; i--) {
-    snapshots[i]!.restore();
+    const snap = snapshots[i];
+    if (snap) snap.restore();
   }
   return snapshots.length;
 }

@@ -1,5 +1,5 @@
-/**
- * Tests for `lspClientStore.ts` — the Zustand
+﻿/**
+ * Tests for `lspClientStore.ts` â€” the Zustand
  * store + `LspClient` class that owns one
  * `typescript-language-server` child process per
  * workspace.
@@ -39,7 +39,7 @@ import * as lspIpc from '@/ipc/lsp';
 // Per-test pipe state. Reset in `beforeEach`.
 let writes: Uint8Array[] = [];
 let readQueue: Uint8Array[] = [];
-// Phase 9.5 — listeners registered via
+// Phase 9.5 â€” listeners registered via
 // `onLspCrashed`. The store subscribes exactly
 // one in `getOrCreate`; tests capture it so
 // they can fire a synthetic `lsp://crashed`
@@ -49,7 +49,7 @@ let crashListeners: Array<(p: {
   exitStatus: number | null;
   stderrTail: string;
 }) => void> = [];
-// Phase 9.7 — same story for `onLspLog`. The
+// Phase 9.7 â€” same story for `onLspLog`. The
 // store subscribes once; tests push synthetic
 // log events through `fireLog(...)` to
 // exercise the live "Server output" panel.
@@ -57,9 +57,9 @@ let logListeners: Array<(p: {
   handleId: string;
   chunk: string;
 }) => void> = [];
-// Phase 9.36 — same story for `onLspStdout`.
+// Phase 9.36 â€” same story for `onLspStdout`.
 // Each `LspClient` subscribes once (not the
-// global store — the store is per-client
+// global store â€” the store is per-client
 // for `lsp://stdout` to filter on `handleId`).
 // Tests push synthetic stdout events through
 // `fireStdout(...)` to exercise the event-driven
@@ -82,7 +82,7 @@ vi.mock('@/ipc/lsp', () => {
         resolvedCommand: 'typescript-language-server',
       };
     }),
-    // Phase 9.2b — the store now calls
+    // Phase 9.2b â€” the store now calls
     // `kindToSpawnSpec` (a pure function over
     // a string-literal union) instead of
     // hard-coding the TS-LS binary. The
@@ -100,7 +100,7 @@ vi.mock('@/ipc/lsp', () => {
           installHint: 'rustup component add rust-analyzer',
         };
       }
-      // Phase 9.2c — `pyright` arm.
+      // Phase 9.2c â€” `pyright` arm.
       // Mirrors the JS
       // `kindToSpawnSpec('pyright')` in
       // `ipc/lsp.ts` and the Rust
@@ -129,6 +129,7 @@ vi.mock('@/ipc/lsp', () => {
       if (readQueue.length === 0) {
         return new Uint8Array(0);
       }
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const next = readQueue.shift()!;
       return next.byteLength > maxBytes ? next.slice(0, maxBytes) : next;
     }),
@@ -163,7 +164,7 @@ vi.mock('@/ipc/lsp', () => {
               result: INIT_RESPONSE.result,
             });
             readQueue.push(frame);
-            // Phase 9.36 — also fire the
+            // Phase 9.36 â€” also fire the
             // event for the event-driven
             // hot path. The SUT's
             // `_subscribeStdout` listener
@@ -193,7 +194,7 @@ vi.mock('@/ipc/lsp', () => {
               // most-recent handler with
               // the handleId the handler
               // expects (we look it up
-              // from the writes — the
+              // from the writes â€” the
               // last write's first frame
               // is the request, and the
               // matching response is
@@ -224,14 +225,14 @@ vi.mock('@/ipc/lsp', () => {
             }
           }
         } catch {
-          // not JSON — ignore
+          // not JSON â€” ignore
         }
       }
       return bytes.byteLength;
     }),
     lspStdioClose: vi.fn(async () => undefined),
     lspStdioReadStderr: vi.fn(async () => new Uint8Array(0)),
-    // Phase 9.7 — `lspStdioReadStderrLog` is
+    // Phase 9.7 â€” `lspStdioReadStderrLog` is
     // the replay-drain the store calls once
     // per workspace on first handleId
     // registration. Empty by default (the
@@ -268,7 +269,7 @@ vi.mock('@/ipc/lsp', () => {
       };
     }),
     LSP_CRASHED_EVENT: 'lsp://crashed',
-    // Phase 9.7 — same synchronous-thenable
+    // Phase 9.7 â€” same synchronous-thenable
     // dance as `onLspCrashed`, but for the
     // log subscription. The store reads
     // `lsp://log` to append stderr lines to
@@ -290,7 +291,7 @@ vi.mock('@/ipc/lsp', () => {
       };
     }),
     LSP_LOG_EVENT: 'lsp://log',
-    // Phase 9.36 — per-client `lsp://stdout`
+    // Phase 9.36 â€” per-client `lsp://stdout`
     // subscription. The mock is keyed by
     // `handleId` (the client subscribes with
     // its own handleId; the listener filters
@@ -302,7 +303,7 @@ vi.mock('@/ipc/lsp', () => {
       handleId: string;
       chunk: number[];
     }) => void) => {
-      // Phase 9.36 — the listener is filtered
+      // Phase 9.36 â€” the listener is filtered
       // by handleId in production (the
       // production `LspClient._subscribeStdout`
       // checks `payload.handleId === myHandleId`).
@@ -335,7 +336,7 @@ vi.mock('@/ipc/lsp', () => {
   };
 });
 
-// Phase 9.36 — most-recently-registered
+// Phase 9.36 â€” most-recently-registered
 // `onLspStdout` handler. The test suite's
 // `fireStdout` helper fires through this
 // (and through the per-handle map for
@@ -367,7 +368,7 @@ const INIT_RESPONSE = {
   id: 1,
   result: {
     capabilities: {
-      // No inlay hint support in the mock —
+      // No inlay hint support in the mock â€”
       // tests don't exercise that provider
       // (the bridge guards on
       // `capabilities.inlayHintProvider`).
@@ -394,7 +395,7 @@ const INIT_RESPONSE = {
 // the actions object, not in `setState`).
 import { useLspClientStore as importedStore } from './lspClientStore';
 import { workspaceKindKey } from './lspClientStore';
-// Phase 9.2d — every test fixture below
+// Phase 9.2d â€” every test fixture below
 // that previously used a bare
 // `'/workspace/x'` string as a map key now
 // uses `'/workspace/x')`, which
@@ -410,7 +411,7 @@ const tsKey = (workspaceRoot: string): string =>
 const useLspClientStore: typeof importedStore = importedStore;
 
 beforeEach(() => {
-  // Phase 9.5 — the store's
+  // Phase 9.5 â€” the store's
   // `crashUnlisten` and internal
   // `handleToWorkspace` /
   // `respawnTimers` /
@@ -419,7 +420,7 @@ beforeEach(() => {
   // reset via `setState`). The store
   // exposes a `__resetLspClientStoreForTests`
   // action for the test suite to call
-  // in `beforeEach` — it cancels timers,
+  // in `beforeEach` â€” it cancels timers,
   // clears the handle map, and
   // detaches the crash listener so
   // the next test's first
@@ -437,20 +438,20 @@ beforeEach(() => {
   // Drain listeners that the previous
   // test's `ensureCrashListener` added.
   crashListeners = [];
-  // Phase 9.7 — same for the `onLspLog`
+  // Phase 9.7 â€” same for the `onLspLog`
   // subscription.
   logListeners = [];
-  // Phase 9.36 — clear the most-recently
+  // Phase 9.36 â€” clear the most-recently
   // registered `onLspStdout` handler so
   // previous-test listeners don't leak.
   lastStdoutHandler = null;
   nextHandleIdCounter = 1;
   // Default the kill switch ON for most
   // tests; per-test overrides set it OFF
-  // and back as needed. Phase 9.2e — the
+  // and back as needed. Phase 9.2e â€” the
   // v2 per-kind record is the source of
   // truth; we seed it explicitly to keep
-  // tests independent of the v1→v2
+  // tests independent of the v1â†’v2
   // migration logic (so a stray v1 key
   // from another suite can't bleed in).
   localStorage.setItem(
@@ -475,7 +476,7 @@ afterEach(() => {
   // Tear down any live client so the polling
   // loop's `setTimeout` doesn't fire after
   // the test ends. We do NOT await
-  // `shutdown()` — it sends a `shutdown` JSON-RPC
+  // `shutdown()` â€” it sends a `shutdown` JSON-RPC
   // request that needs a response, and the
   // mock doesn't simulate a server. Fire and
   // forget.
@@ -525,7 +526,7 @@ describe('lspClientStore', () => {
   it('dispose removes the client and flips the status back to stopped', async () => {
     await useLspClientStore.getState().getOrCreate('/workspace/a');
     // `dispose` calls `client.shutdown()` which
-    // awaits a `shutdown` JSON-RPC request —
+    // awaits a `shutdown` JSON-RPC request â€”
     // the mock doesn't simulate a server
     // response, so we don't await dispose
     // here. The synchronous part of `dispose`
@@ -568,7 +569,7 @@ describe('lspClientStore', () => {
     }
   });
 
-  // --- Phase 9.5 — crash recovery (T2#2) ---
+  // --- Phase 9.5 â€” crash recovery (T2#2) ---
 
   /**
    * Helper: fire a synthetic `lsp://crashed`
@@ -585,7 +586,7 @@ describe('lspClientStore', () => {
     for (const l of crashListeners) l(payload);
   }
 
-  /** Phase 9.7 — synchronously fire a fake
+  /** Phase 9.7 â€” synchronously fire a fake
    *  `lsp://log` event to all registered
    *  log listeners. Mirrors `fireCrash` but
    *  for the live "Server output" panel. */
@@ -596,7 +597,7 @@ describe('lspClientStore', () => {
     for (const l of logListeners) l(payload);
   }
 
-  /** Phase 9.36 — synchronously fire a fake
+  /** Phase 9.36 â€” synchronously fire a fake
    *  `lsp://stdout` event to the most-recent
    *  `LspClient` that subscribed. The
    *  production code filters on `handleId`
@@ -658,7 +659,7 @@ describe('lspClientStore', () => {
 
   it('auto-respawn cancels when the kill switch is OFF', async () => {
     // The kill switch is OFF (Phase 9.2e
-    // — per-kind; we disable the TS kind
+    // â€” per-kind; we disable the TS kind
     // for this test). Even on a crash,
     // the store must NOT schedule a
     // respawn (the user has explicitly
@@ -712,7 +713,7 @@ describe('lspClientStore', () => {
     // no respawn happened. We use a real
     // `setTimeout` (not `vi.useFakeTimers`)
     // because the LspClient's reader loop
-    // uses `setTimeout` too — faking
+    // uses `setTimeout` too â€” faking
     // timers would freeze the reader and
     // cause the test to hang on
     // `getOrCreate`.
@@ -745,7 +746,7 @@ describe('lspClientStore', () => {
     expect(fresh?.handleId).toBe('mock_handle_2');
     // The status is `ready` (the new
     // client's `initialize` handshake
-    // completed — the mock auto-replies
+    // completed â€” the mock auto-replies
     // to `initialize`).
     expect(state.statusByWorkspace.get(tsKey('/workspace/crash-5'))).toBe('ready');
     // The crash info is cleared on a
@@ -759,7 +760,7 @@ describe('lspClientStore', () => {
     // receives a crash event for a
     // handle that was never registered.
     // The store should silently ignore
-    // the event — it has no way to look
+    // the event â€” it has no way to look
     // up the workspace, and racing a
     // crash event for a long-disposed
     // workspace would be a spurious
@@ -792,7 +793,7 @@ describe('lspClientStore', () => {
     // crash from `crashByWorkspace` to pick
     // the next backoff step. We test the
     // escalation by firing multiple crash
-    // events against the *same* handleId —
+    // events against the *same* handleId â€”
     // the counter lives in `crashByWorkspace`,
     // not in the client. The auto-respawn
     // timer itself is never awaited (it
@@ -810,7 +811,7 @@ describe('lspClientStore', () => {
         .getState()
         .crashByWorkspace.get(tsKey('/workspace/crash-6'))?.respawnInMs,
     ).toBe(1_000);
-    // Second crash (same handleId — the
+    // Second crash (same handleId â€” the
     // counter lives in `crashByWorkspace`):
     // 2s.
     fireCrash({
@@ -845,7 +846,7 @@ describe('lspClientStore', () => {
         .getState()
         .crashByWorkspace.get(tsKey('/workspace/crash-6'))?.respawnInMs,
     ).toBe(8_000);
-    // Fifth: cap reached (30s) — no more
+    // Fifth: cap reached (30s) â€” no more
     // auto-respawn.
     fireCrash({
       handleId: 'mock_handle_1',
@@ -859,7 +860,7 @@ describe('lspClientStore', () => {
     ).toBeNull();
   });
 
-  // --- Phase 9.7 — live "Server output" panel ---
+  // --- Phase 9.7 â€” live "Server output" panel ---
 
   it('lsp://log event appends lines to lspOutputByWorkspace', async () => {
     // Start a client so the store registers
@@ -881,12 +882,14 @@ describe('lspClientStore', () => {
       .getState()
       .lspOutputByWorkspace.get(tsKey('/workspace/log-1'));
     expect(entry).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.lines).toEqual([
       'info: parsed foo.ts',
       'warn: deprecated API in bar.ts',
     ]);
-    // No partial line — both chunks ended in
+    // No partial line â€” both chunks ended in
     // \n.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.partialLine).toBe('');
   });
 
@@ -902,7 +905,9 @@ describe('lspClientStore', () => {
     let entry = useLspClientStore
       .getState()
       .lspOutputByWorkspace.get(tsKey('/workspace/log-2'));
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.lines).toEqual([]);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.partialLine).toBe(
       'error: cannot find module "fo',
     );
@@ -914,15 +919,17 @@ describe('lspClientStore', () => {
     entry = useLspClientStore
       .getState()
       .lspOutputByWorkspace.get(tsKey('/workspace/log-2'));
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.lines).toEqual([
       'error: cannot find module "foo.ts"',
       '  at line 42',
     ]);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.partialLine).toBe('');
   });
 
   it('lsp://log event for an unknown handleId is ignored', async () => {
-    // No client has been started → no
+    // No client has been started â†’ no
     // handleId is registered. A log event
     // for an unknown handleId should be
     // silently dropped.
@@ -942,6 +949,7 @@ describe('lspClientStore', () => {
       .getState()
       .getOrCreate('/workspace/log-3');
     fireLog({
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       handleId: client.handleId!,
       chunk: 'first line\n',
     });
@@ -965,13 +973,16 @@ describe('lspClientStore', () => {
       .getState()
       .getOrCreate('/workspace/log-4');
     fireLog({
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       handleId: client.handleId!,
       chunk: 'line 1\nline 2\nline 3\n',
     });
     expect(
+      /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
       useLspClientStore
         .getState()
         .lspOutputByWorkspace.get(tsKey('/workspace/log-4'))!.lines
+        /* eslint-enable @typescript-eslint/no-non-null-assertion */
         .length,
     ).toBe(3);
     // Track that we did NOT touch the IPC.
@@ -981,7 +992,7 @@ describe('lspClientStore', () => {
       .getState()
       .clearLspOutput('/workspace/log-4');
     // The store should NOT have called
-    // `lspStdioReadStderrLog` — that would
+    // `lspStdioReadStderrLog` â€” that would
     // drain the Rust buffer, which the
     // user might not want (the child is
     // still running, may write more).
@@ -1025,6 +1036,7 @@ describe('lspClientStore', () => {
       .getState()
       .lspOutputByWorkspace.get(tsKey('/workspace/log-5'));
     expect(entry).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.lines).toEqual(['pre-subscribe line']);
   });
 
@@ -1037,6 +1049,7 @@ describe('lspClientStore', () => {
     // oldest 5 should be evicted.
     for (let i = 0; i < 1_005; i++) {
       fireLog({
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         handleId: client.handleId!,
         chunk: `line ${i}\n`,
       });
@@ -1044,22 +1057,25 @@ describe('lspClientStore', () => {
     const entry = useLspClientStore
       .getState()
       .lspOutputByWorkspace.get(tsKey('/workspace/log-6'));
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.lines.length).toBe(1000);
     // The first 5 should be dropped; the
     // oldest line now is `line 5`.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.lines[0]).toBe('line 5');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(entry!.lines[entry!.lines.length - 1]).toBe(
       'line 1004',
     );
   });
 
-  // --- Phase 9.36 — stdout event-stream upgrade ---
+  // --- Phase 9.36 â€” stdout event-stream upgrade ---
 
   it('LSP_STDOUT_EVENT constant matches the Rust event name', () => {
     // Pins the cross-side contract. If the
     // Rust `LSP_STDOUT_EVENT` in
     // `src-tauri/src/stdio.rs` changes, the
-    // listener goes silent — the JS side
+    // listener goes silent â€” the JS side
     // would hang on `initialize`. The Rust
     // test `lsp_stdout_event_name_is_stable`
     // asserts the other direction.
@@ -1084,7 +1100,7 @@ describe('lspClientStore', () => {
     // The store calls `lspStdioRead` once
     // after the subscription as a catch-up
     // read. This is the *only* call to
-    // `lspStdioRead` the LspClient makes —
+    // `lspStdioRead` the LspClient makes â€”
     // the polling loop is gone.
     const readMock = vi.mocked(lspIpc.lspStdioRead);
     const before = readMock.mock.calls.length;
@@ -1131,7 +1147,7 @@ describe('lspClientStore', () => {
     await useLspClientStore.getState().getOrCreate('/workspace/event-e');
     // The mock's `lastStdoutHandler` is
     // now the handler for workspace A.
-    // The handler filters on `handleId` —
+    // The handler filters on `handleId` â€”
     // firing with a *different* handleId
     // should be a no-op (we can't observe
     // this directly, but we can assert the
@@ -1153,13 +1169,15 @@ describe('lspClientStore', () => {
       chunk: Array.from(frame),
     });
     // The client should have received the
-    // frame — we assert via the message
+    // frame â€” we assert via the message
     // queue. Read with a generous timeout
     // so a slow event loop tick doesn't
     // fail the test.
+    /* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
     const client = useLspClientStore
       .getState()
       .clients.get(tsKey('/workspace/event-e'))!;
+    /* eslint-enable @typescript-eslint/no-non-null-assertion */
     const msg = await Promise.race([
       client.transport.read(),
       new Promise<null>((r) => setTimeout(() => r(null), 500)),
@@ -1174,7 +1192,7 @@ describe('lspClientStore', () => {
     // attach. The test just verifies the
     // *plumbing* is in place (subscribe
     // called, catch-up called, unlisten
-    // called) — not the full event delivery
+    // called) â€” not the full event delivery
     // round-trip, which would require a
     // more sophisticated mock. The 5
     // preceding Phase 9.36 tests cover the
@@ -1205,7 +1223,7 @@ describe('lspClientStore', () => {
     const client = await useLspClientStore
       .getState()
       .getOrCreate('/workspace/event-f');
-    // The client reached `ready` — the
+    // The client reached `ready` â€” the
     // sentinel didn't break the framing
     // (a 0xFF byte would have been
     // treated as invalid UTF-8 and

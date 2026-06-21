@@ -224,7 +224,8 @@ describe('FileRowContextMenu', () => {
     const items = handle.container.querySelectorAll('[role="menuitem"]');
     // ArrowDown to advance to the second
     // item, then Space to activate it.
-    const menu = handle.container.querySelector('[role="menu"]')!;
+    const menu = handle.container.querySelector('[role="menu"]');
+    if (!menu) throw new Error('Menu not found');
     fireKey(menu, 'ArrowDown');
     fireKey(items[1], ' ');
     expect(onPick).toHaveBeenCalledWith('rename');
@@ -248,7 +249,8 @@ describe('FileRowContextMenu', () => {
         viewport={() => VIEWPORT}
       />,
     );
-    const menu = handle.container.querySelector('[role="menu"]')!;
+    const menu = handle.container.querySelector('[role="menu"]');
+    if (!menu) throw new Error('Menu not found');
     // Initial focus is on the first
     // non-disabled item, which is item 0
     // (Rename). ArrowDown should skip
@@ -340,7 +342,8 @@ describe('FileRowContextMenu', () => {
         viewport={() => VIEWPORT}
       />,
     );
-    const menu = handle.container.querySelector('[role="menu"]')!;
+    const menu = handle.container.querySelector('[role="menu"]');
+    if (!menu) throw new Error('Menu not found');
     fireKey(menu, 'End');
     const items = handle.container.querySelectorAll('[role="menuitem"]');
     fireKey(items[2], 'Enter');

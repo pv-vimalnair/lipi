@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Tests for the `toolSettingsStore` (5b-7).
  *
  * Coverage:
@@ -42,7 +42,7 @@ import {
 function resetStore() {
   // Reset to a clean state for each test. We
   // call `setState` directly (the store's
-  // action API isn't designed for this — it's
+  // action API isn't designed for this â€” it's
   // for the app code path).
   useToolSettingsStore.setState({
     disabledToolNames: [],
@@ -69,7 +69,7 @@ describe('toolSettingsStore', () => {
     // doesn't bleed between tests. The
     // subscriber is module-level so the
     // `setupToolSettingsPersistence` call
-    // is idempotent — but the storage
+    // is idempotent â€” but the storage
     // itself is per-test.
     clearStorage();
   });
@@ -113,7 +113,7 @@ describe('toolSettingsStore', () => {
       const before = useToolSettingsStore.getState().disabledToolNames;
       setEnabled('get_file_contents', false);
       const after = useToolSettingsStore.getState().disabledToolNames;
-      // Same content, same length — but the
+      // Same content, same length â€” but the
       // reference may differ if the
       // implementation creates a new array.
       // We check length + content, not identity.
@@ -231,7 +231,7 @@ describe('toolSettingsStore', () => {
       const { hydrate } = useToolSettingsStore.getState();
       hydrate();
       // The whole shape is rejected (any
-      // non-string item) — the store falls
+      // non-string item) â€” the store falls
       // back to defaults rather than
       // partial-loading.
       expect(useToolSettingsStore.getState().disabledToolNames).toEqual([]);
@@ -247,7 +247,7 @@ describe('toolSettingsStore', () => {
       // After hydration, change the state.
       setEnabled('b', false);
       // A second hydrate should NOT reset to
-      // the localStorage snapshot — the
+      // the localStorage snapshot â€” the
       // user changed something after the
       // first hydration.
       hydrate();
@@ -268,11 +268,12 @@ describe('toolSettingsStore', () => {
       setupToolSettingsPersistence();
       setEnabled('get_file_contents', false);
       // The subscriber writes async (on the
-      // next microtask) — but it's a
+      // next microtask) â€” but it's a
       // synchronous `setItem` in our impl,
       // so it should be visible immediately.
       const raw = localStorage.getItem('lipi:toolSettings:v2');
       expect(raw).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       expect(parsed.disabledToolNames).toEqual(['get_file_contents']);
       // 5d: the v2 payload also carries
@@ -307,7 +308,7 @@ describe('toolSettingsStore', () => {
     });
   });
 
-  // --- 5d: confirmationMode + v1→v2 migration -----------------
+  // --- 5d: confirmationMode + v1â†’v2 migration -----------------
   //
   // 5d adds a per-tool `confirmationMode`
   // (always_allow | always_confirm | per_call)
@@ -441,7 +442,7 @@ describe('toolSettingsStore', () => {
       // The AI store consults `isEnabled`
       // FIRST, then `shouldConfirm`. If a
       // tool is disabled, we don't double-
-      // prompt — we just return false from
+      // prompt â€” we just return false from
       // `shouldConfirm` and the AI store
       // will refuse to run the call on
       // the earlier check.
@@ -456,7 +457,7 @@ describe('toolSettingsStore', () => {
     });
   });
 
-  describe('v1 → v2 migration (5d)', () => {
+  describe('v1 â†’ v2 migration (5d)', () => {
     beforeEach(() => {
       localStorage.removeItem('lipi:toolSettings:v1');
       localStorage.removeItem('lipi:toolSettings:v2');
@@ -488,7 +489,7 @@ describe('toolSettingsStore', () => {
 
     it('does NOT delete the v1 key after migration', () => {
       // Leaving v1 in place makes the
-      // migration reversible — a v1
+      // migration reversible â€” a v1
       // reader (e.g. a downgrade) can
       // still load the old state. The
       // next state-changing action will
@@ -528,7 +529,7 @@ describe('toolSettingsStore', () => {
       // A corrupt v2 file (e.g. a half-
       // written JSON from a quota error
       // mid-save) should not crash the
-      // app — fall back to defaults.
+      // app â€” fall back to defaults.
       // v1 is also checked as a secondary
       // fallback, but if v2 is present
       // AND malformed, we DON'T fall
@@ -553,12 +554,12 @@ describe('toolSettingsStore', () => {
       warn.mockRestore();
     });
 
-    it('writes v2 on the next state change after a v1→v2 migration', () => {
+    it('writes v2 on the next state change after a v1â†’v2 migration', () => {
       // After the migration, the
       // persistence subscriber will write
       // v2 the next time the user changes
       // a setting. (The hydration itself
-      // does NOT write — see the existing
+      // does NOT write â€” see the existing
       // `hydrated` guard test.)
       localStorage.setItem(
         'lipi:toolSettings:v1',
@@ -569,6 +570,7 @@ describe('toolSettingsStore', () => {
       useToolSettingsStore.getState().setEnabled('y', false);
       const raw = localStorage.getItem('lipi:toolSettings:v2');
       expect(raw).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       expect(parsed.disabledToolNames).toEqual(['x', 'y']);
       expect(parsed.confirmationMode).toEqual({});
@@ -581,7 +583,7 @@ describe('toolSettingsStore', () => {
     // on the Settings screen. Mirrors
     // the 5h decision-log pattern, with
     // a localStorage-backed undo buffer
-    // (not in-memory — see the
+    // (not in-memory â€” see the
     // STORAGE_KEY_UNDO header).
 
     beforeEach(() => {
@@ -613,6 +615,7 @@ describe('toolSettingsStore', () => {
       clearAllSettings();
       const raw = localStorage.getItem('lipi:toolSettings:undo:v1');
       expect(raw).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       expect(parsed.disabledToolNames).toEqual([
         'get_file_contents',
@@ -623,7 +626,7 @@ describe('toolSettingsStore', () => {
 
     it('is a no-op when both disabledToolNames and confirmationMode are empty', () => {
       // Reset shouldn't pop an empty
-      // undo toast — there's nothing
+      // undo toast â€” there's nothing
       // to undo. The buffer stays
       // unwritten.
       const { clearAllSettings, hasPendingUndo } = useToolSettingsStore.getState();
@@ -641,7 +644,7 @@ describe('toolSettingsStore', () => {
       // A fresh `setConfirmationMode` with
       // the default removes the entry
       // (per the existing implementation),
-      // so the map stays `{}` — the
+      // so the map stays `{}` â€” the
       // no-op branch covers this.
       const { clearAllSettings, hasPendingUndo } = useToolSettingsStore.getState();
       clearAllSettings();
@@ -669,7 +672,7 @@ describe('toolSettingsStore', () => {
       // not just live in-memory until
       // the undo timer fires. The
       // persistence subscriber writes
-      // v2 on the next render — but
+      // v2 on the next render â€” but
       // only if `hydrated` is true
       // (the subscriber early-returns
       // during the initial mount to
@@ -682,6 +685,7 @@ describe('toolSettingsStore', () => {
       clearAllSettings();
       const raw = localStorage.getItem('lipi:toolSettings:v2');
       expect(raw).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       expect(parsed.disabledToolNames).toEqual([]);
     });
@@ -727,12 +731,12 @@ describe('toolSettingsStore', () => {
       // The discard timer already ran
       // (or the user never clicked
       // Reset). Undo should be a
-      // safe no-op — pendingUndo flips
+      // safe no-op â€” pendingUndo flips
       // to false but nothing else
       // changes.
       const { undoClearAllSettings, hasPendingUndo } =
         useToolSettingsStore.getState();
-      // pendingUndo starts as false —
+      // pendingUndo starts as false â€”
       // confirm that.
       expect(hasPendingUndo()).toBe(false);
       undoClearAllSettings();
@@ -757,7 +761,7 @@ describe('toolSettingsStore', () => {
       warn.mockRestore();
     });
 
-    it('round-trips the full clear → undo → clear → undo cycle through localStorage', () => {
+    it('round-trips the full clear â†’ undo â†’ clear â†’ undo cycle through localStorage', () => {
       // Defensive: the buffer survives
       // multiple writes (the second
       // clear overwrites the first
@@ -781,6 +785,7 @@ describe('toolSettingsStore', () => {
       clearAllSettings();
       expect(useToolSettingsStore.getState().disabledToolNames).toEqual([]);
       const raw = localStorage.getItem('lipi:toolSettings:undo:v1');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       // The second buffer reflects
       // the state BEFORE the second
@@ -815,7 +820,7 @@ describe('toolSettingsStore', () => {
 
     it('is a no-op (but safe) when called with no pending undo', () => {
       const { discardUndoAllSettings } = useToolSettingsStore.getState();
-      // No prior clear — discard should
+      // No prior clear â€” discard should
       // not throw, should not touch
       // storage.
       expect(() => discardUndoAllSettings()).not.toThrow();
@@ -827,7 +832,7 @@ describe('toolSettingsStore', () => {
   describe('hydrate restores pendingUndo from the buffer (5a)', () => {
     // A page reload during the 5s
     // window must NOT silently drop
-    // the clear — the undo buffer
+    // the clear â€” the undo buffer
     // (and the cleared v2) both
     // survive. The UI re-arms the
     // 5s timer on mount.
@@ -937,6 +942,7 @@ describe('toolSettingsStore', () => {
       });
       const raw = localStorage.getItem('lipi:toolSettings:undo:v1');
       expect(raw).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       expect(parsed.disabledToolNames).toEqual(['a', 'b']);
     });
@@ -953,6 +959,7 @@ describe('toolSettingsStore', () => {
       });
       const raw = localStorage.getItem('lipi:toolSettings:v2');
       expect(raw).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       expect(parsed.disabledToolNames).toEqual(['imported']);
       expect(parsed.confirmationMode).toEqual({ x: 'always_confirm' });
@@ -962,12 +969,12 @@ describe('toolSettingsStore', () => {
       // A user importing their own
       // export on the same machine
       // should not get a "5
-      // seconds to undo" toast —
+      // seconds to undo" toast â€”
       // nothing actually changed.
       const { setEnabled, applyImportedSettings } =
         useToolSettingsStore.getState();
       setEnabled('a', false);
-      // First import — non-trivial
+      // First import â€” non-trivial
       // change.
       applyImportedSettings({
         disabledToolNames: ['a'],
@@ -975,7 +982,7 @@ describe('toolSettingsStore', () => {
       });
       // Drain the toast.
       useToolSettingsStore.getState().discardUndoAllSettings();
-      // Second import — identical
+      // Second import â€” identical
       // to current state.
       applyImportedSettings({
         disabledToolNames: ['a'],
@@ -991,7 +998,7 @@ describe('toolSettingsStore', () => {
       // We use positional
       // comparison for the
       // disabled list (matching
-      // the persistence shape — a
+      // the persistence shape â€” a
       // JSON array, not a set).
       // A re-ordered import of
       // the same tools is NOT a
@@ -1066,7 +1073,7 @@ describe('toolSettingsStore', () => {
       // would be chaining, which
       // is much more complex and
       // probably not what the
-      // user wants — they meant
+      // user wants â€” they meant
       // the import, not the
       // reset).
       const { setEnabled, clearAllSettings, applyImportedSettings } =
@@ -1084,14 +1091,15 @@ describe('toolSettingsStore', () => {
       // The buffer should now
       // reflect the
       // pre-import state (which
-      // is empty — what the
+      // is empty â€” what the
       // reset left behind).
       const raw = localStorage.getItem('lipi:toolSettings:undo:v1');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       expect(parsed.disabledToolNames).toEqual([]);
     });
 
-    it('round-trips through persistence: import → reload → undo restores pre-import state', () => {
+    it('round-trips through persistence: import â†’ reload â†’ undo restores pre-import state', () => {
       // The most important
       // end-to-end test: the
       // undo buffer survives a

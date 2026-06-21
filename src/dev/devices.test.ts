@@ -1,7 +1,7 @@
-/**
+﻿/**
  * Tests for `devices.ts` (M1).
  *
- * The file is data — the tests
+ * The file is data â€” the tests
  * assert shape, sane ranges,
  * and that each device has
  * the new M1 fields
@@ -71,7 +71,7 @@ describe('TOP_8_DEVICES', () => {
     for (const d of TOP_8_DEVICES) {
       // Phones:
       // 320-440 wide
-      // (CSS px at 1×
+      // (CSS px at 1Ã—
       // DPR). Tablets:
       // 700-1300 wide.
       expect(d.width).toBeGreaterThanOrEqual(320);
@@ -88,12 +88,14 @@ describe('TOP_8_DEVICES', () => {
     // (e.g. swapping 47
     // and 34) is caught.
     const iphone =
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       TOP_8_DEVICES.find((d) => d.id === 'iphone-15-pro')!;
     expect(iphone.safeAreaTop).toBe(47);
     expect(iphone.safeAreaBottom).toBe(34);
   });
 
   it('the iPhone SE 3 has a 0px bottom safe-area inset (hardware home button)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     const se = TOP_8_DEVICES.find((d) => d.id === 'iphone-se-3')!;
     expect(se.safeAreaBottom).toBe(0);
   });

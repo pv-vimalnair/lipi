@@ -142,7 +142,8 @@ export function computeLipiStateV5ImportPreview(
   for (const currentTab of current.workspace.workspaces) {
     const idx = findIncomingTabByPath(currentTab, incoming.workspace.workspaces);
     if (idx === -1) continue; // tab is "removed" — already surfaced
-    const incomingTab = incoming.workspace.workspaces[idx]!;
+    const incomingTab = incoming.workspace.workspaces[idx];
+    if (!incomingTab) continue;
     // expandedDirs
     const currentDirs = new Set(currentTab.state.expandedDirs);
     const incomingDirs = new Set(incomingTab.state.expandedDirs);

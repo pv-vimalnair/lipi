@@ -463,6 +463,7 @@ export function CommandPaletteModal(): JSX.Element | null {
             const selected = index === clampedIndex;
             const groupChanged =
               index === 0 ||
+              // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- index > 0 when this branch executes
               results[index - 1]!.command.group !== cmd.group;
             return (
               <li

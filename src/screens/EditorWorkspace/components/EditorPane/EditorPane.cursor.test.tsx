@@ -170,6 +170,12 @@ import { _resetCursorSchedulesForTests } from './scheduleCursorMirrorBack';
 
 const FAKE_PATH = 'C:/proj/index.ts';
 
+function getFirstWorkspace() {
+  const ws = useWorkspaceStore.getState().workspaces[0];
+  if (!ws) throw new Error('No workspace — did you call seedActiveTab()?');
+  return ws;
+}
+
 function seedActiveTab(editorCursorByPath: Record<string, { line: number; column: number }>) {
   useWorkspaceStore.setState({
     hydrated: true,
@@ -295,7 +301,7 @@ describe('EditorPane — M6c editor cursor', () => {
     // onDidChangeCursorPosition, but the suppress
     // flag short-circuited the mirror-back.
     const after =
-      useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath;
+      getFirstWorkspace().state.editorCursorByPath;
     // The pre-populated (12, 4) is still there (we
     // didn't touch the store during the test).
     expect(after).toEqual({ [FAKE_PATH]: { line: 12, column: 4 } });
@@ -317,14 +323,14 @@ describe('EditorPane — M6c editor cursor', () => {
 
     // The 500ms debounce hasn't fired yet.
     expect(
-      useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
+      getFirstWorkspace().state.editorCursorByPath,
     ).toEqual({});
 
     vi.advanceTimersByTime(500);
 
     // The store now has the new position.
     expect(
-      useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
+      getFirstWorkspace().state.editorCursorByPath,
     ).toEqual({ [FAKE_PATH]: { line: 7, column: 2 } });
   });
 
@@ -346,7 +352,7 @@ describe('EditorPane — M6c editor cursor', () => {
     vi.advanceTimersByTime(500);
 
     expect(
-      useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
+      getFirstWorkspace().state.editorCursorByPath,
     ).toEqual({ [FAKE_PATH]: { line: 10, column: 1 } });
   });
 
@@ -366,7 +372,7 @@ describe('EditorPane — M6c editor cursor', () => {
 
     // The 500ms debounce hasn't fired yet.
     expect(
-      useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
+      getFirstWorkspace().state.editorCursorByPath,
     ).toEqual({});
 
     // Unmount before the timer fires. The cleanup
@@ -377,7 +383,7 @@ describe('EditorPane — M6c editor cursor', () => {
 
     // The write is persisted.
     expect(
-      useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
+      getFirstWorkspace().state.editorCursorByPath,
     ).toEqual({ [FAKE_PATH]: { line: 42, column: 7 } });
   });
 });

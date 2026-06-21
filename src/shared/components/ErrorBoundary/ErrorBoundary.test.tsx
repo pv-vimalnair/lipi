@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().toBeDefined() */
 /**
  * ErrorBoundary tests.
  *
@@ -5,7 +6,7 @@
  * (getDerivedStateFromError / componentDidCatch) which
  * `renderToStaticMarkup` does not exercise. These tests
  * use `createRoot` from `react-dom/client` + `act` from
- * `react` — both are standard React APIs that ship with
+ * `react` -- both are standard React APIs that ship with
  * the project's existing dependencies (no `@testing-library`
  * required).
  *
@@ -30,6 +31,7 @@ function render(element: ReactElement): void {
       document.body.appendChild(container);
       root = createRoot(container);
     }
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     root!.render(element);
   });
 }
@@ -63,6 +65,7 @@ describe('ErrorBoundary', () => {
         <Bomb shouldThrow={false} />
       </ErrorBoundary>,
     );
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.querySelector('div')!.textContent).toBe('child ok');
   });
 
@@ -72,10 +75,15 @@ describe('ErrorBoundary', () => {
         <Bomb shouldThrow={true} />
       </ErrorBoundary>,
     );
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.textContent).toContain('Something went wrong');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.textContent).toContain('TestPane');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.textContent).toContain('test render error');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.textContent).toContain('Try again');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.textContent).toContain('Reload app');
   });
 
@@ -85,8 +93,10 @@ describe('ErrorBoundary', () => {
         <Bomb shouldThrow={true} />
       </ErrorBoundary>,
     );
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.textContent).toContain('Something went wrong');
     // The subtitle paragraph should not be rendered
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     const subtitles = container!.querySelectorAll('p');
     for (const p of Array.from(subtitles)) {
       expect(p.textContent).not.toBe('TestPane');
@@ -106,7 +116,9 @@ describe('ErrorBoundary', () => {
         <Bomb shouldThrow={true} />
       </ErrorBoundary>,
     );
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.textContent).toContain('Custom: test render error');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(container!.textContent).toContain('Reset');
   });
 
@@ -116,6 +128,7 @@ describe('ErrorBoundary', () => {
         <Bomb shouldThrow={true} />
       </ErrorBoundary>,
     );
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     const alert = container!.querySelector('[role="alert"]');
     expect(alert).not.toBeNull();
   });

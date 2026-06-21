@@ -224,7 +224,8 @@ export function computeLipiStateV4ImportPreview(
   for (const currentTab of current.workspace.workspaces) {
     const idx = findIncomingTabByPath(currentTab, incoming.workspace.workspaces);
     if (idx === -1) continue; // tab is "removed" — already surfaced
-    const incomingTab = incoming.workspace.workspaces[idx]!;
+    const incomingTab = incoming.workspace.workspaces[idx];
+    if (!incomingTab) continue;
     // expandedDirs
     const currentDirs = new Set(currentTab.state.expandedDirs);
     const incomingDirs = new Set(incomingTab.state.expandedDirs);
@@ -458,7 +459,9 @@ export function previewDiffLabelV4(diff: {
     diff.path,
   );
   if (perTabMatch) {
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- regex guarantees 2 capture groups
     const tabPath = perTabMatch[1]!;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- regex guarantees 2 capture groups
     const field = perTabMatch[2]!;
     if (field === 'expandedDirs') {
       const before = diff.before as { added: string[]; removed: string[] };

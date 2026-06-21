@@ -1,8 +1,9 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().toBeDefined() */
 /**
  * Tests for the S3 import
  * preview helper. Per project
  * convention (Rule 4), we test
- * the pure logic in isolation —
+ * the pure logic in isolation --
  * no React, no Tauri mocks.
  */
 
@@ -44,7 +45,7 @@ describe('computeLipiStateImportPreview', () => {
     });
   });
 
-  it('reports a workspace.currentPath: null → string change', () => {
+  it('reports a workspace.currentPath: null â†’ string change', () => {
     const preview = computeLipiStateImportPreview(
       { ...BASE, workspace: { ...BASE.workspace, currentPath: null } },
       BASE,
@@ -68,7 +69,9 @@ describe('computeLipiStateImportPreview', () => {
       (d) => d.path === 'workspace.recents',
     );
     expect(recentsDiff).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(recentsDiff!.after).toEqual({ added: ['C:/Users/another'], removed: [] });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(recentsDiff!.before).toEqual({ added: [], removed: ['C:/Users/me/other'] });
   });
 
@@ -96,6 +99,7 @@ describe('computeLipiStateImportPreview', () => {
       (d) => d.path === 'toolSettings.disabledToolNames',
     );
     expect(diff).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(diff!.after).toEqual({ added: ['new_tool'], removed: [] });
   });
 
@@ -114,6 +118,7 @@ describe('computeLipiStateImportPreview', () => {
       (d) => d.path === 'toolSettings.disabledToolNames',
     );
     expect(diff).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(diff!.before).toEqual({ added: [], removed: ['run_shell_command'] });
   });
 

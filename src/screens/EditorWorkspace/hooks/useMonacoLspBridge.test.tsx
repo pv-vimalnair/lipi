@@ -162,7 +162,8 @@ vi.mock('@/ipc/lsp', () => {
           .__lspQByHandle ?? new Map();
       const q = qm.get(h) ?? [];
       if (q.length === 0) return new Uint8Array(0);
-      const next = q.shift()!;
+      const next = q.shift();
+      if (!next) return new Uint8Array(0);
       qm.set(h, q);
       (globalThis as { __lspQByHandle?: Map<string, Uint8Array[]> })
         .__lspQByHandle = qm;
@@ -578,8 +579,9 @@ function parseFirstLspFrame(
     /Content-Length: (\d+)\r\n\r\n/,
   );
   expect(match, 'no Content-Length header found').not.toBeNull();
-  const headerLen = match![0]!.length;
-  const bodyLen = Number(match![1]);
+  if (!match) throw new Error('no Content-Length header found');
+  const headerLen = match[0].length;
+  const bodyLen = Number(match[1]);
   const body = concatenatedWrites.slice(
     headerLen,
     headerLen + bodyLen,
@@ -2378,7 +2380,7 @@ describe('useMonacoLspBridge', () => {
     // one).
     const initialTsSelector = (registerLspProviders as unknown as {
       mock: { calls: unknown[][] };
-    }).mock.calls[callsBefore]![2] as string[];
+    }).mock.calls[callsBefore][2] as string[];
     // Force a respawn of the TS kind. The
     // store's `respawn` is the manual
     // path (vs. the auto-respawn ladder
@@ -2429,7 +2431,7 @@ describe('useMonacoLspBridge', () => {
     // javascriptreact).
     const respawnCall = (registerLspProviders as unknown as {
       mock: { calls: unknown[][] };
-    }).mock.calls[callsBefore + 3]!;
+    }).mock.calls[callsBefore + 3];
     const respawnSelector = respawnCall[2] as string[];
     expect(respawnSelector).toEqual(initialTsSelector);
     expect(respawnSelector).toContain('typescript');
@@ -2554,27 +2556,27 @@ describe('useMonacoLspBridge', () => {
     // `callsBefore + 3`.
     const respawnDisposables = ((registerLspProviders as unknown as {
       mock: { results: Array<{ value: unknown }> };
-    }).mock.results[callsBefore + 3]!.value as Array<{
+    }).mock.results[callsBefore + 3].value as Array<{
       dispose: ReturnType<typeof vi.fn>;
     }>);
     // The TS initial-mount array is at
     // index `callsBefore` in `mock.results`.
     const tsInitialDisposables = ((registerLspProviders as unknown as {
       mock: { results: Array<{ value: unknown }> };
-    }).mock.results[callsBefore]!.value as Array<{
+    }).mock.results[callsBefore].value as Array<{
       dispose: ReturnType<typeof vi.fn>;
     }>);
     // The TS initial array's disposes
     // MUST have been called (the bridge
     // disposed the old set before
     // registering the new one).
-    expect(tsInitialDisposables[0]!.dispose).toHaveBeenCalledTimes(1);
-    expect(tsInitialDisposables[1]!.dispose).toHaveBeenCalledTimes(1);
+    expect(tsInitialDisposables[0].dispose).toHaveBeenCalledTimes(1);
+    expect(tsInitialDisposables[1].dispose).toHaveBeenCalledTimes(1);
     // The respawn array's disposes
     // MUST NOT have been called yet
     // (the bridge just registered them).
-    expect(respawnDisposables[0]!.dispose).toHaveBeenCalledTimes(0);
-    expect(respawnDisposables[1]!.dispose).toHaveBeenCalledTimes(0);
+    expect(respawnDisposables[0].dispose).toHaveBeenCalledTimes(0);
+    expect(respawnDisposables[1].dispose).toHaveBeenCalledTimes(0);
     // The rust_analyzer and pyright
     // initial disposables (indices
     // `callsBefore + 1` and
@@ -2583,16 +2585,16 @@ describe('useMonacoLspBridge', () => {
     // respawned).
     const rustInitialDisposables = ((registerLspProviders as unknown as {
       mock: { results: Array<{ value: unknown }> };
-    }).mock.results[callsBefore + 1]!.value as Array<{
+    }).mock.results[callsBefore + 1].value as Array<{
       dispose: ReturnType<typeof vi.fn>;
     }>);
     const pyInitialDisposables = ((registerLspProviders as unknown as {
       mock: { results: Array<{ value: unknown }> };
-    }).mock.results[callsBefore + 2]!.value as Array<{
+    }).mock.results[callsBefore + 2].value as Array<{
       dispose: ReturnType<typeof vi.fn>;
     }>);
-    expect(rustInitialDisposables[0]!.dispose).toHaveBeenCalledTimes(0);
-    expect(pyInitialDisposables[0]!.dispose).toHaveBeenCalledTimes(0);
+    expect(rustInitialDisposables[0].dispose).toHaveBeenCalledTimes(0);
+    expect(pyInitialDisposables[0].dispose).toHaveBeenCalledTimes(0);
     mounted.unmount();
     // Restore the default mocks for
     // subsequent tests in this file.

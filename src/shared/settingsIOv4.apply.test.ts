@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior ok/length checks */
 /**
  * Tests for `applyLipiStateV4`
  * (the M6b transactional apply).
@@ -5,7 +6,7 @@
  * The v4 apply takes a
  * `LipiStateV4Data` (already
  * normalised from v3 if
- * needed — the parser does
+ * needed -- the parser does
  * the normalisation) and
  * writes it to the three
  * stores with snapshot
@@ -215,10 +216,13 @@ describe('applyLipiStateV4', () => {
     // array + activeId +
     // recents.
     expect(workspaceState.workspaces).toHaveLength(2);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.path).toBe('C:/Users/incoming/proj1');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.state.expandedDirs).toEqual([
       'C:/Users/incoming/proj1/src',
     ]);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[1]!.path).toBe('C:/Users/incoming/proj2');
     expect(workspaceState.activeId).toBe('tab-new-1');
     expect(workspaceState.recents).toEqual([
@@ -264,7 +268,9 @@ describe('applyLipiStateV4', () => {
     const r = applyLipiStateV4(v3Migrated);
     expect(r.ok).toBe(true);
     expect(workspaceState.workspaces).toHaveLength(1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.path).toBe('C:/Users/v3/proj');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.state).toEqual({
       expandedDirs: [],
       selectedPath: null,
@@ -319,6 +325,7 @@ describe('applyLipiStateV4', () => {
     // they were
     // rolled back.
     expect(workspaceState.workspaces).toHaveLength(1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.id).toBe('tab-existing');
     expect(workspaceState.activeId).toBe('tab-existing');
     expect(voicePreferencesState.provider).toBe('stub');
@@ -336,6 +343,7 @@ describe('applyLipiStateV4', () => {
     // Workspace was
     // applied (and
     // rolled back).
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.id).toBe('tab-existing');
     // Voice stayed at
     // the pre-apply
@@ -359,6 +367,7 @@ describe('applyLipiStateV4', () => {
     // pre-apply
     // workspace
     // state.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.id).toBe('tab-existing');
     // The other
     // stores were
@@ -405,6 +414,7 @@ describe('applyLipiStateV4', () => {
       // mutate the
       // workspace's
       // tab state.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       workspaceState.workspaces[0]!.state.expandedDirs = [
         'C:/Users/existing/proj/MUTATED',
       ];
@@ -419,6 +429,7 @@ describe('applyLipiStateV4', () => {
     // is restored. The
     // user's mutation
     // is gone.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.state.expandedDirs).toEqual([
       'C:/Users/existing/proj/old',
     ]);

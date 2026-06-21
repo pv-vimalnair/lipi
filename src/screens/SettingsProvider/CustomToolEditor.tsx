@@ -225,7 +225,7 @@ export function CustomToolEditor({
       <Stack direction="column" gap={3}>
         <div className={styles.editorHeader}>
           <h3 className={styles.editorTitle}>
-            {isEditing ? `Edit ${existing!.name}` : 'New custom tool'}
+            {existing ? `Edit ${existing.name}` : 'New custom tool'}
           </h3>
           <IconButton
             variant="subtle"

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Tests for `PricingCard`. The card renders the
  * three pricing tiers (trial, monthly, yearly) and
  * the "Subscribe" links open in the system browser
@@ -32,7 +32,7 @@ function mount(): { container: HTMLDivElement; root: Root; cleanup: () => void }
 }
 
 describe('PRICING_TIERS (data)', () => {
-  it('has three tiers in trial → monthly → yearly order', () => {
+  it('has three tiers in trial â†’ monthly â†’ yearly order', () => {
     expect(PRICING_TIERS.map((t) => t.id)).toEqual(['trial', 'monthly', 'yearly']);
   });
 
@@ -73,8 +73,10 @@ describe('PricingCard (component)', () => {
       const trial = container.querySelector('article[data-tier="trial"]');
       expect(trial).not.toBeNull();
       // The trial CTA is a <button disabled>, NOT an <a>.
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const anchor = trial!.querySelector('a');
       expect(anchor).toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const button = trial!.querySelector('button[disabled]');
       expect(button).not.toBeNull();
       expect(button?.textContent).toBe('Start free trial');
@@ -87,6 +89,7 @@ describe('PricingCard (component)', () => {
     const { container, cleanup } = mount();
     try {
       const monthly = container.querySelector('article[data-tier="monthly"]');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const anchor = monthly!.querySelector('a');
       expect(anchor).not.toBeNull();
       expect(anchor?.getAttribute('href')).toContain('plan=monthly');
@@ -100,6 +103,7 @@ describe('PricingCard (component)', () => {
     const { container, cleanup } = mount();
     try {
       const yearly = container.querySelector('article[data-tier="yearly"]');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const anchor = yearly!.querySelector('a');
       expect(anchor).not.toBeNull();
       expect(anchor?.getAttribute('href')).toContain('plan=yearly');

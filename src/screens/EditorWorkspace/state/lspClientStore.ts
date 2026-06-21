@@ -1134,7 +1134,7 @@ export class LspClient {
         this._readBuffer = this._readBuffer.slice(termIdx + HEADER_TERMINATOR.byteLength);
         continue;
       }
-      const bodyLength = parseInt(match[1]!, 10);
+      const bodyLength = parseInt(match[1] ?? '0', 10);
       const bodyStart = termIdx + HEADER_TERMINATOR.byteLength;
       if (this._readBuffer.byteLength < bodyStart + bodyLength) {
         // Not enough bytes yet — wait for the
@@ -1187,7 +1187,8 @@ export class LspClient {
     // handle.
     this._messageQueue.push(message);
     if (this._messageWaiters.length > 0) {
-      const waiter = this._messageWaiters.shift()!;
+      const waiter = this._messageWaiters.shift() ?? null;
+      if (!waiter) return;
       waiter(message);
     }
   }
@@ -1542,7 +1543,7 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
       consecutiveCrashes - 1,
       RESPAWN_BACKOFF_STEPS_MS.length - 1,
     );
-    const delay = RESPAWN_BACKOFF_STEPS_MS[stepIndex]!;
+    const delay = RESPAWN_BACKOFF_STEPS_MS[stepIndex] ?? 30_000;
     set((state) => {
       const next = new Map(state.crashByWorkspace);
       const prev = next.get(key);
@@ -1947,9 +1948,10 @@ export const useLspClientStore = create<LspClientStoreState>((set, get) => {
           // for every key in `liveKeys` (the
           // loop above filtered on that), so
           // `parsed` is non-null here.
+          if (!parsed) return Promise.resolve();
           return get().dispose(
-            parsed!.workspaceRoot,
-            parsed!.kind,
+            parsed.workspaceRoot,
+            parsed.kind,
           );
         }),
       );

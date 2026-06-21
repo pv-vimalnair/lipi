@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().not.toBeNull() */
 /**
  * Tests for `toolDecisionLogStore`
  * (Phase 5e).
@@ -16,7 +17,7 @@
  *     (subscribe writes to
  *     localStorage; the next
  *     instance reads back)
- *   - Corrupt v1 file → defaults
+ *   - Corrupt v1 file â†’ defaults
  *   - `truncateArgsPreview` honours
  *     the 2KB byte cap (and the
  *     marker is appended)
@@ -84,7 +85,7 @@ describe('toolDecisionLogStore', () => {
       const { records } = useToolDecisionLogStore.getState();
       expect(records).toHaveLength(2);
       // The second record is the
-      // newest — sits at index 0.
+      // newest -- sits at index 0.
       expect(records[0].id).toBe(id2);
       expect(records[0].toolName).toBe('b');
       expect(records[1].id).toBe(id1);
@@ -134,7 +135,7 @@ describe('toolDecisionLogStore', () => {
       const { recordDecision } = useToolDecisionLogStore.getState();
       // Record 501 entries. The
       // first one should be the
-      // oldest record — and should
+      // oldest record -- and should
       // be dropped.
       const ids: string[] = [];
       for (let i = 0; i < DECISION_LOG_CAPACITY + 1; i++) {
@@ -209,7 +210,9 @@ describe('toolDecisionLogStore', () => {
       expect(after.records).toEqual([]);
       expect(after.lastCleared).not.toBeNull();
       expect(after.lastCleared).toHaveLength(2);
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       expect(after.lastCleared![0].toolName).toBe('t2');
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       expect(after.lastCleared![1].toolName).toBe('t');
     });
   });
@@ -241,7 +244,7 @@ describe('toolDecisionLogStore', () => {
 
     it('is a no-op when there is nothing in the buffer', () => {
       // No clear was ever
-      // called — `lastCleared`
+      // called -- `lastCleared`
       // is null from the
       // reset. Calling
       // `undoClear` should not
@@ -402,6 +405,7 @@ describe('toolDecisionLogStore', () => {
       });
       const raw = localStorage.getItem(STORAGE_KEY);
       expect(raw).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const parsed = JSON.parse(raw!);
       expect(parsed.records).toHaveLength(1);
       expect(parsed.records[0].toolName).toBe('t');
@@ -493,7 +497,7 @@ describe('toolDecisionLogStore', () => {
       // Pre-populate the key. If
       // hydrate() triggered a
       // write, the file would be
-      // rewritten — but the
+      // rewritten -- but the
       // contents would be the
       // same, so this is hard to
       // detect from contents alone.
@@ -632,7 +636,7 @@ describe('toolDecisionLogStore', () => {
       // both in the log (the
       // revert comes AFTER the
       // allow_always in the
-      // record list — newest
+      // record list -- newest
       // first). We don't have
       // a "filter by decision"
       // selector, so the test
@@ -692,7 +696,7 @@ describe('truncateArgsPreview', () => {
     // exceeds the cap even though
     // its CHARACTER length is
     // small.
-    const emoji = '\u{1F600}'; // 😀 — 4 bytes in UTF-8
+    const emoji = '\u{1F600}'; // ðŸ˜€ -- 4 bytes in UTF-8
     const s = emoji.repeat(1000); // 1000 chars / 4000 bytes
     const out = truncateArgsPreview(s);
     // The output's byte length is

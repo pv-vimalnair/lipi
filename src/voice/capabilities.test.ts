@@ -1,12 +1,12 @@
-/**
- * capabilities tests (M2c mobile — Decision #46).
+﻿/**
+ * capabilities tests (M2c mobile â€” Decision #46).
  *
  * The capabilities wrapper is a one-shot cache: the
  * first call invokes the `voice_platform_get_capabilities`
  * IPC, every subsequent call returns the same cached
  * promise. The cache survives a rejection (a future
  * session can only "fix" the rejection by restarting
- * the process — the IPC is a compile-time decision
+ * the process â€” the IPC is a compile-time decision
  * on the Rust side; the user can't make it succeed
  * by retrying at runtime).
  *
@@ -77,6 +77,7 @@ describe('voice platform capabilities cache', () => {
     // every caller until the underlying IPC
     // resolves. Two parallel `await` calls share
     // one IPC round-trip.
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     let resolveIpc!: (caps: VoicePlatformCapabilities) => void;
     mocks.voicePlatformGetCapabilities.mockImplementation(
       () => new Promise<VoicePlatformCapabilities>((resolve) => {
@@ -101,7 +102,7 @@ describe('voice platform capabilities cache', () => {
     // second call returns the SAME rejected
     // promise (the underlying IPC is not retried).
     // We assert by checking that a second await
-    // also rejects — but the IPC mock was still
+    // also rejects â€” but the IPC mock was still
     // only called once.
     await expect(getVoicePlatformCapabilities()).rejects.toThrow(/IPC channel closed/);
     expect(mocks.voicePlatformGetCapabilities).toHaveBeenCalledTimes(1);

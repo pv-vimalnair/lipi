@@ -1,4 +1,4 @@
-// Phase 7.1.2 — test `getMonacoWorker`.
+﻿// Phase 7.1.2 â€” test `getMonacoWorker`.
 //
 // The module is a side-effect: it imports the
 // 5 Vite-bundled workers via `?worker` syntax
@@ -42,7 +42,7 @@
 //
 //   2. The `MonacoEnvironment` global is set
 //      exactly once (the side-effect is
-//      idempotent — re-importing doesn't
+//      idempotent â€” re-importing doesn't
 //      re-overwrite).
 //
 //   3. The `typescript` and `javascript` labels
@@ -70,7 +70,7 @@ type Env = {
 // so the side-effect is observable by the
 // first `it()` block.
 //
-// The classes don't extend `Worker` — they're
+// The classes don't extend `Worker` â€” they're
 // just identity tags. The resolver returns
 // `unknown as Worker` to satisfy the
 // `Env.getWorker` return type without
@@ -102,7 +102,7 @@ vi.hoisted(() => {
       // Routing mirrors the real
       // `getMonacoWorker.ts` resolver. If
       // you change one, change the other
-      // — and the test will catch the
+      // â€” and the test will catch the
       // divergence.
       switch (label) {
         case 'typescript':
@@ -134,7 +134,7 @@ vi.hoisted(() => {
 // no-op for the module's *exports* (there
 // are none) but its presence tells Vitest
 // "don't try to resolve this module's
-// dependencies (the `?worker` imports) —
+// dependencies (the `?worker` imports) â€”
 // they're not used in this test". This is
 // the standard pattern for skipping
 // Vite-specific module suffixes in tests.
@@ -148,6 +148,7 @@ vi.mock('./getMonacoWorker', () => ({}));
 // them via `globalThis` is the cleanest
 // way to bridge the hoisted callback's
 // scope and the test scope.
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists */
 const EditorWorker = (
   globalThis as {
     __monacoWorkerEditor?: new () => unknown;
@@ -173,13 +174,14 @@ const HtmlWorker = (
     __monacoWorkerHtml?: new () => unknown;
   }
 ).__monacoWorkerHtml!;
+/* eslint-enable @typescript-eslint/no-non-null-assertion */
 
 function getEnv(): Env {
   const env = (globalThis as unknown as { MonacoEnvironment?: Env })
     .MonacoEnvironment;
   if (!env || typeof env.getWorker !== 'function') {
     throw new Error(
-      'MonacoEnvironment.getWorker is not installed — the side-effect import did not run. Check the import order in `main.tsx`.',
+      'MonacoEnvironment.getWorker is not installed â€” the side-effect import did not run. Check the import order in `main.tsx`.',
     );
   }
   return env;
@@ -205,7 +207,7 @@ describe('getMonacoWorker', () => {
 
   it("routes 'javascript' label to the TS worker (shared service)", () => {
     // Monaco's TS service handles both
-    // .ts and .js — the resolver
+    // .ts and .js â€” the resolver
     // reflects that. This is the
     // documented Monaco behaviour; the
     // test pins it so a future "split
@@ -245,7 +247,7 @@ describe('getMonacoWorker', () => {
     // catches everything Monaco doesn't
     // have a dedicated worker for. Common
     // cases: 'plaintext', 'markdown',
-    // 'xml', 'yaml', etc. — Monaco's
+    // 'xml', 'yaml', etc. â€” Monaco's
     // tokenizer / highlighter is enough
     // for these; the editor worker
     // provides it.
@@ -266,7 +268,7 @@ describe('getMonacoWorker', () => {
   it('returns a fresh Worker instance on each call (no shared instance)', () => {
     // The resolver calls `new TsWorker()`
     // every time, not `singleton`. The
-    // test pins that — a "cache the
+    // test pins that â€” a "cache the
     // instance" change would break
     // multi-workspace / multi-language
     // scenarios (each tab has its own

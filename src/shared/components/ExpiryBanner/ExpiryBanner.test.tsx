@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().toBeDefined() */
 /**
  * Tests for `ExpiryBanner`. The banner is a thin
  * render-only wrapper around `licenseSurfaces`. The
@@ -5,7 +6,7 @@
  * `licenseSurfaces.test.ts`. This file pins the
  * component-level contract:
  *   - Renders nothing for the "default" states.
- *   - Renders a red banner for ≤ 3 days trial.
+ *   - Renders a red banner for â‰¤ 3 days trial.
  *   - Renders a red banner for `gracePeriod`.
  *   - The "Got it" button dismisses the banner for
  *     the session.
@@ -143,6 +144,7 @@ describe('ExpiryBanner', () => {
       const gotIt = Array.from(buttons).find((b) => /Got it/.test(b.textContent || ''));
       expect(gotIt).toBeDefined();
       act(() => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         gotIt!.click();
       });
       // After clicking, the banner should be removed.
@@ -161,6 +163,7 @@ describe('ExpiryBanner', () => {
       const activate = Array.from(buttons).find((b) => /Activate now/.test(b.textContent || ''));
       expect(activate).toBeDefined();
       act(() => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         activate!.click();
       });
       expect(calls).toContain('license');

@@ -210,7 +210,8 @@ describe('FileTreePane — M6c file-tree scroll anchor', () => {
 
     const tree = getTreeContainer();
     expect(tree).not.toBeNull();
-    const rows = tree!.querySelectorAll('[data-tree-path]');
+    if (!tree) throw new Error('tree not found');
+    const rows = tree.querySelectorAll('[data-tree-path]');
     expect(rows.length).toBe(SAMPLE_ENTRIES.length);
     const paths = Array.from(rows).map(
       (r) => r.getAttribute('data-tree-path'),
@@ -263,7 +264,8 @@ describe('FileTreePane — M6c file-tree scroll anchor', () => {
     // called. The stale anchor is left in the
     // store (no surprise mutations on read).
     expect(scrollIntoViewSpy).not.toHaveBeenCalled();
-    const tab = useWorkspaceStore.getState().workspaces[0]!;
+    const tab = useWorkspaceStore.getState().workspaces[0];
+    if (!tab) throw new Error('No workspace found');
     expect(tab.state.fileTreeScrollAnchor).toBe(F_MISSING);
   });
 
@@ -275,7 +277,8 @@ describe('FileTreePane — M6c file-tree scroll anchor', () => {
       root.render(<FileTreePane /> as ReactElement);
     });
 
-    const tree = getTreeContainer()!;
+    const tree = getTreeContainer();
+    if (!tree) throw new Error('tree not found');
     // Simulate the user scrolling the tree. The
     // mirror-back effect's rAF throttled handler
     // reads the topmost visible row.
@@ -306,7 +309,8 @@ describe('FileTreePane — M6c file-tree scroll anchor', () => {
     // baseline (also null here) → it writes
     // null. Subsequent calls would be a
     // transition guard no-op.
-    const tab = useWorkspaceStore.getState().workspaces[0]!;
+    const tab = useWorkspaceStore.getState().workspaces[0];
+    if (!tab) throw new Error('No workspace found');
     // The first scroll event writes the
     // observed value (null when the layout is
     // uninitialised). The assertion is on the
@@ -327,7 +331,8 @@ describe('FileTreePane — M6c file-tree scroll anchor', () => {
       root.render(<FileTreePane /> as ReactElement);
     });
 
-    const tree = getTreeContainer()!;
+    const tree = getTreeContainer();
+    if (!tree) throw new Error('tree not found');
     // Two scroll events back-to-back. The
     // transition guard in the production code
     // only writes on changes; jsdom's
@@ -357,7 +362,8 @@ describe('FileTreePane — M6c file-tree scroll anchor', () => {
     // change the value (the store doesn't get a
     // new write, but the value was null to begin
     // with — this is the contract).
-    const tab = useWorkspaceStore.getState().workspaces[0]!;
+    const tab = useWorkspaceStore.getState().workspaces[0];
+    if (!tab) throw new Error('No workspace found');
     expect(tab.state.fileTreeScrollAnchor).toBeNull();
   });
 });

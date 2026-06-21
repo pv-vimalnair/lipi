@@ -241,6 +241,7 @@ export function useFirstRunOnboarding(): UseFirstRunOnboardingResult {
   // is most likely to want".
   const primary: FirstRunProvider | null =
     providerList && providerList.length > 0
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- guarded by providerList.length > 0 check above
       ? { id: providerList[0]!.id, displayName: providerList[0]!.displayName }
       : null;
 

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Tests for the per-(tabId, filePath)
  * trailing-debounce cursor mirror-back
  * helper used by `EditorPane`'s
@@ -44,10 +44,12 @@ describe('scheduleCursorMirrorBack', () => {
   it('writes the cursor to editorCursorByPath after the debounce', () => {
     scheduleCursorMirrorBack('tab-1', 'C:/proj/index.ts', { line: 5, column: 3 });
     expect(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
     ).toEqual({});
     vi.advanceTimersByTime(500);
     expect(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
     ).toEqual({
       'C:/proj/index.ts': { line: 5, column: 3 },
@@ -61,6 +63,7 @@ describe('scheduleCursorMirrorBack', () => {
     vi.advanceTimersByTime(500);
     // Only the final value is written.
     expect(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
     ).toEqual({
       'C:/proj/a.ts': { line: 10, column: 1 },
@@ -74,11 +77,13 @@ describe('scheduleCursorMirrorBack', () => {
     });
     // The 500ms debounce hasn't fired yet.
     expect(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
     ).toEqual({});
     dispose();
     // After dispose, the write is synchronously flushed.
     expect(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
     ).toEqual({
       'C:/proj/a.ts': { line: 7, column: 2 },
@@ -86,6 +91,7 @@ describe('scheduleCursorMirrorBack', () => {
     // Advancing timers does not double-write.
     vi.advanceTimersByTime(500);
     expect(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
     ).toEqual({
       'C:/proj/a.ts': { line: 7, column: 2 },
@@ -97,11 +103,13 @@ describe('scheduleCursorMirrorBack', () => {
     vi.advanceTimersByTime(500);
     // Write fired.
     const before =
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath;
     const flushed = _flushPendingCursor('tab-1', 'C:/proj/a.ts');
     // No schedule pending anymore.
     expect(flushed).toBe(false);
     const after =
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath;
     expect(after).toBe(before);
   });
@@ -111,6 +119,7 @@ describe('scheduleCursorMirrorBack', () => {
     scheduleCursorMirrorBack('tab-1', 'C:/proj/b.ts', { line: 2, column: 2 });
     vi.advanceTimersByTime(500);
     expect(
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       useWorkspaceStore.getState().workspaces[0]!.state.editorCursorByPath,
     ).toEqual({
       'C:/proj/a.ts': { line: 1, column: 1 },

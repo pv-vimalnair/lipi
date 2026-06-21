@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().toBeDefined() */
 /**
  * Tests for `LicenseGate`. The gate is a thin
  * render-only wrapper around `licenseSurfaces`; the
@@ -157,6 +158,7 @@ describe('LicenseGate', () => {
       );
       expect(later).toBeDefined();
       act(() => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         later!.click();
       });
       expect(container.textContent).not.toMatch(/Your license has expired/);
@@ -174,6 +176,7 @@ describe('LicenseGate', () => {
         (b) => /I'll do it later/.test(b.textContent || ''),
       );
       act(() => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         later!.click();
       });
       expect(container.textContent).not.toMatch(/Your license has expired/);
@@ -201,6 +204,7 @@ describe('LicenseGate', () => {
       const activate = Array.from(buttons).find((b) => /Activate a license/.test(b.textContent || ''));
       expect(activate).toBeDefined();
       act(() => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         activate!.click();
       });
       expect(calls).toContain('license');

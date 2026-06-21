@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Tests for the AI store (`aiStore.ts`).
  *
  * Phase 5b-4 scope (extends 5b-3):
@@ -39,7 +39,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // We mock the entire Tauri IPC layer at
 // the module boundary, then expose a small
 // harness to simulate `ai://*` events. This
-// keeps the tests fast and deterministic —
+// keeps the tests fast and deterministic â€”
 // no real Tauri runtime needed.
 
 const invokeMock = vi.fn();
@@ -68,7 +68,7 @@ listenMock.mockImplementation((eventName: string, cb: Listener) => {
   else if (eventName === 'ai://done') captured.done = cb;
   else if (eventName === 'ai://error') captured.error = cb;
   return Promise.resolve(() => {
-    // unlisten — no-op for tests
+    // unlisten â€” no-op for tests
   });
 });
 
@@ -164,7 +164,7 @@ beforeEach(() => {
   //
   // Default invoke mock for `loadProviders`
   // and the chat lifecycle. We DO reset
-  // invoke — it has no module-level state.
+  // invoke â€” it has no module-level state.
   invokeMock.mockImplementation((cmd: string) => {
     if (cmd === 'ai_list_providers') return Promise.resolve(PROVIDERS);
     if (cmd === 'ai_get_configured_providers')
@@ -427,7 +427,7 @@ describe('aiStore streaming render (5b-4)', () => {
     const assistant = mid.messages[mid.messages.length - 1];
     expect(assistant.role).toBe('assistant');
     expect(assistant.content).toBe('Once upon a time');
-    // Still streaming — deltas alone don't
+    // Still streaming â€” deltas alone don't
     // seal.
     expect(assistant.streaming).toBe(true);
     // No tool calls yet.
@@ -479,7 +479,7 @@ describe('aiStore streaming render (5b-4)', () => {
     // start at `'pending'` (queued
     // for the execution loop). The
     // execution loop transitions
-    // them to `'running'` → `'done'`
+    // them to `'running'` â†’ `'done'`
     // | `'error'`.
     expect(assistant1.toolCalls).toEqual([
       {
@@ -489,7 +489,7 @@ describe('aiStore streaming render (5b-4)', () => {
         status: 'pending',
       },
     ]);
-    // Still streaming — tool calls alone
+    // Still streaming â€” tool calls alone
     // don't seal.
     expect(assistant1.streaming).toBe(true);
     // requestStatus still streaming.
@@ -587,7 +587,7 @@ describe('aiStore streaming render (5b-4)', () => {
     // doesn't register a real executor,
     // so the loop falls back to the
     // stub. We just assert the
-    // transition here — the loop's
+    // transition here â€” the loop's
     // full behaviour is tested in the
     // 5b-6 `tool execution loop` block
     // below.
@@ -596,7 +596,7 @@ describe('aiStore streaming render (5b-4)', () => {
       round: 1,
     });
     // `activeRequestId` is cleared
-    // (the loop is local — no in-flight
+    // (the loop is local â€” no in-flight
     // Tauri command).
     expect(after.activeRequestId).toBeNull();
     const assistant = after.messages[after.messages.length - 1];
@@ -610,7 +610,7 @@ describe('aiStore streaming render (5b-4)', () => {
     // the stub executor returned an
     // error, and that error becomes a
     // transport error on the
-    // follow-up — but we don't await
+    // follow-up â€” but we don't await
     // it here).
     expect(assistant.toolCalls).toEqual([
       {
@@ -628,7 +628,7 @@ describe('aiStore streaming render (5b-4)', () => {
     // the separate `ai://done` event. Both
     // arrive within a few ms. The store
     // should seal the streaming message on
-    // either — the first one wins.
+    // either â€” the first one wins.
     const useAiStore = await freshStore();
     await useAiStore.getState().loadProviders();
     await useAiStore.getState().send('Hi');
@@ -653,7 +653,7 @@ describe('aiStore streaming render (5b-4)', () => {
     // Content preserved from the delta.
     expect(assistant.content).toBe('partial');
     // requestStatus reset to idle by the
-    // (eventual) ai://done — but the inline
+    // (eventual) ai://done â€” but the inline
     // `done` chunk alone doesn't clear it.
     // The full store guarantees this via
     // the ai://done handler. The inline
@@ -759,7 +759,7 @@ describe('aiStore.sendEdit (5b-5)', () => {
     const useAiStore = await freshStore();
     await useAiStore.getState().loadProviders();
     // Override the default ai_chat_stream
-    // mock to reject — simulates a setup
+    // mock to reject â€” simulates a setup
     // failure (Tauri command not registered,
     // etc.).
     invokeMock.mockImplementation((cmd: string) => {
@@ -861,7 +861,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
     // After the done fires, the loop
     // picks up the tool call. We
     // need to let the microtask queue
-    // drain — the loop runs in a
+    // drain â€” the loop runs in a
     // `void Promise` and may not
     // complete synchronously.
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -936,7 +936,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
     //   4. assistant (the follow-up
     //      placeholder, which then gets
     //      sealed in the loop's
-    //      follow-up stream attempt — but
+    //      follow-up stream attempt â€” but
     //      the test doesn't actually
     //      fire `done` for it, so it
     //      stays as the trailing
@@ -1152,7 +1152,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // No tool calls → no execution.
+    // No tool calls â†’ no execution.
     expect(executor).not.toHaveBeenCalled();
     // requestStatus transitioned
     // cleanly to `'idle'`.
@@ -1198,7 +1198,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // The cap is hit → the
+    // The cap is hit â†’ the
     // executor isn't called, and
     // the store surfaces a
     // `toolLoop` error.
@@ -1251,7 +1251,7 @@ describe('aiStore tool execution loop (5b-6)', () => {
 // (so the model never calls a disabled tool
 // in the first place). The JS-side executor
 // ALSO has a disabled-check as a
-// belt-and-braces — if the model did call
+// belt-and-braces â€” if the model did call
 // a tool the user just toggled off (race
 // condition mid-stream), the executor
 // returns a synthetic `kind: 'error'`
@@ -1277,7 +1277,7 @@ describe('aiStore per-tool enable/disable (5b-7)', () => {
 
   /**
    * Same shape as the 5b-6 `makeExecutor`
-   * helper — we duplicate it here because
+   * helper â€” we duplicate it here because
    * the original is scoped to the 5b-6
    * describe block. The wrapper just
    * forwards `name` / `arguments` to the
@@ -1338,7 +1338,7 @@ describe('aiStore per-tool enable/disable (5b-7)', () => {
     // The empty array is the "no tools
     // enabled" snapshot. The Rust side
     // sees this as "filter out
-    // everything" — the model is told
+    // everything" â€” the model is told
     // about zero tools.
     expect(args.enabledToolNames).toEqual([]);
   });
@@ -1389,7 +1389,7 @@ describe('aiStore per-tool enable/disable (5b-7)', () => {
     // Let the loop drain.
     await new Promise((resolve) => setTimeout(resolve, 10));
 
-    // The executor was NOT invoked — the
+    // The executor was NOT invoked â€” the
     // tool was disabled.
     expect(executor).not.toHaveBeenCalled();
     // The tool call's status is `'error'`
@@ -1442,7 +1442,7 @@ describe('aiStore 5c custom tools plumbing', () => {
         args: { customTools?: unknown[] };
       }
     ).args;
-    // Default — the user hasn't
+    // Default â€” the user hasn't
     // configured any custom tools
     // yet.
     expect(args.customTools).toEqual([]);
@@ -1566,12 +1566,12 @@ describe('aiStore 5c custom tools plumbing', () => {
 //
 // These tests focus on the STORE side of
 // the flow (the modal is a thin UI over
-// the store — its tests would need
+// the store â€” its tests would need
 // @testing-library/react, which we
 // explicitly skipped in 5c per
 // store-test-only policy).
 
-describe('aiStore — per-tool confirmation (5d)', () => {
+describe('aiStore â€” per-tool confirmation (5d)', () => {
   it('parks the round when a tool needs confirmation', async () => {
     // The model emits a single tool call
     // for a tool whose policy is
@@ -1771,7 +1771,7 @@ describe('aiStore — per-tool confirmation (5d)', () => {
   it('resolveConfirmation(allow_always) executes the call AND promotes the policy', async () => {
     // `allow_always` is a shortcut: the
     // user said "I trust this tool, stop
-    // asking" — we promote the policy
+    // asking" â€” we promote the policy
     // to `always_allow` and execute the
     // call.
     const useAiStore = await freshStore();
@@ -1844,7 +1844,7 @@ describe('aiStore — per-tool confirmation (5d)', () => {
       executed = true;
       return { output: 'ok', kind: 'text' as const, durationMs: 0 };
     });
-    // No policy override — default is
+    // No policy override â€” default is
     // `always_confirm`.
     await useAiStore.getState().loadProviders();
     const sendPromise = useAiStore.getState().send('go');
@@ -1969,7 +1969,7 @@ describe('aiStore — per-tool confirmation (5d)', () => {
       ],
     });
     useAiStore.getState().clearMessages();
-    // The store should refuse — the
+    // The store should refuse â€” the
     // pending confirmation is still
     // intact.
     expect(useAiStore.getState().pendingConfirmation).not.toBeNull();
@@ -2025,7 +2025,7 @@ describe('aiStore — per-tool confirmation (5d)', () => {
     // store's send path is
     // heavyweight. Simpler: directly
     // call resolveConfirmation
-    // without any prior send — the
+    // without any prior send â€” the
     // module-level id is whatever the
     // LAST test left it as, which is
     // almost certainly NOT
@@ -2041,13 +2041,13 @@ describe('aiStore — per-tool confirmation (5d)', () => {
 // records a `DecisionRecord` in the
 // `useToolDecisionLogStore` BEFORE
 // delegating to `applyConfirmationAndResume`.
-// The log is observational — the
+// The log is observational â€” the
 // recording is a side effect that
 // should not affect the tool call's
 // outcome. Stale decisions (the
 // resolver bailed) are NOT recorded.
 
-describe('aiStore — per-decision logging (5e)', () => {
+describe('aiStore â€” per-decision logging (5e)', () => {
   // The decision log store is a
   // shared singleton. Reset it
   // between tests so a previous
@@ -2236,7 +2236,7 @@ describe('aiStore — per-decision logging (5e)', () => {
     // Race: the resolver bailed
     // because the requestId was
     // stale. Nothing actually
-    // happened — the log should
+    // happened â€” the log should
     // reflect that.
     const useAiStore = await freshStore();
     useAiStore.setState({
@@ -2275,7 +2275,7 @@ describe('aiStore — per-decision logging (5e)', () => {
   //      via the `arguments` field
   //
   // We test the STORE side
-  // exclusively — the modal's UI
+  // exclusively â€” the modal's UI
   // behavior (live validation,
   // disabled buttons on invalid
   // JSON, "Reset to model's
@@ -2544,7 +2544,7 @@ describe('aiStore — per-decision logging (5e)', () => {
       // caller (somehow) passed
       // `editedArgsJson`, we
       // should NOT mutate
-      // `call.input` — the
+      // `call.input` â€” the
       // original wire args are
       // preserved for the
       // ToolTrace audit display.
@@ -2657,7 +2657,7 @@ describe('aiStore — per-decision logging (5e)', () => {
       captured.done?.({ payload: { requestId } });
       await new Promise((r) => setTimeout(r, 10));
       await sendPromise;
-      // No second arg — uses
+      // No second arg â€” uses
       // the original.
       useAiStore.getState().resolveConfirmation('allow_once');
       await new Promise((r) => setTimeout(r, 30));
@@ -2672,7 +2672,7 @@ describe('aiStore — per-decision logging (5e)', () => {
       // modal passes that
       // through as the "no
       // edit" value). The
-      // executor parses it —
+      // executor parses it â€”
       // for our purposes the
       // exact whitespace
       // doesn't matter; we
@@ -2690,7 +2690,7 @@ describe('aiStore — per-decision logging (5e)', () => {
       // JSON.parse(raw) for
       // the same value, so the
       // tool handler is
-      // unaffected — the
+      // unaffected â€” the
       // difference is
       // cosmetic in the
       // activity log.)
@@ -2769,7 +2769,7 @@ describe('aiStore — per-decision logging (5e)', () => {
       // follow-up stream to
       // start. The follow-up
       // invokes `ai_chat_stream`
-      // again — we look at
+      // again â€” we look at
       // the SECOND invocation.
       await new Promise((r) => setTimeout(r, 200));
       const calls = invokeMock.mock.calls.filter(
@@ -2813,15 +2813,17 @@ describe('aiStore — per-decision logging (5e)', () => {
       // back `call.input`,
       // which we updated to
       // the edited value).
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const assistantMsg = followUpArgs!.messages.find(
         (m) => m.role === 'assistant',
       );
       // (The assistant message
       // is a wire-format shape
-      // — the toolCalls live
+      // â€” the toolCalls live
       // there as an array of
       // `{ id, name, arguments
       // }`.)
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       const toolMsg = followUpArgs!.messages.find(
         (m) => m.role === 'tool',
       );

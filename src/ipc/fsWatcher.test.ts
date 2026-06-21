@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertion is guarded by prior expect(typeof registered).toBe('function') */
 /**
  * Tests for the file-watcher IPC wrapper.
  *
@@ -95,10 +96,11 @@ describe('fsWatcher IPC wrappers', () => {
         paths: ['/a/new.txt'],
         watchedPath: '/a',
       };
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
       registered!({ payload });
       expect(cb).toHaveBeenCalledWith(payload);
       // The returned unlisten should be the
-      // one Tauri gave us — callers invoke
+      // one Tauri gave us -- callers invoke
       // it on teardown.
       expect(off).toBe(unlisten);
     });

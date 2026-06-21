@@ -1,8 +1,8 @@
-/**
+﻿/**
  * Tests for the `PrivacyDataCard`'s pure helpers
  * and the `snapshotStoresForExport` function.
  *
- * M6b (June 2026) — the snapshot now produces
+ * M6b (June 2026) â€” the snapshot now produces
  * the v4 shape (a `workspaces[]` array of
  * `WorkspaceTab` objects plus an `activeId`),
  * not the v2 shape (a single
@@ -182,10 +182,14 @@ describe('snapshotStoresForExport', () => {
     const snap = snapshotStoresForExport();
     // workspace.workspaces
     expect(snap.workspace.workspaces).toHaveLength(1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(snap.workspace.workspaces[0]!.id).toBe('tab-1');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(snap.workspace.workspaces[0]!.path).toBe('C:/Users/dev/proj');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(snap.workspace.workspaces[0]!.addedAt).toBe(1000);
     // per-tab state
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(snap.workspace.workspaces[0]!.state).toEqual({
       expandedDirs: ['C:/Users/dev/proj/src'],
       selectedPath: 'C:/Users/dev/proj/src/index.ts',
@@ -216,7 +220,9 @@ describe('snapshotStoresForExport', () => {
     snap.toolSettings.disabledToolNames.push('mutated');
     snap.toolSettings.confirmationMode['mutated'] = 'always_allow';
     snap.workspace.recents.push('mutated');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     snap.workspace.workspaces[0]!.state.expandedDirs.push('mutated');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     snap.workspace.workspaces[0]!.state.openEditorTabPaths.push('mutated');
     expect(toolSettingsState.disabledToolNames).toEqual(['run_shell_command']);
     expect(toolSettingsState.confirmationMode).toEqual({
@@ -226,9 +232,11 @@ describe('snapshotStoresForExport', () => {
       'C:/Users/dev/proj',
       'C:/Users/dev/other',
     ]);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.state.expandedDirs).toEqual([
       'C:/Users/dev/proj/src',
     ]);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(workspaceState.workspaces[0]!.state.openEditorTabPaths).toEqual([
       'C:/Users/dev/proj/src/index.ts',
     ]);
@@ -266,8 +274,11 @@ describe('snapshotStoresForExport', () => {
     workspaceState.activeId = 'tab-2';
     const snap = snapshotStoresForExport();
     expect(snap.workspace.workspaces).toHaveLength(2);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(snap.workspace.workspaces[0]!.path).toBe('C:/Users/dev/proj1');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(snap.workspace.workspaces[1]!.path).toBe('C:/Users/dev/proj2');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(snap.workspace.workspaces[1]!.state.expandedDirs).toEqual([
       'C:/Users/dev/proj2/docs',
     ]);

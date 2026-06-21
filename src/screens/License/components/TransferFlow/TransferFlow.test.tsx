@@ -1,6 +1,6 @@
-/**
+﻿/**
  * Tests for `TransferFlow`. The flow is a 3-step
- * wizard (confirm → running → result). The component
+ * wizard (confirm â†’ running â†’ result). The component
  * delegates the actual deactivation to
  * `useLicenseStore.deactivate`; we mock the store
  * to verify the state transitions.
@@ -93,6 +93,7 @@ describe('TransferFlow', () => {
       );
       expect(yes).toBeDefined();
       await act(async () => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         yes!.click();
         // Allow the async deactivate to resolve.
         await Promise.resolve();
@@ -110,6 +111,7 @@ describe('TransferFlow', () => {
         (b) => /Yes, deactivate/.test(b.textContent || ''),
       );
       await act(async () => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         yes!.click();
         await Promise.resolve();
       });
@@ -134,6 +136,7 @@ describe('TransferFlow', () => {
       );
       expect(cancel).toBeDefined();
       act(() => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         cancel!.click();
       });
       // Still on the confirm step.
@@ -155,6 +158,7 @@ describe('TransferFlow', () => {
         (b) => /Yes, deactivate/.test(b.textContent || ''),
       );
       await act(async () => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         yes!.click();
         await Promise.resolve();
       });
@@ -178,6 +182,7 @@ describe('TransferFlow', () => {
         (b) => /Yes, deactivate/.test(b.textContent || ''),
       );
       await act(async () => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         yes!.click();
         await Promise.resolve();
       });
@@ -202,6 +207,7 @@ describe('TransferFlow', () => {
         (b) => /Yes, deactivate/.test(b.textContent || ''),
       );
       await act(async () => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         yes!.click();
         await Promise.resolve();
       });
@@ -228,6 +234,7 @@ describe('TransferFlow', () => {
         (b) => /Yes, deactivate/.test(b.textContent || ''),
       );
       await act(async () => {
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
         yes!.click();
         await Promise.resolve();
       });

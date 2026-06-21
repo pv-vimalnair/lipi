@@ -1,8 +1,9 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior ok/length checks */
 /**
  * Tests for the v5 apply (transactional
  * replace across 3 stores). The v4 apply
  * is the template; v5 is the same
- * operationally — the per-tab `state` just
+ * operationally -- the per-tab `state` just
  * carries 2 more fields.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -64,10 +65,13 @@ describe('applyLipiStateV5', () => {
 
     const ws = useWorkspaceStore.getState();
     expect(ws.workspaces).toHaveLength(1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(ws.workspaces[0]!.path).toBe('C:/imported');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(ws.workspaces[0]!.state.editorCursorByPath).toEqual({
       'C:/imported/src/index.ts': { line: 5, column: 3 },
     });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(ws.workspaces[0]!.state.fileTreeScrollAnchor).toBe('C:/imported/src');
     expect(ws.activeId).toBe('tab-1');
 
@@ -114,15 +118,17 @@ describe('applyLipiStateV5', () => {
     expect(useWorkspaceStore.getState().workspaces).toHaveLength(1);
   });
 
-  it('is idempotent on the 2 new M6c fields — re-applying the same data does not break the cursor map', () => {
+  it('is idempotent on the 2 new M6c fields -- re-applying the same data does not break the cursor map', () => {
     const first = applyLipiStateV5(sampleData);
     expect(first.ok).toBe(true);
     const second = applyLipiStateV5(sampleData);
     expect(second.ok).toBe(true);
     const ws = useWorkspaceStore.getState();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(ws.workspaces[0]!.state.editorCursorByPath).toEqual({
       'C:/imported/src/index.ts': { line: 5, column: 3 },
     });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(ws.workspaces[0]!.state.fileTreeScrollAnchor).toBe('C:/imported/src');
   });
 });

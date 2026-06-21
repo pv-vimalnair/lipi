@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().toBeDefined() */
 /**
  * Tests for the v5 import preview. The v4
  * preview is the template; v5 extends the
@@ -88,12 +89,14 @@ describe('computeLipiStateV5ImportPreview', () => {
         'workspace.workspaces[path=C:/imported].state.fileTreeScrollAnchor',
     );
     expect(fileTreeScrollAnchorDiff).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(fileTreeScrollAnchorDiff!.before).toBe('C:/imported/old');
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(fileTreeScrollAnchorDiff!.after).toBe('C:/imported/src');
   });
 
   it('emits a per-tab diff row for the editorCursorByPath entry count', () => {
-    // Seed with 0 cursor entries; sample has 1 — count diff.
+    // Seed with 0 cursor entries; sample has 1 -- count diff.
     useWorkspaceStore.setState({
       hydrated: true,
       workspaces: [
@@ -132,7 +135,9 @@ describe('computeLipiStateV5ImportPreview', () => {
         'workspace.workspaces[path=C:/imported].state.editorCursorByPath',
     );
     expect(cursorCountDiff).toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(cursorCountDiff!.before).toEqual({ count: 0 });
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- test setup guarantees value exists
     expect(cursorCountDiff!.after).toEqual({ count: 1 });
   });
 

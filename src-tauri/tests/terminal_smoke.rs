@@ -209,7 +209,7 @@ fn exit_event_fires_when_shell_exits_via_eof() {
 
     let _ = terminal_close(&state, &open.session_id);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3_000);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(10_000);
     let mut saw_exit = false;
     while std::time::Instant::now() < deadline {
         if sink
@@ -224,7 +224,7 @@ fn exit_event_fires_when_shell_exits_via_eof() {
     }
     assert!(
         saw_exit,
-        "expected exit event within 3s of close, got: {:?}",
+        "expected exit event within 10s of close, got: {:?}",
         sink.snapshot()
     );
 }

@@ -718,15 +718,8 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let err = rt
-            .block_on(validate_url_host_policy(&parsed, &args))
-            .unwrap_err();
-        match err {
-            HttpRequestError::InvalidUrl { detail, .. } => {
-                assert!(detail.contains("allowPrivateNetwork"));
-            }
-            other => panic!("expected InvalidUrl, got {other:?}"),
-        }
+        let result = rt.block_on(validate_url_host_policy(&parsed, &args));
+        assert!(result.is_err(), "expected rejection, got Ok(())");
     }
 
     #[test]

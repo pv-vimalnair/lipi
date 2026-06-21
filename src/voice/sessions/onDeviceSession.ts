@@ -142,6 +142,7 @@ function mapRustKindToCode(kind: string): VoiceSessionErrorCode {
 export function createOnDeviceSession(
   opts: VoiceSessionFactoryOptions,
 ): Promise<VoiceSessionHandle> {
+  // eslint-disable-next-line no-async-promise-executor -- callback-based STT setup requires async executor
   return new Promise<VoiceSessionHandle>(async (resolve, reject) => {
     if (opts.signal.aborted) {
       reject(
@@ -165,7 +166,7 @@ export function createOnDeviceSession(
     const transcriptionListeners = new Set<(e: TranscriptionEvent) => void>();
     const errorListeners = new Set<(err: VoiceSessionError) => void>();
     let closed = false;
-    let sessionId = `ondevice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionId = `ondevice-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let sequence = 0;
     let armHandle: ReturnType<typeof setTimeout> | null = null;
     let transcriptSub: TranscriptSubscription | null = null;

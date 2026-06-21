@@ -92,7 +92,7 @@ describe('voicePreferencesStore', () => {
 
   it('setLanguage rejects non-string values (defensive)', () => {
     useVoicePreferencesStore.getState().setLanguage('en-US');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     useVoicePreferencesStore.getState().setLanguage(123 as unknown as any);
     expect(useVoicePreferencesStore.getState().language).toBe('en-US');
   });

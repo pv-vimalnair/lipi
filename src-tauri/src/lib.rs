@@ -1620,7 +1620,7 @@ async fn ai_chat_stream(app: AppHandle, args: ChatRequestArgs) -> Result<String,
                 stop_reason,
             } = &delta
             {
-                let mut state = done_state_for_chunk.lock().expect("done state poisoned");
+                let mut state = done_state_for_chunk.lock().unwrap_or_else(|e| e.into_inner());
                 state.cancelled = *cancelled;
                 state.stop_reason = stop_reason.clone();
             }
@@ -1707,7 +1707,7 @@ async fn ai_chat_stream(app: AppHandle, args: ChatRequestArgs) -> Result<String,
         // JS store just needs to know the
         // stream is over.
         let final_state = {
-            let s = done_state.lock().expect("done state poisoned");
+            let s = done_state.lock().unwrap_or_else(|e| e.into_inner());
             (s.cancelled, s.stop_reason.clone())
         };
         let (cancelled, stop_reason) = final_state;

@@ -127,7 +127,7 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 let bridgeMountCount = 0;
-let bridgeUnmountCount = 0;
+let _bridgeUnmountCount = 0;
 
 vi.mock('../../hooks/useMonacoLspBridge', async () => {
   // Import `useRef` / `useEffect` so the mock
@@ -144,7 +144,7 @@ vi.mock('../../hooks/useMonacoLspBridge', async () => {
       React.useEffect(() => {
         bridgeMountCount += 1;
         return () => {
-          bridgeUnmountCount += 1;
+          _bridgeUnmountCount += 1;
         };
       }, []);
       // No-op return shape; the real hook
@@ -230,7 +230,7 @@ beforeEach(() => {
   lastEditorPath = undefined;
   editorPathsSeen = new Set();
   bridgeMountCount = 0;
-  bridgeUnmountCount = 0;
+  _bridgeUnmountCount = 0;
 });
 
 afterEach(() => {

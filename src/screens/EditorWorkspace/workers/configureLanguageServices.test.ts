@@ -43,7 +43,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureLanguageServices } from './configureLanguageServices';
 
 type CapturedCall = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   args: any[];
 };
 

@@ -119,8 +119,8 @@ interface TsConfigState {
 }
 
 /**
- * Strip `//` line comments and `/* … *​/` block
- * comments from a `tsconfig.json` body. TypeScript
+ * Strip `//` line comments and block comments
+ * (`slash-star ... star-slash`) from a `tsconfig.json` body. TypeScript
  * supports both (they're stripped before the JSON
  * parse), and a user's hand-edited `tsconfig.json`
  * commonly has them.

@@ -85,7 +85,7 @@ pub fn register(request_id: &str) -> (Arc<AtomicBool>, CancelGuard) {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_for_map = cancel.clone();
     {
-        let mut map = cancel_registry().lock().expect("cancel registry poisoned");
+        let mut map = cancel_registry().lock().unwrap_or_else(|e| e.into_inner());
         map.insert(request_id.to_string(), cancel_for_map);
     }
     let cancel_for_caller = cancel.clone();
@@ -101,7 +101,7 @@ pub fn register(request_id: &str) -> (Arc<AtomicBool>, CancelGuard) {
 /// unknown (already finished, never existed, or
 /// was registered under a different id).
 pub fn lookup(request_id: &str) -> Option<Arc<AtomicBool>> {
-    let map = cancel_registry().lock().expect("cancel registry poisoned");
+    let map = cancel_registry().lock().unwrap_or_else(|e| e.into_inner());
     map.get(request_id).cloned()
 }
 
@@ -110,7 +110,7 @@ pub fn lookup(request_id: &str) -> Option<Arc<AtomicBool>> {
 /// not present. Public for the guard's `Drop` and
 /// for tests.
 pub fn deregister(request_id: &str) {
-    let mut map = cancel_registry().lock().expect("cancel registry poisoned");
+    let mut map = cancel_registry().lock().unwrap_or_else(|e| e.into_inner());
     map.remove(request_id);
 }
 

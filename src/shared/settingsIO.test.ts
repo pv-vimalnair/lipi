@@ -113,7 +113,7 @@ describe('settingsIO', () => {
       // check for the property +
       // indent combo, not the
       // whole line.
-      expect(text).toMatch(/\n  "format":/);
+      expect(text).toMatch(/\n {2}"format":/);
     });
   });
 

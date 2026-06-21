@@ -152,7 +152,8 @@ export function useInlineEditOverlay({
     // — when that happens, the new instance is
     // passed in. We compare by reference
     // identity inside the effect body.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Intentional deps: only `editor` (not the
+    // fresh object reference on every render).
   }, [editor]);
 }
 

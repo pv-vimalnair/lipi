@@ -80,6 +80,7 @@ function mapServerErrorToCode(message: string): VoiceSessionErrorCode {
 export function createWisprSession(
   opts: VoiceSessionFactoryOptions,
 ): Promise<VoiceSessionHandle> {
+  // eslint-disable-next-line no-async-promise-executor -- callback-based WS setup requires async executor
   return new Promise<VoiceSessionHandle>(async (resolve, reject) => {
     // Refuse to start if the AbortSignal is already fired.
     if (opts.signal.aborted) {
@@ -134,7 +135,7 @@ export function createWisprSession(
     let sequence = 0;
     let latestText = '';
     let armHandle: ReturnType<typeof setTimeout> | null = null;
-    let sessionId = `wispr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionId = `wispr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const setState = (s: typeof state): void => {
       if (state === s || closed) return;

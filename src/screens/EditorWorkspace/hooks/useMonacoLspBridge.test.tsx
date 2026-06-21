@@ -403,8 +403,8 @@ function makeFakeModel(
   languageId: string,
   initial: string = '',
 ): FakeModel {
-  let contentListeners: Array<(e: FakeContentChangedEvent) => void> = [];
-  let willDisposeListeners: Array<() => void> = [];
+  const contentListeners: Array<(e: FakeContentChangedEvent) => void> = [];
+  const willDisposeListeners: Array<() => void> = [];
   return {
     uri: { toString: () => uri },
     getLanguageId: () => languageId,

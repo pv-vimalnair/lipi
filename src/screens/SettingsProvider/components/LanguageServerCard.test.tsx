@@ -238,7 +238,7 @@ describe('LanguageServerCard', () => {
     // React-internal value tracker so the
     // onChange handler fires.
     await act(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       Simulate.change(checkbox, { target: { checked: false } } as any);
       await new Promise((r) => setTimeout(r, 5));
     });
@@ -322,7 +322,7 @@ describe('LanguageServerCard', () => {
     // value tracker updates and `onChange`
     // fires.
     await act(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       Simulate.change(checkbox, { target: { checked: true } } as any);
       await new Promise((r) => setTimeout(r, 5));
     });
@@ -388,7 +388,7 @@ describe('LanguageServerCard', () => {
     expect(tsKillSwitch).toBeTruthy();
     // Flip the TS kill switch OFF.
     await act(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       Simulate.change(tsKillSwitch, { target: { checked: false } } as any);
       await new Promise((r) => setTimeout(r, 5));
     });

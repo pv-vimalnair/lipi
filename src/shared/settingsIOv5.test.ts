@@ -85,7 +85,7 @@ describe('serialiseLipiStateV5', () => {
     expect(s.endsWith('\n')).toBe(true);
     expect(s).toContain('"version": 5');
     expect(s).toContain('"format": "lipi-state"');
-    expect(s).toMatch(/\n  "format"/);
+    expect(s).toMatch(/\n {2}"format"/);
   });
 
   it('round-trips through parseLipiStateV5', () => {

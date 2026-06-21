@@ -298,9 +298,12 @@ async fn validate_url_host_policy(
     parsed: &url::Url,
     args: &HttpRequestArgs,
 ) -> Result<(), HttpRequestError> {
+    // Clone once — every error path below needs the URL string.
+    let url = args.url.clone();
+
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(HttpRequestError::InvalidUrl {
-            url: args.url.clone(),
+            url,
             detail: "credentials in HTTP tool URLs are not allowed".to_string(),
         });
     }
@@ -308,13 +311,13 @@ async fn validate_url_host_policy(
     let host = parsed
         .host_str()
         .ok_or_else(|| HttpRequestError::InvalidUrl {
-            url: args.url.clone(),
+            url: url.clone(),
             detail: "URL must include a host".to_string(),
         })?;
 
     if !host_is_allowed(host, &args.allowed_hosts) {
         return Err(HttpRequestError::InvalidUrl {
-            url: args.url.clone(),
+            url,
             detail: format!("host `{host}` is not in this tool's allowedHosts list"),
         });
     }
@@ -322,7 +325,7 @@ async fn validate_url_host_policy(
     if !args.allow_private_network {
         if host_is_local_name(host) {
             return Err(HttpRequestError::InvalidUrl {
-                url: args.url.clone(),
+                url,
                 detail: format!(
                     "host `{host}` is local/private; set allowPrivateNetwork for this tool to opt in"
                 ),
@@ -331,7 +334,7 @@ async fn validate_url_host_policy(
         if let Ok(ip) = host.parse::<IpAddr>() {
             if ip_is_private_or_local(ip) {
                 return Err(HttpRequestError::InvalidUrl {
-                    url: args.url.clone(),
+                    url,
                     detail: format!(
                         "address `{ip}` is local/private; set allowPrivateNetwork for this tool to opt in"
                     ),
@@ -348,7 +351,7 @@ async fn validate_url_host_policy(
                 let ip = socket.ip();
                 if ip_is_private_or_local(ip) {
                     return Err(HttpRequestError::InvalidUrl {
-                        url: args.url.clone(),
+                        url,
                         detail: format!(
                             "host `{host}` resolved to local/private address `{ip}`; set allowPrivateNetwork for this tool to opt in"
                         ),

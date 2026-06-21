@@ -48,7 +48,6 @@ use serde::{Deserialize, Serialize};
 /// The Apple App Store production `verifyReceipt` endpoint.
 /// Hardcoded; the sandbox endpoint is intentionally not
 /// supported in Phase 4.
-#[allow(dead_code)] // Used by the future raw-receipt entry point (`verify_apple_receipt`).
 const APPLE_VERIFY_RECEIPT_URL: &str = "https://buy.itunes.apple.com/verifyReceipt";
 
 /// The expected IAP product ID for the `monthly` plan.
@@ -72,7 +71,6 @@ pub const APPLE_PRODUCT_ID_YEARLY: &str = "app.lipi.ide.yearly";
 /// never read at runtime, so the secret is never
 /// exfiltrated via process inspection (after the
 /// build).
-#[allow(dead_code)] // Used by the future raw-receipt entry point (`verify_apple_receipt`).
 const APPLE_SHARED_SECRET: Option<&'static str> = option_env!("LIPI_APPLE_IAP_SHARED_SECRET");
 
 /// The validated Apple IAP receipt. The fields are
@@ -233,7 +231,6 @@ fn expected_product_id_for_plan(plan: &str) -> &str {
 /// dispatcher maps these to `IapError` variants
 /// (with the platform-specific reason). The detail
 /// field carries the human-readable message.
-#[allow(dead_code)] // Some variants are only constructed by the future raw-receipt entry point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppleError {
     /// The shared secret env var is not set

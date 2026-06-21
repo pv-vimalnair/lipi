@@ -94,7 +94,7 @@ let lastEditor: FakeMonacoEditor | null = null;
 function makeFakeEditor(
   initialModelPath: string | null,
 ): FakeMonacoEditor {
-  let modelPath: string | null = initialModelPath;
+  const modelPath: string | null = initialModelPath;
   let position: { lineNumber: number; column: number } | null = null;
   const modelListeners: Array<() => void> = [];
   const cursorListeners: Array<

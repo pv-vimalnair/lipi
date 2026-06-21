@@ -7080,4 +7080,66 @@ Phase 10 ships the **Appearance → Theme** section in Settings. The user picks 
 
 ---
 
-*End of handoff. Lipi is at **Phase mobile-build roadmap Phase A complete** + **Phase 6.3 (real cpal + whisper-rs STT wiring) shipped** + **Phase 8.1 (inline-edit streaming preview) shipped** + **Phase 9.36 (LSP event-stream upgrade) shipped** + **Stronghold password-flow (Android) design complete (Decision #186)** + **StrongholdKeyBridge contract + Rust stub shipped (§9.51)** + **Phase 10 — Editor tab theme: 5 vintage scenes (§9.52)** — the iOS / Android build pipeline scaffolding (Tauri config + per-platform config files + `tauri-plugin-stronghold` dispatch + icon set), the App Store / Google Play store-metadata templates, the CI toolchain smoke checks, the umbrella plan doc for the future Mac / Linux sessions, the inline-AI edit streaming preview in the Monaco content widget, the `lsp://stdout` Tauri event subscription, the real cpal mic-capture + whisper-rs inference wiring (open mic via cpal, downmix to mono, resample to 16 kHz with `LinearMonoResampler`, dispatch to whisper-rs with `WhisperContext` cached + pre-loaded at app startup), the Stronghold password-flow design (Android Keystore derivation via a Kotlin helper + JNI glue — implementation deferred to the future Mac / Linux session), the StrongholdKeyBridge contract (Kotlin class skeleton + Rust JNI stub with the future call sequence documented as a TODO), AND the 5-theme vintage illustration picker for the active editor tab (Settings → Theme; CSS-variable swap on `:root` so the TabStrip paints the user's chosen scene while the rail, file tree, editor, AI panel, and status bar stay in the dark-first IDE neutral; Zustand `themeStore` mirroring the `voicePreferencesStore` pattern with localStorage persistence at `lipi:theme:v1`; 21 new vitest tests; `import.meta.glob` for fail-fast asset loading) are all in place. The remaining work is the future Mac / Linux session (wire the actual JNI call in `secrets_stronghold_key_bridge::load_key_from_keystore_android` + the Swift `SFSpeechRecognizer` / Kotlin `SpeechRecognizer` plugin source code + the Gradle `:android-key-bridge` module + build the apps + smoke-test on real devices + upload to the App Store / Play Store — see `docs/plans/mobile-build-roadmap.md` for the checklist) + Phase 11 polish (free-drag crop picker, custom theme upload, top-bar quick-cycle button, tree active-row uses `--theme-accent-soft`) + the project-lead's non-code setup (LLC, ToS, marketing, support, signing secrets). The umbrella plan in `docs/plans/mobile-build-roadmap.md` is the "you are here, do these 5 things" document.*
+### 9.53 Phase 11 — SHIPPED (Technical debt cleanup & codebase hardening, see CHANGELOG "Changed (Phase 11)")
+
+Phase 11 is a systematic technical-debt cleanup that addresses 19 identified issues across security, robustness, observability, code quality, and structural debt. No new features — pure hardening.
+
+**What was done (19 items, 16 completed, 3 cancelled).**
+
+1. **React error boundaries** — Created `ErrorBoundary` class component (`src/shared/components/ErrorBoundary/`) with root-level boundary in `main.tsx` wrapping `<ScreenRoot />` and pane-level boundaries in `EditorWorkspace.tsx` wrapping FileTree, Editor, and SidePanel. Catches render errors and shows a recoverable fallback UI instead of crashing to a white screen. 6 new vitest tests.
+
+2. **Mutex poison recovery** — Replaced all 27 `Mutex.lock().expect("...poisoned")` calls with `.unwrap_or_else(|e| e.into_inner())` across `cancel.rs` (3), `stdio.rs` (15), `lib.rs` (2), `fs_watcher.rs` (1). Eliminates cascade-panic if a thread panics while holding a lock.
+
+3. **Repo hygiene** — Added `.tmp-*`, `/build-with-key.ps1`, `/try_build.ps1`, `/verify.ps1`, `/serve-mocks.js`, `/msvc_run.bat` to `.gitignore`. Ran `git rm --cached` on 29 temp/experiment files + 5 one-off scripts + 1 duplicate key file (`lipi-dev.key.pub`).
+
+4. **Structured logger** — Created `src/shared/logger.ts` with `warn`/`error`/`debug` methods (DEV-gated via `import.meta.env.DEV`). Replaced all 22 unguarded `console.warn/error` calls across 14 files with `logger.warn`/`logger.error`. Zero `console.warn/error` in production code.
+
+5. **Rust logging** — Replaced all 9 `eprintln!` calls in production Rust code: `stt_capture.rs` (4 → `log::error!`), `stdio.rs` (5 → `log::debug!`). Zero `eprintln!` in production.
+
+6. **ESLint** — Installed `eslint` + `typescript-eslint` + `@eslint/js` as devDependencies. Created `eslint.config.mjs` (flat config, non-type-aware `recommended` ruleset). Updated `lint` script from `npm run typecheck` to `eslint src/`. 0 errors, 272 warnings (incremental cleanup).
+
+7. **aiStore.ts decomposition** — Extracted types (145 lines) and pure helpers (88 lines) into `src/screens/EditorWorkspace/state/ai/types.ts` and `ai/helpers.ts`. Main file: 2,480 → 1,900 lines (−23%).
+
+8. **lspClientStore.ts decomposition** — Extracted types (82 lines) and kind helpers (125 lines) into `lspTypes.ts` and `lspKindHelpers.ts`. Main file: 2,108 → 1,705 lines (−19%).
+
+9. **SettingsProvider.tsx decomposition** — Extracted 7 self-contained component sections (ProviderCards, ToolSettingsCards, CustomToolsCards, DecisionLogCards, ToolSettingsResetCard, ToolSettingsBackupCard, WisprCard) into separate files under `./components/`. Main file: 2,069 → 301 lines (−85%).
+
+10. **Dead code removal** — Removed 6 dead constants + 1 dead async function (`verify_microsoft_receipt`) + 3 dead `MicrosoftError` variants from `iap_microsoft.rs`. Removed stale `#[allow(dead_code)]` from 5 live items in `iap_apple.rs`, `secrets.rs`, `secrets_stronghold.rs`.
+
+11. **Hardcoded pixel fix** — Replaced `INDENT_PX = 12` with `calc(var(--space-3) * ${depth} + var(--space-2))` in `FileTreePane.tsx` (Rule 1 compliance).
+
+12. **fs_watcher.rs** — Replaced `Option::expect("initialised above")` with `unreachable!()` (3 instances).
+
+13. **licensing.rs** — Removed unnecessary `#[allow(dead_code)]` on test function.
+
+14. **Duplicate key file** — Removed root-level `lipi-dev.key.pub` from git tracking (canonical copy at `src-tauri/keys/dev/lipi-dev.key.pub`).
+
+15. **http.rs clone reduction** — `validate_url_host_policy` clones reduced from 6 to 2 by extracting `url` once at the top.
+
+16. **Vite source map warning** — Investigated and confirmed as upstream monaco-editor packaging issue (not actionable).
+
+17-19. **Cancelled** — Ineffective dynamic imports (intentional design), `lib.rs run()` extraction (Tauri builder pattern), `SettingsProvider.tsx` (done as #9).
+
+**Files added (14 new).**
+
+- `src/shared/components/ErrorBoundary/ErrorBoundary.tsx`
+- `src/shared/components/ErrorBoundary/ErrorBoundary.module.css`
+- `src/shared/components/ErrorBoundary/ErrorBoundary.test.tsx`
+- `src/shared/components/ErrorBoundary/index.ts`
+- `src/shared/logger.ts`
+- `src/screens/EditorWorkspace/state/ai/types.ts`
+- `src/screens/EditorWorkspace/state/ai/helpers.ts`
+- `src/screens/EditorWorkspace/state/lspTypes.ts`
+- `src/screens/EditorWorkspace/state/lspKindHelpers.ts`
+- `src/screens/SettingsProvider/components/ProviderCards.tsx`
+- `src/screens/SettingsProvider/components/ToolSettingsCards.tsx`
+- `src/screens/SettingsProvider/components/CustomToolsCards.tsx`
+- `src/screens/SettingsProvider/components/DecisionLogCards.tsx`
+- `src/screens/SettingsProvider/components/ToolSettingsResetCard.tsx`
+- `src/screens/SettingsProvider/components/ToolSettingsBackupCard.tsx`
+- `src/screens/SettingsProvider/components/WisprCard.tsx`
+- `eslint.config.mjs`
+
+**Verification.** `npx tsc --noEmit` 0 errors. `npx eslint src/` 0 errors, 272 warnings. `npx vitest run` 100 files, 1299/1299 tests pass. `cargo check` 0 errors. `cargo test --lib --tests` 436/436 pass. `npx vite build` 2.87s.
+
+*End of handoff. Lipi is at **Phase mobile-build roadmap Phase A complete** + **Phase 6.3 (real cpal + whisper-rs STT wiring) shipped** + **Phase 8.1 (inline-edit streaming preview) shipped** + **Phase 9.36 (LSP event-stream upgrade) shipped** + **Stronghold password-flow (Android) design complete (Decision #186)** + **StrongholdKeyBridge contract + Rust stub shipped (§9.51)** + **Phase 10 — Editor tab theme: 5 vintage scenes (§9.52)** + **Phase 11 — Technical debt cleanup & codebase hardening (§9.53)**Recognizer` plugin source code + the Gradle `:android-key-bridge` module + build the apps + smoke-test on real devices + upload to the App Store / Play Store — see `docs/plans/mobile-build-roadmap.md` for the checklist) + Phase 11 polish (free-drag crop picker, custom theme upload, top-bar quick-cycle button, tree active-row uses `--theme-accent-soft`) + the project-lead's non-code setup (LLC, ToS, marketing, support, signing secrets). The umbrella plan in `docs/plans/mobile-build-roadmap.md` is the "you are here, do these 5 things" document.*

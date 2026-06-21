@@ -18,7 +18,7 @@
 ## Build commands
 - npm run typecheck     # npx tsc -b, must be 0 errors
 - npm run lint          # npm run typecheck, must be 0 errors
-- npm test              # npx vitest run, 1293/1293 expected
+- npm test              # npx vitest run, 1299/1299 expected
 - npm run build         # vite production build
 - cd src-tauri && cargo check               # 0 errors, 0 warnings
 - cd src-tauri && cargo test --lib          # 413/413 expected

@@ -15,6 +15,7 @@
  * milliseconds with plain `expect(...)` calls.
  */
 
+// eslint-disable-next-line no-control-regex -- NUL byte is an invalid filename char
 const INVALID_NAME_CHARS = /[\\/:*?"<>|\u0000]/;
 
 /**

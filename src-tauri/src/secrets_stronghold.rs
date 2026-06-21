@@ -116,7 +116,6 @@ static STRONGHOLD: Mutex<State> = Mutex::new(None);
 /// `local_data_dir`. The caller (`secrets_set_api_key`
 /// / `get` / etc.) is responsible for resolving
 /// `app_local_data_dir()` (it needs the Tauri `AppHandle`).
-#[allow(dead_code)] // used by lib.rs's `resolve_snapshot_path`
 pub fn snapshot_path_for(app_data_dir: &Path) -> PathBuf {
     app_data_dir.join(SNAPSHOT_FILENAME)
 }

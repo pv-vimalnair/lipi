@@ -178,7 +178,7 @@ export function OnboardingTour(): JSX.Element | null {
     // and go through `start()`
     // directly, not through this
     // effect).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Intentional deps: only run once per launch.
   }, [hydrated, workspaceHydrated, currentPath]);
 
   // If the user closes the
@@ -277,7 +277,7 @@ export function OnboardingTour(): JSX.Element | null {
     return () => {
       document.removeEventListener('keydown', handler);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Intentional deps: only `currentStep`.
   }, [currentStep]);
 
   const handleNext = useCallback((): void => {

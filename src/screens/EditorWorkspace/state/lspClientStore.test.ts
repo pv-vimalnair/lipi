@@ -407,7 +407,7 @@ import { workspaceKindKey } from './lspClientStore';
 // directly and pass the kind explicitly.
 const tsKey = (workspaceRoot: string): string =>
   workspaceKindKey(workspaceRoot, 'typescript');
-let useLspClientStore: typeof importedStore = importedStore;
+const useLspClientStore: typeof importedStore = importedStore;
 
 beforeEach(() => {
   // Phase 9.5 — the store's

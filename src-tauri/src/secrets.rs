@@ -510,7 +510,7 @@ fn has_api_key_keyring(provider: &str) -> Result<bool, SecretError> {
 /// This is the only way the AI proxy in 5b
 /// gets the key; the frontend never receives
 /// the key value itself.
-#[allow(dead_code, unused_variables)] // used in Phase 5b
+#[allow(unused_variables)] // snapshot_path only used in mobile cfg
 pub fn get_api_key(
     provider: &str,
     snapshot_path: Option<&std::path::Path>,
@@ -542,7 +542,6 @@ pub fn get_renderer_api_key(
 
 /// Keyring-only `get_api_key` (the original
 /// implementation, unchanged).
-#[allow(dead_code)] // used in Phase 5b
 fn get_api_key_keyring(provider: &str) -> Result<Option<String>, SecretError> {
     validate_provider(provider)?;
     let entry = entry_for(provider)?;

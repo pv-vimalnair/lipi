@@ -701,6 +701,7 @@ export class LspClient {
       throw new Error(
         `Failed to spawn ${spec.command || 'lsp server'}: ${(e as Error).message}. ` +
           `Install with: ${spec.installHint}`,
+        { cause: e },
       );
     }
     this.handleId = spawn.handleId;

@@ -56,14 +56,14 @@ LifeOf project) — **never touch, do not read, do not import from**.
 # JS side
 npm install                # one-time
 npm run typecheck          # npx tsc -b, 0 errors expected
-npm run lint               # npm run typecheck, 0 errors expected
-npm test                   # npx vitest run, 1293/1293 pass
+npm run lint               # npx eslint src/, 0 errors expected
+npm test                   # npx vitest run, 1299/1299 pass
 npm run build              # vite production build
 
 # Rust side (default features, no m2c-native, no mobile)
 cd src-tauri
 cargo check                # 0 errors, 0 warnings
-cargo test --lib           # 413 / 413 pass
+cargo test --lib           # 412 / 412 pass
 cargo test --tests         # 24 / 24 pass
 
 # Rust side (mobile build — Stronghold + secrets dispatch)
@@ -84,6 +84,7 @@ recompile + Vite HMR.
 | Phase | What | Status |
 |---|---|---|
 | **10** | Editor tab theme: 5 vintage scenes | **SHIPPED 2026-06-18** |
+| **11** | Technical debt cleanup & codebase hardening | **SHIPPED 2026-06-21** |
 | **6.3** | Real `cpal` + `whisper-rs` STT wiring | **SHIPPED 2026-06-16** |
 | **6.2** | `whisper-rs` 0.14 → 0.16 (build break fix) | SHIPPED |
 | **mobile-build A** | iOS / Android pipeline seam | SHIPPED |

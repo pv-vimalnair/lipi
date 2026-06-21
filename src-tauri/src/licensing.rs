@@ -1466,7 +1466,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(dead_code)]
     fn test_pubkey_is_well_formed() {
         // Sanity check that the test pubkey is a valid
         // Ed25519 point. (We don't actually use it for

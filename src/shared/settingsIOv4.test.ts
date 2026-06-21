@@ -105,7 +105,7 @@ describe('serialiseLipiStateV4', () => {
     expect(s).toContain('"version": 4');
     expect(s).toContain('"format": "lipi-state"');
     // Pretty-printed: 2-space indent.
-    expect(s).toMatch(/\n  "format"/);
+    expect(s).toMatch(/\n {2}"format"/);
   });
 
   it('round-trips through parseLipiStateV4', () => {

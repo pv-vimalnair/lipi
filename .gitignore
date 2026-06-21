@@ -37,7 +37,10 @@ src-tauri/keys/dev/*.key
 # Backwards-compat: any old `lipi-dev.key` at the
 # src-tauri/ root is also ignored.
 lipi-dev.key
-!lipi-dev.key.pub
+# Backwards-compat: root-level .pub is a legacy
+# leftover — the canonical copy lives at
+# src-tauri/keys/dev/lipi-dev.key.pub.
+/lipi-dev.key.pub
 
 # Logs
 logs/
@@ -91,6 +94,15 @@ build_log.txt
 out.txt
 verify/
 status.txt
+
+# Temporary files — screenshots, data dumps, and
+# one-off scripts generated during development.
+.tmp-*
+/build-with-key.ps1
+/try_build.ps1
+/verify.ps1
+/serve-mocks.js
+/msvc_run.bat
 
 # TypeScript incremental build cache
 # (`tsc -b` regenerates this on every run; it's

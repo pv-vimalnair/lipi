@@ -147,7 +147,7 @@ function fakeSession(opts: {
     for (const l of stateListeners) l('closed');
   };
   // Allow the test-provided `close` to override the default.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   (session as any).close = opts.close ?? wrappedClose;
   void realClose;
 

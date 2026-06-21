@@ -132,7 +132,8 @@ export function InlineNameInput({
     // — we only want to run the
     // selection on open, not on every
     // keystroke.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Intentionally only run selection on open, not on every keystroke.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
   }, [open, mode]);
 
   // Validate the current value.

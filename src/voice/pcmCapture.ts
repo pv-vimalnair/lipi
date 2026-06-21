@@ -281,7 +281,7 @@ export async function startPcmCapture(
   const queue: Int16Array[] = [];
   const waiters: Array<(chunk: Int16Array | null) => void> = [];
   let stopped = false;
-  let pending: number[] = []; // accumulate samples across callbacks
+  const pending: number[] = []; // accumulate samples across callbacks
 
   const push = (chunk: Int16Array | null): void => {
     const w = waiters.shift();

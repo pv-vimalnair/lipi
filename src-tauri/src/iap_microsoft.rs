@@ -62,34 +62,6 @@ pub const MS_PRODUCT_ID_MONTHLY: &str = "app.lipi.ide.monthly";
 /// configuration.
 pub const MS_PRODUCT_ID_YEARLY: &str = "app.lipi.ide.yearly";
 
-/// The Azure AD OAuth 2.0 token endpoint. The
-/// tenant id is interpolated at request time.
-/// The full URL is
-/// `https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token`.
-#[allow(dead_code)] // Used by the future OAuth client-credentials flow (v1.1 follow-up).
-const MS_OAUTH_TOKEN_URL_PREFIX: &str = "https://login.microsoftonline.com";
-#[allow(dead_code)] // Used by the future OAuth client-credentials flow (v1.1 follow-up).
-const MS_OAUTH_TOKEN_URL_SUFFIX: &str = "/oauth2/v2.0/token";
-
-/// The Store Broker API base URL. The per-product
-/// collection URL is appended at request time
-/// (Microsoft uses long, opaque URLs per product).
-#[allow(dead_code)] // Used by the future Broker API direct-call flow (v1.1 follow-up).
-const MS_BROKER_API_BASE: &str = "https://collections.mp.microsoft.com/v9.0/collections";
-
-/// The OAuth 2.0 client credentials. Read at build
-/// time from the `LIPI_MS_IAP_CLIENT_ID` /
-/// `LIPI_MS_IAP_CLIENT_SECRET` / `LIPI_MS_IAP_TENANT_ID`
-/// env vars. If any is unset, the module falls back
-/// to `None` and every call returns
-/// `iap-azure-credentials-missing`.
-#[allow(dead_code)] // Used by the future OAuth client-credentials flow (v1.1 follow-up).
-const MS_CLIENT_ID: Option<&'static str> = option_env!("LIPI_MS_IAP_CLIENT_ID");
-#[allow(dead_code)] // Used by the future OAuth client-credentials flow (v1.1 follow-up).
-const MS_CLIENT_SECRET: Option<&'static str> = option_env!("LIPI_MS_IAP_CLIENT_SECRET");
-#[allow(dead_code)] // Used by the future OAuth client-credentials flow (v1.1 follow-up).
-const MS_TENANT_ID: Option<&'static str> = option_env!("LIPI_MS_IAP_TENANT_ID");
-
 /// The validated Microsoft IAP receipt. Same
 /// shape as `AppleValidatedReceipt` (the
 /// dispatcher merges them into a unified
@@ -343,21 +315,8 @@ fn expected_product_id_for_plan(plan: &str) -> &str {
 /// Mirrors `AppleError` (same shape, different
 /// detail messages). The dispatcher maps these
 /// to unified `IapError` variants.
-#[allow(dead_code)] // Some variants are only constructed by the future OAuth flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MicrosoftError {
-    /// The Azure AD client credentials env vars
-    /// are not set.
-    AzureCredentialsMissing,
-
-    /// The OAuth 2.0 token exchange failed
-    /// (network error, bad credentials, etc.).
-    OAuthFailed { detail: String },
-
-    /// The HTTP request to the Broker API
-    /// failed.
-    NetworkError { detail: String },
-
     /// The HTTP response could not be parsed
     /// (HTML error page, etc.).
     InvalidResponse { detail: String },
@@ -388,9 +347,6 @@ impl MicrosoftError {
     /// A short reason string for the dispatcher.
     pub fn reason(&self) -> String {
         match self {
-            MicrosoftError::AzureCredentialsMissing => "iap-azure-credentials-missing".to_string(),
-            MicrosoftError::OAuthFailed { detail } => format!("iap-oauth-failed: {detail}"),
-            MicrosoftError::NetworkError { detail } => format!("iap-network-error: {detail}"),
             MicrosoftError::InvalidResponse { detail } => {
                 format!("iap-malformed-response: {detail}")
             }
@@ -411,87 +367,6 @@ impl MicrosoftError {
             }
         }
     }
-}
-
-// --- The HTTP caller (stub for v1) --------------------------------
-
-/// Send a `verifyReceipt` request to Microsoft
-/// and return the validated receipt. This is
-/// the "real" entry point (with the HTTP call);
-/// the pure `validate_microsoft_response` is
-/// for tests.
-///
-/// Phase 4 ships a minimal implementation: the
-/// OAuth flow is stubbed to "use a static token
-/// from the env var" (the production deployment
-/// would refresh the token via the OAuth flow
-/// described above). The HTTP call to the
-/// Broker API is implemented.
-///
-/// # Errors
-///
-/// - `MicrosoftError::AzureCredentialsMissing`
-///   if any of the env vars is unset.
-/// - `MicrosoftError::OAuthFailed` on token
-///   exchange failure.
-/// - `MicrosoftError::NetworkError` on HTTP
-///   failure.
-/// - `MicrosoftError::InvalidResponse` on
-///   deserialization failure.
-/// - `MicrosoftError::ErrorResponse` /
-///   `MicrosoftError::ProductIdMismatch` / etc.
-///   on validation failure.
-#[allow(dead_code)] // Future entry point for the raw-receipt case (Phase 4 ships the parsed-response path).
-pub async fn verify_microsoft_receipt(
-    receipt_xml: &str,
-    plan: &str,
-    collection_url: &str,
-    now_unix_secs: i64,
-) -> Result<MicrosoftValidatedReceipt, MicrosoftError> {
-    if MS_CLIENT_ID.is_none() || MS_CLIENT_SECRET.is_none() || MS_TENANT_ID.is_none() {
-        return Err(MicrosoftError::AzureCredentialsMissing);
-    }
-    // Phase 4.1: use the OAuth client-credentials
-    // flow (with in-memory cache) instead of the
-    // static LIPI_MS_IAP_BEARER_TOKEN. The
-    // `iap_oauth` module transparently falls
-    // back to the static token if the OAuth env
-    // vars are unset (dev escape hatch).
-    let bearer = crate::iap_oauth::get_access_token(now_unix_secs)
-        .await
-        .map_err(|e| MicrosoftError::OAuthFailed {
-            detail: e.to_string(),
-        })?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| MicrosoftError::NetworkError {
-            detail: format!("failed to build HTTP client: {e}"),
-        })?;
-    let response = client
-        .post(collection_url)
-        .header("Authorization", format!("Bearer {bearer}"))
-        .header("Content-Type", "application/xml")
-        .body(receipt_xml.to_string())
-        .send()
-        .await
-        .map_err(|e| MicrosoftError::NetworkError {
-            detail: format!("HTTP POST failed: {e}"),
-        })?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(MicrosoftError::NetworkError {
-            detail: format!("Microsoft returned HTTP {status}"),
-        });
-    }
-    let body = response
-        .text()
-        .await
-        .map_err(|e| MicrosoftError::InvalidResponse {
-            detail: format!("failed to read response body: {e}"),
-        })?;
-    let parsed = parse_microsoft_response(&body);
-    validate_microsoft_response(&parsed, plan, now_unix_secs)
 }
 
 // --- Tests --------------------------------------------------------
@@ -675,17 +550,10 @@ mod tests {
     // --- reason() ---
 
     #[test]
-    fn microsoft_error_reason_for_azure_credentials_missing() {
-        let err = MicrosoftError::AzureCredentialsMissing;
-        assert_eq!(err.reason(), "iap-azure-credentials-missing");
-    }
-
-    #[test]
-    fn microsoft_error_reason_for_network_error() {
-        let err = MicrosoftError::NetworkError {
-            detail: "connection refused".to_string(),
+    fn microsoft_error_reason_for_invalid_response() {
+        let err = MicrosoftError::InvalidResponse {
+            detail: "unexpected EOF".to_string(),
         };
-        let reason = err.reason();
-        assert!(reason.starts_with("iap-network-error:"));
+        assert!(err.reason().starts_with("iap-malformed-response:"));
     }
 }

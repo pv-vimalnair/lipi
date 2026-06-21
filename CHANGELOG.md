@@ -6,6 +6,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (Phase 11 — Technical debt cleanup & codebase hardening)
+
+- **ESLint configuration.** Installed `eslint` + `typescript-eslint`
+  as devDependencies. Created `eslint.config.mjs` (flat config,
+  non-type-aware `recommended` ruleset). Updated `lint` script from
+  `npm run typecheck` to `eslint src/`. Initial state: 0 errors,
+  272 warnings (incremental cleanup).
+- **React error boundaries.** Created `ErrorBoundary` class component
+  with root-level boundary in `main.tsx` and pane-level boundaries
+  in `EditorWorkspace.tsx` (FileTree, Editor, SidePanel). Catches
+  render errors and shows a recoverable fallback UI. 6 new tests.
+- **Structured logger.** Created `src/shared/logger.ts` with
+  `warn`/`error`/`debug` methods (DEV-gated). Replaced all 22
+  unguarded `console.warn/error` calls across 14 files.
+
+### Changed (Phase 11 — Technical debt cleanup & codebase hardening)
+
+- **Mutex poison recovery.** Replaced all 27
+  `Mutex.lock().expect("...poisoned")` calls with
+  `.unwrap_or_else(|e| e.into_inner())` across `cancel.rs`,
+  `stdio.rs`, `lib.rs`, `fs_watcher.rs`. Eliminates cascade-panic.
+- **Rust logging.** Replaced all 9 `eprintln!` calls in production
+  code with `log::error!`/`log::debug!`. Zero `eprintln!` in
+  production.
+- **aiStore.ts decomposition.** Extracted types and helpers into
+  `ai/types.ts` (145 lines) and `ai/helpers.ts` (88 lines).
+  Main file: 2,480 → 1,900 lines (−23%).
+- **lspClientStore.ts decomposition.** Extracted types and kind
+  helpers into `lspTypes.ts` (82 lines) and `lspKindHelpers.ts`
+  (125 lines). Main file: 2,108 → 1,705 lines (−19%).
+- **SettingsProvider.tsx decomposition.** Extracted 7 self-contained
+  component sections into separate files. Main file: 2,069 → 301
+  lines (−85%).
+- **Dead code removal.** Removed 6 dead constants + 1 dead async
+  function + 3 dead error variants from `iap_microsoft.rs`. Removed
+  stale `#[allow(dead_code)]` from 5 live items.
+- **Hardcoded pixel fix.** Replaced `INDENT_PX = 12` with
+  `calc(var(--space-3) * ${depth} + var(--space-2))` in
+  `FileTreePane.tsx` (Rule 1 compliance).
+- **http.rs clone reduction.** `validate_url_host_policy` clones
+  reduced from 6 to 2.
+
+### Removed (Phase 11)
+
+- Removed 29 `.tmp-*` temp files and 5 one-off experiment scripts
+  from git tracking.
+- Removed duplicate root-level `lipi-dev.key.pub` from git tracking.
+- Removed `#[allow(dead_code)]` on test function in `licensing.rs`.
+- Removed `fs_watcher.rs` `Option::expect("initialised above")` (3
+  instances → `unreachable!()`).
+
 ### Changed (IDE readiness hardening backlog)
 
 - Hardened AI and custom-tool safety: `get_file_contents` is

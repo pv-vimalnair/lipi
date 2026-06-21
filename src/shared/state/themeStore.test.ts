@@ -47,7 +47,7 @@ describe('themeStore', () => {
     // `setThemeId` is typed as ThemeId at the call site, but
     // a runtime path (e.g. command palette args) could
     // bypass the type system. The store's guard catches it.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     useThemeStore.getState().setThemeId('not-a-real-theme' as unknown as any);
     expect(useThemeStore.getState().themeId).toBe('whispering-pines');
   });
@@ -70,7 +70,7 @@ describe('themeStore', () => {
 
   it('setCropIndex rejects non-number values (defensive)', () => {
     useThemeStore.getState().setCropIndex(3);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     useThemeStore.getState().setCropIndex('4' as unknown as any);
     expect(useThemeStore.getState().cropIndex).toBe(3);
   });

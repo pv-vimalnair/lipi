@@ -477,7 +477,7 @@ impl StdioHandle {
                 match stdout.read(&mut buf).await {
                     Ok(0) => {
                         // EOF — child closed stdout.
-                        let mut e = exited.lock().expect("exited poisoned");
+                        let mut e = exited.lock().unwrap_or_else(|e| e.into_inner());
                         *e = true;
                         break;
                     }
@@ -488,7 +488,7 @@ impl StdioHandle {
                         // one-time drain on JS
                         // subscription).
                         {
-                            let mut q = stdout_buffer.lock().expect("buffer poisoned");
+                            let mut q = stdout_buffer.lock().unwrap_or_else(|e| e.into_inner());
                             // Cap the buffer at 8 MiB
                             // so a chatty server can't
                             // OOM us.
@@ -521,7 +521,7 @@ impl StdioHandle {
                         };
                         if let Err(e) = app_handle.emit(LSP_STDOUT_EVENT, &payload) {
                             if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                                eprintln!("[lsp] failed to emit {LSP_STDOUT_EVENT}: {e}");
+                                log::debug!("[lsp] failed to emit {LSP_STDOUT_EVENT}: {e}");
                             }
                         }
                     }
@@ -529,9 +529,9 @@ impl StdioHandle {
                         // Read error — most likely the
                         // child died. Log and exit.
                         if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                            eprintln!("[lsp] reader for {handle_id} error: {e}");
+                            log::debug!("[lsp] reader for {handle_id} error: {e}");
                         }
-                        let mut ex = exited.lock().expect("exited poisoned");
+                        let mut ex = exited.lock().unwrap_or_else(|e| e.into_inner());
                         *ex = true;
                         break;
                     }
@@ -569,14 +569,14 @@ impl StdioHandle {
                         let bytes = &buf[..n];
                         // 1. Crash-tail buffer (Phase 9.5).
                         {
-                            let mut q = stderr_buffer.lock().expect("stderr buffer poisoned");
+                            let mut q = stderr_buffer.lock().unwrap_or_else(|e| e.into_inner());
                             push_stderr(&mut q, bytes);
                         }
                         // 2. Live log buffer (Phase 9.7).
                         {
                             let mut q = stderr_log_buffer
                                 .lock()
-                                .expect("stderr log buffer poisoned");
+                                .unwrap_or_else(|e| e.into_inner());
                             push_stderr_log(&mut q, bytes);
                         }
                         // 3. Push the new bytes to the JS
@@ -596,7 +596,7 @@ impl StdioHandle {
                         });
                         if let Err(e) = app_handle.emit(LSP_LOG_EVENT, payload) {
                             if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                                eprintln!("[lsp] failed to emit {LSP_LOG_EVENT}: {e}");
+                                log::debug!("[lsp] failed to emit {LSP_LOG_EVENT}: {e}");
                             }
                         }
                     }
@@ -606,7 +606,7 @@ impl StdioHandle {
                         // the wait task will fire the
                         // crash event.
                         if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                            eprintln!("[lsp] stderr reader for {handle_id} error: {_e}");
+                            log::debug!("[lsp] stderr reader for {handle_id} error: {_e}");
                         }
                         break;
                     }
@@ -648,16 +648,16 @@ impl StdioHandle {
                 c.wait().await.ok().and_then(|s| s.code())
             };
             {
-                let mut e = child_exited.lock().expect("child_exited poisoned");
+                let mut e = child_exited.lock().unwrap_or_else(|e| e.into_inner());
                 *e = true;
             }
             if let Some(code) = exit_code {
-                let mut s = exit_status.lock().expect("exit_status poisoned");
+                let mut s = exit_status.lock().unwrap_or_else(|e| e.into_inner());
                 *s = Some(code);
             }
             // Snapshot the stderr tail.
             let tail = {
-                let q = stderr_buffer.lock().expect("stderr buffer poisoned");
+                let q = stderr_buffer.lock().unwrap_or_else(|e| e.into_inner());
                 // Decode as UTF-8 lossy; LSP
                 // servers log ASCII / UTF-8.
                 String::from_utf8_lossy(q.iter().copied().collect::<Vec<u8>>().as_slice())
@@ -673,7 +673,7 @@ impl StdioHandle {
             });
             if let Err(e) = app_handle.emit("lsp://crashed", payload) {
                 if std::env::var("LIPI_LSP_DEBUG").is_ok() {
-                    eprintln!("[lsp] failed to emit lsp://crashed: {e}");
+                    log::debug!("[lsp] failed to emit lsp://crashed: {e}");
                 }
             }
         });
@@ -790,7 +790,7 @@ pub async fn run_stdio(
     state
         .handles
         .lock()
-        .expect("state poisoned")
+        .unwrap_or_else(|e| e.into_inner())
         .insert(handle_id.clone(), handle);
 
     Ok(RunStdioResult {
@@ -809,13 +809,13 @@ pub async fn stdio_read(
     // Clone the Arc out of the map (same Send-bound
     // reason as `stdio_write`).
     let handle = {
-        let handles = state.handles.lock().expect("state poisoned");
+        let handles = state.handles.lock().unwrap_or_else(|e| e.into_inner());
         handles
             .get(&handle_id)
             .ok_or_else(|| StdioError::NotFound(handle_id.clone()))?
             .clone()
     };
-    let mut buf = handle.stdout_buffer.lock().expect("buffer poisoned");
+    let mut buf = handle.stdout_buffer.lock().unwrap_or_else(|e| e.into_inner());
     let take = max_bytes.min(MAX_READ_BYTES).min(buf.len());
     let mut out = Vec::with_capacity(take);
     for _ in 0..take {
@@ -831,7 +831,7 @@ pub async fn stdio_read(
     // always UTF-8), so the JS side's UTF-8 decoder
     // will see it as a clean end-of-stream.
     if out.is_empty() {
-        let exited = handle.exited.lock().expect("exited poisoned");
+        let exited = handle.exited.lock().unwrap_or_else(|e| e.into_inner());
         if *exited {
             out.push(0xFF);
         }
@@ -862,13 +862,13 @@ pub async fn stdio_read_stderr(
     max_bytes: usize,
 ) -> Result<Vec<u8>, StdioError> {
     let handle = {
-        let handles = state.handles.lock().expect("state poisoned");
+        let handles = state.handles.lock().unwrap_or_else(|e| e.into_inner());
         handles
             .get(&handle_id)
             .ok_or_else(|| StdioError::NotFound(handle_id.clone()))?
             .clone()
     };
-    let mut buf = handle.stderr_buffer.lock().expect("stderr buffer poisoned");
+    let mut buf = handle.stderr_buffer.lock().unwrap_or_else(|e| e.into_inner());
     // Cap the per-call read to MAX_READ_BYTES
     // (1 MiB) so a chatty server can't make the
     // Tauri IPC payload huge. The ring buffer
@@ -903,7 +903,7 @@ pub async fn stdio_read_stderr_log(
     max_bytes: usize,
 ) -> Result<Vec<u8>, StdioError> {
     let handle = {
-        let handles = state.handles.lock().expect("state poisoned");
+        let handles = state.handles.lock().unwrap_or_else(|e| e.into_inner());
         handles
             .get(&handle_id)
             .ok_or_else(|| StdioError::NotFound(handle_id.clone()))?
@@ -912,7 +912,7 @@ pub async fn stdio_read_stderr_log(
     let mut buf = handle
         .stderr_log_buffer
         .lock()
-        .expect("stderr log buffer poisoned");
+        .unwrap_or_else(|e| e.into_inner());
     // Cap at MAX_READ_BYTES for IPC safety. The
     // log buffer itself is 64 KiB so this is
     // effectively a per-call chunk limit, not a
@@ -941,7 +941,7 @@ pub async fn stdio_write(
     // point makes the future non-`Send` (Tauri
     // commands need `Send` futures).
     let handle = {
-        let handles = state.handles.lock().expect("state poisoned");
+        let handles = state.handles.lock().unwrap_or_else(|e| e.into_inner());
         handles
             .get(&handle_id)
             .ok_or_else(|| StdioError::NotFound(handle_id.clone()))?
@@ -976,7 +976,7 @@ pub async fn stdio_close(
     // before dropping the outer handle (the reader task
     // may still have a clone of the outer Arc).
     let (child, exited) = {
-        let mut handles = state.handles.lock().expect("state poisoned");
+        let mut handles = state.handles.lock().unwrap_or_else(|e| e.into_inner());
         let Some(handle) = handles.remove(&handle_id) else {
             return Err(StdioError::NotFound(handle_id));
         };
@@ -1017,7 +1017,7 @@ pub async fn stdio_close(
 
     // Flip the exited flag so any in-flight
     // `lsp_stdio_read` returns the sentinel.
-    let mut exited_guard = exited.lock().expect("exited poisoned");
+    let mut exited_guard = exited.lock().unwrap_or_else(|e| e.into_inner());
     *exited_guard = true;
     Ok(())
 }

@@ -133,7 +133,7 @@ impl From<EventKind> for FsChangeKind {
 static WATCHERS: Mutex<Option<WatcherMap>> = Mutex::new(None);
 
 fn watchers_table() -> std::sync::MutexGuard<'static, Option<WatcherMap>> {
-    let mut guard = WATCHERS.lock().expect("WATCHERS mutex poisoned");
+    let mut guard = WATCHERS.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_none() {
         *guard = Some(HashMap::new());
     }
@@ -167,7 +167,12 @@ pub fn fs_watch(app: AppHandle, path: String) -> Result<WatchHandle, String> {
     // primary dedup mechanism.
     {
         let guard = watchers_table();
-        let table = guard.as_ref().expect("initialised above");
+        let table = guard.as_ref().unwrap_or_else(|| {
+            // watchers_table() always initialises the
+            // inner HashMap, so this branch is unreachable
+            // under correct call order.
+            unreachable!("WATCHERS not initialised — callers must go through watchers_table()");
+        });
         for (id, active) in table.iter() {
             if active.path == dir {
                 return Ok(WatchHandle { id: *id, path });
@@ -216,7 +221,9 @@ pub fn fs_watch(app: AppHandle, path: String) -> Result<WatchHandle, String> {
     // this — `watcher` is moved into the
     // table.)
     let mut guard = watchers_table();
-    let table = guard.as_mut().expect("initialised above");
+    let table = guard.as_mut().unwrap_or_else(|| {
+        unreachable!("WATCHERS not initialised — callers must go through watchers_table()");
+    });
     table.insert(
         id,
         ActiveWatcher {
@@ -235,7 +242,9 @@ pub fn fs_watch(app: AppHandle, path: String) -> Result<WatchHandle, String> {
 #[tauri::command]
 pub fn fs_unwatch(id: u64) -> Result<bool, String> {
     let mut guard = watchers_table();
-    let table = guard.as_mut().expect("initialised above");
+    let table = guard.as_mut().unwrap_or_else(|| {
+        unreachable!("WATCHERS not initialised — callers must go through watchers_table()");
+    });
     Ok(table.remove(&id).is_some())
 }
 

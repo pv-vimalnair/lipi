@@ -560,7 +560,7 @@ pub async fn start_listening(
             // audio thread that cpal creates sees a
             // consistent state.
             if let Err(e) = stream.play() {
-                eprintln!("[stt_capture] failed to start input stream: {e}");
+                log::error!("[stt_capture] failed to start input stream: {e}");
                 return;
             }
             // Block until `stop_listening` signals. The
@@ -652,7 +652,7 @@ where
                 }
             },
             move |err| {
-                eprintln!("[stt_capture] cpal stream error: {err}");
+                log::error!("[stt_capture] cpal stream error: {err}");
             },
             None,
         )
@@ -814,7 +814,7 @@ pub async fn stop_listening(app: &AppHandle, session_id: &str) -> Result<(), Stt
         // stream-park thread is a bug but shouldn't
         // stop us from emitting the transcript.
         if let Err(e) = join_result {
-            eprintln!("[stt_capture] stream-park thread join failed: {e:?}");
+            log::error!("[stt_capture] stream-park thread join failed: {e:?}");
         }
     }
 
@@ -876,7 +876,7 @@ fn dispatch_inference(audio: &[f32]) -> String {
         // import is `m2c-native`-only and won't compile
         // on the default build.
         crate::stt_inference::run_inference(audio).unwrap_or_else(|e| {
-            eprintln!("[stt_capture] whisper inference failed: {e}");
+            log::error!("[stt_capture] whisper inference failed: {e}");
             format!("(whisper inference failed: {e} — see stderr for the full error)")
         })
     }

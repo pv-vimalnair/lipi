@@ -49,7 +49,7 @@ describe('buildInlineEditPrompt (Phase 8)', () => {
     // backticks with the same indentation as
     // the input — no reformatting.
     expect(r.userMessage).toMatch(
-      /```\n  indented\n    more indented\n```/,
+      /```\n {2}indented\n {4}more indented\n```/,
     );
   });
 

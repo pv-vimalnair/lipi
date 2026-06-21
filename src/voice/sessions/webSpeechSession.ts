@@ -72,6 +72,7 @@ function mapW3cErrorToCode(w3cError: string): VoiceSessionErrorCode {
 export function createWebSpeechSession(
   opts: VoiceSessionFactoryOptions,
 ): Promise<VoiceSessionHandle> {
+  // eslint-disable-next-line no-async-promise-executor -- callback-based SpeechRecognition setup requires async executor
   return new Promise<VoiceSessionHandle>(async (resolve, reject) => {
     if (opts.signal.aborted) {
       reject(
@@ -118,7 +119,7 @@ export function createWebSpeechSession(
     let lastPartial = '';
     let sequence = 0;
     let armHandle: ReturnType<typeof setTimeout> | null = null;
-    let sessionId = `webspeech-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionId = `webspeech-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const setState = (s: typeof state): void => {
       if (state === s || closed) return;

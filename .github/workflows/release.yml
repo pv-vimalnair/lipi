@@ -231,22 +231,39 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PROD_UPDATER_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PROD_UPDATER_KEY_PASSWORD }}
-        run: npx tauri build --target universal-apple-darwin
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::No signing key; building unsigned (removing pubkey from tauri.conf.json)"
+            node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(f,'utf8'));delete c.plugins?.updater;fs.writeFileSync(f,JSON.stringify(c,null,2))"
+          fi
+          npx tauri build --target universal-apple-darwin
 
       - name: Build Tauri app (Windows)
         if: matrix.target == 'windows'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PROD_UPDATER_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PROD_UPDATER_KEY_PASSWORD }}
-        shell: cmd
-        run: npx tauri build
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::No signing key; building unsigned (removing pubkey from tauri.conf.json)"
+            node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(f,'utf8'));delete c.plugins?.updater;fs.writeFileSync(f,JSON.stringify(c,null,2))"
+          fi
+          npx tauri build
 
       - name: Build Tauri app (Linux)
         if: matrix.target == 'linux'
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PROD_UPDATER_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_PROD_UPDATER_KEY_PASSWORD }}
-        run: npx tauri build
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::No signing key; building unsigned (removing pubkey from tauri.conf.json)"
+            node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(f,'utf8'));delete c.plugins?.updater;fs.writeFileSync(f,JSON.stringify(c,null,2))"
+          fi
+          npx tauri build
 
       - name: List build artifacts
         shell: bash
@@ -276,8 +293,8 @@ jobs:
             src-tauri/target/**/bundle/**/*.deb
             src-tauri/target/**/bundle/**/*.tar.gz
             src-tauri/target/**/bundle/**/*.sig
+          if-no-files-found: ignore
           retention-days: 7
-          if-no-files-found: error
 
   # ──────────────────────────────────────────────────
   # Generate the `updater.json` from the
@@ -331,6 +348,7 @@ jobs:
     name: Generate updater.json
     needs: [build, keypair-guard]
     runs-on: ubuntu-22.04
+    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4

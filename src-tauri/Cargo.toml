@@ -1,6 +1,6 @@
 [package]
 name = "lipi"
-version = "0.0.2"
+version = "0.1.0"
 description = "Lipi — a voice-first, cross-platform IDE. BYO API key. No backend."
 authors = ["Lipi Contributors"]
 license = "MIT"

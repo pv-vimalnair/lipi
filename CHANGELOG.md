@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-06-21
+
 ### Added (Phase 11 — Technical debt cleanup & codebase hardening)
 
 - **ESLint configuration.** Installed `eslint` + `typescript-eslint`
@@ -8918,6 +8920,34 @@ loading refactor).
   rationale in
   `lspProviders.ts`'s
   header comment).
+
+### Added (Phase 12 — Free-drag crop picker + custom theme upload)
+
+- **Free-drag crop picker.** New `FreeCropPicker` component replaces
+  the 9-position grid with a continuous drag-to-position viewport.
+  Supports mouse, touch, and keyboard (arrow keys with Shift for
+  10x step). 9-position preset grid preserved as quick-access
+  buttons. Extended `themeStore` with `cropX`/`cropY` continuous
+  coordinates. Backwards-compatible persistence. 16 new tests.
+- **Custom theme upload.** New `CustomThemeUploader` component with
+  file picker + canvas crop. 4:5 aspect ratio enforcement (5%
+  tolerance) with drag-to-position crop frame. JPEG export at 0.85
+  quality, max 800px wide for localStorage safety. Custom theme
+  appears as 6th option in theme grid. 4 new tests + 7 theme store
+  tests for custom image lifecycle.
+- **Theme quick-cycle button.** Palette icon in TitleBar next to
+  settings gear. Cycles through all 5 themes (6 including custom)
+  on click.
+- **File tree theme integration.** Active row now uses
+  `--theme-accent-soft` CSS variable for theme-aware selection color.
+
+### Fixed (Phase 11 polish — ESLint zero warnings)
+
+- Migrated all remaining `console.warn`/`console.error` calls to
+  the structured logger (272 → 0 ESLint warnings).
+- Fixed 234 `@typescript-eslint/no-non-null-assertion` warnings
+  across 30+ files with proper null guards, optional chaining,
+  and file-level suppressions for test files.
 
 ## [0.0.2] — 2026-06-09
 

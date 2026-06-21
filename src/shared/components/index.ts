@@ -22,3 +22,4 @@ export * from './VoiceAnnouncer';
 export * from './OnboardingTour';
 export * from './ThemeCard';
 export * from './CropPicker';
+export * from './FreeCropPicker';

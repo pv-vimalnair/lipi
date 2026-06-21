@@ -7,45 +7,38 @@
  * restart.
  *
  * State shape (intentionally tiny):
- *   - `themeId`   — `ThemeId` literal union from themes.ts
- *   - `cropIndex` — 0..8 (9-position grid; default 4 = center)
- *   - `hydrated`  — false until `hydrate()` runs once on app
- *                   boot. While `false`, the picker falls back
- *                   to the bundled defaults so the UI never
- *                   flashes an empty selection.
+ *   - `themeId`       — `ThemeId` literal union from themes.ts
+ *   - `cropIndex`     — 0..8 (9-position grid; default 4 = center)
+ *   - `cropX` / `cropY` — continuous background-position percentages
+ *   - `hydrated`      — false until `hydrate()` runs once on app boot
+ *   - `customImageUrl` — data URL for user's custom theme image
  *
  * Persistence: localStorage key `lipi:theme:v1`. On hydrate
- * we validate the persisted values (themeId must be a known
- * id, cropIndex must be 0..8) and fall back to defaults if
+ * we validate the persisted values and fall back to defaults if
  * either is bad — same defensive pattern as
  * voicePreferencesStore.
  *
  * Side effect: `setupThemePersistence()` subscribes to the
- * store and calls `applyThemeTokens(theme, cropIndex)` on
- * every change. That's the single source of truth for the
- * `--theme-img` / `--theme-img-crop` / `--theme-accent` /
- * `--theme-accent-soft` CSS variables on :root that the
- * TabStrip + (future) tree active-row read. Subscribe once at
- * app startup in `src/main.tsx`; the store's setter does NOT
- * call applyThemeTokens directly so the store stays a pure
- * state container.
- *
- * Why subscribe-from-outside vs. action-side effect?
- *   - Lets us swap the persistence + applyThemeTokens layer
- *     (e.g. for tests that want to observe store changes
- *     without writing to localStorage).
- *   - The same pattern as `setupVoicePreferencesPersistence`.
+ * store and calls `applyThemeTokens(theme, cropX, cropY)` on
+ * every change.
  */
 
 import { create } from 'zustand';
 import { logger } from '@/shared/logger';
 
 import {
+  CROP_POSITIONS,
+  CUSTOM_THEME_ID,
   DEFAULT_CROP_INDEX,
   DEFAULT_THEME_ID,
   THEMES,
   applyThemeTokens,
+  buildCustomTheme,
+  clearCustomThemeImage,
   findTheme,
+  isCustomTheme,
+  loadCustomThemeImage,
+  saveCustomThemeImage,
   type ThemeId,
 } from './themes';
 
@@ -56,14 +49,23 @@ export type { ThemeId };
 interface PersistedState {
   themeId: ThemeId;
   cropIndex: number;
+  cropX: number;
+  cropY: number;
 }
 
 function isValidThemeId(v: unknown): v is ThemeId {
-  return typeof v === 'string' && THEMES.some((t) => t.id === v);
+  return (
+    typeof v === 'string' &&
+    (v === CUSTOM_THEME_ID || THEMES.some((t) => t.id === v))
+  );
 }
 
 function isValidCropIndex(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 8;
+}
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(100, v));
 }
 
 function loadFromStorage(): PersistedState | null {
@@ -72,23 +74,35 @@ function loadFromStorage(): PersistedState | null {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      'themeId' in parsed &&
-      'cropIndex' in parsed &&
-      isValidThemeId((parsed as PersistedState).themeId) &&
-      isValidCropIndex((parsed as PersistedState).cropIndex)
-    ) {
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const p = parsed as Record<string, unknown>;
+    if (!isValidThemeId(p.themeId)) return null;
+
+    // New format: has explicit cropX / cropY
+    if (typeof p.cropX === 'number' && typeof p.cropY === 'number') {
+      const ci =
+        typeof p.cropIndex === 'number' &&
+        (p.cropIndex === -1 || isValidCropIndex(p.cropIndex))
+          ? p.cropIndex
+          : DEFAULT_CROP_INDEX;
       return {
-        themeId: (parsed as PersistedState).themeId,
-        cropIndex: (parsed as PersistedState).cropIndex,
+        themeId: p.themeId as ThemeId,
+        cropIndex: ci,
+        cropX: clamp01(p.cropX),
+        cropY: clamp01(p.cropY),
       };
     }
-    // Malformed entry — drop it so we don't keep failing on
-    // every load. The user can re-pick from the Settings UI
-    // and the next save will overwrite with a clean payload.
-    return null;
+
+    // Old format: only themeId + cropIndex (0..8).
+    // Derive cropX / cropY from the preset grid.
+    if (!isValidCropIndex(p.cropIndex)) return null;
+    const pos = CROP_POSITIONS[p.cropIndex as number];
+    return {
+      themeId: p.themeId as ThemeId,
+      cropIndex: p.cropIndex as number,
+      cropX: parseFloat(pos.x),
+      cropY: parseFloat(pos.y),
+    };
   } catch {
     return null;
   }
@@ -99,9 +113,7 @@ function saveToStorage(state: PersistedState): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
-    // Quota / private-mode failures are non-fatal — the user
-    // just won't see their selection persist across reloads.
-    // The store keeps the in-memory selection.
+    // Quota / private-mode failures are non-fatal.
     logger.warn('[themeStore] failed to persist:', e);
   }
 }
@@ -109,51 +121,86 @@ function saveToStorage(state: PersistedState): void {
 export interface ThemeState {
   themeId: ThemeId;
   cropIndex: number;
+  /** Continuous crop x position (0–100 CSS background-position %). */
+  cropX: number;
+  /** Continuous crop y position (0–100 CSS background-position %). */
+  cropY: number;
   hydrated: boolean;
-  /** Pick a theme. Resets the crop to center so the new
-   *  theme's "good crop" is the default view — carrying the
-   *  previous crop across themes is more confusing than
-   *  helpful (each theme's composition is different). */
+  customImageUrl: string | null;
+  /** Pick a theme. Resets the crop to center. */
   setThemeId: (id: ThemeId) => void;
-  /** Pick a crop index (0..8). Does NOT change theme. */
+  /** Pick a crop index (0..8). Also updates cropX / cropY. */
   setCropIndex: (idx: number) => void;
+  /** Set a continuous crop position. Sets cropIndex to -1
+   *  (sentinel meaning "custom position"). */
+  setCropPosition: (x: number, y: number) => void;
   /** Reset crop to center for the active theme. */
   resetCrop: () => void;
-  /** Idempotent. Called once at app startup. Reads
-   *  localStorage and seeds the store; if storage is empty
-   *  or malformed, falls back to the bundled defaults. */
+  /** Idempotent. Called once at app startup. */
   hydrate: () => void;
+  /** Save a custom theme image data URL and switch to custom theme. */
+  setCustomImage: (dataUrl: string) => void;
+  /** Remove the custom theme image and reset to default theme. */
+  clearCustomImage: () => void;
 }
 
 export const useThemeStore = create<ThemeState>((set, get) => ({
   themeId: DEFAULT_THEME_ID,
   cropIndex: DEFAULT_CROP_INDEX,
+  cropX: 50,
+  cropY: 50,
   hydrated: false,
+  customImageUrl: null,
   setThemeId: (themeId) => {
-    // Defensive: a typo at the call site (`setThemeId('foo')`)
-    // would otherwise persist garbage. The ThemeId literal
-    // union gives compile-time safety; this guard catches
-    // runtime paths (e.g. command-palette args) that bypass
-    // the type system.
     if (!isValidThemeId(themeId)) return;
-    // Picking a new theme resets the crop — same UX as
-    // ThemeSection's local state had.
-    set({ themeId, cropIndex: DEFAULT_CROP_INDEX });
+    set({ themeId, cropIndex: DEFAULT_CROP_INDEX, cropX: 50, cropY: 50 });
   },
   setCropIndex: (cropIndex) => {
     if (!isValidCropIndex(cropIndex)) return;
-    set({ cropIndex });
+    const pos = CROP_POSITIONS[cropIndex];
+    set({
+      cropIndex,
+      cropX: parseFloat(pos.x),
+      cropY: parseFloat(pos.y),
+    });
+  },
+  setCropPosition: (x, y) => {
+    set({ cropX: clamp01(x), cropY: clamp01(y), cropIndex: -1 });
   },
   resetCrop: () => {
-    set({ cropIndex: DEFAULT_CROP_INDEX });
+    set({ cropIndex: DEFAULT_CROP_INDEX, cropX: 50, cropY: 50 });
   },
   hydrate: () => {
     if (get().hydrated) return;
     const persisted = loadFromStorage();
+    const customImageUrl = loadCustomThemeImage();
     set({
       themeId: persisted?.themeId ?? DEFAULT_THEME_ID,
       cropIndex: persisted?.cropIndex ?? DEFAULT_CROP_INDEX,
+      cropX: persisted?.cropX ?? 50,
+      cropY: persisted?.cropY ?? 50,
+      customImageUrl,
       hydrated: true,
+    });
+  },
+  setCustomImage: (dataUrl) => {
+    saveCustomThemeImage(dataUrl);
+    set({
+      customImageUrl: dataUrl,
+      themeId: CUSTOM_THEME_ID,
+      cropIndex: DEFAULT_CROP_INDEX,
+      cropX: 50,
+      cropY: 50,
+    });
+  },
+  clearCustomImage: () => {
+    clearCustomThemeImage();
+    set({
+      customImageUrl: null,
+      themeId: DEFAULT_THEME_ID,
+      cropIndex: DEFAULT_CROP_INDEX,
+      cropX: 50,
+      cropY: 50,
     });
   },
 }));
@@ -168,65 +215,62 @@ let persistenceSubscribed = false;
  * Wire up persistence + CSS-variable side effects.
  *
  * Call ONCE at app startup (after `createRoot`). The store's
- * `hydrated` flag must be true before the side effect fires
- * — otherwise we'd overwrite a persisted selection with the
- * default on the very first render. The hydrate-then-subscribe
- * order matches the voicePreferences pattern.
- *
- * Two things happen on every store change:
- *   1. Save the new state to localStorage (debouncing is
- *      not needed — Zustand batches via microtask, and a
- *      single user click is one state change).
- *   2. Apply the new theme to :root CSS variables so the
- *      TabStrip repaints.
+ * `hydrated` flag must be true before the side effect fires.
  */
 export function setupThemePersistence(): void {
   if (persistenceSubscribed) return;
   persistenceSubscribed = true;
 
-  // Apply the initial state immediately so the TabStrip is
-  // themed even before any user interaction (and so we don't
-  // flash the default theme if the user reloads mid-selection).
   const initial = useThemeStore.getState();
-  applyInitialTokens(initial.themeId, initial.cropIndex);
+  applyInitialTokens(initial.themeId, initial.cropX, initial.cropY);
 
   useThemeStore.subscribe((state) => {
     if (!state.hydrated) return;
-    saveToStorage({ themeId: state.themeId, cropIndex: state.cropIndex });
-    // applyThemeTokens is a no-op if document is undefined
-    // (e.g. SSR test runner), but the call site guards
-    // against that internally.
-    const theme = findTheme(state.themeId);
+    saveToStorage({
+      themeId: state.themeId,
+      cropIndex: state.cropIndex,
+      cropX: state.cropX,
+      cropY: state.cropY,
+    });
+    let theme;
+    if (isCustomTheme(state.themeId)) {
+      if (!state.customImageUrl) return;
+      theme = buildCustomTheme(state.customImageUrl);
+    } else {
+      theme = findTheme(state.themeId);
+    }
     if (theme) {
-      applyThemeTokens(theme, state.cropIndex);
+      applyThemeTokens(theme, state.cropX, state.cropY);
     }
   });
 }
 
-/**
- * Apply the persisted-or-default theme tokens on first boot,
- * BEFORE `setupThemePersistence` subscribes. This guarantees
- * the TabStrip paints with the user's saved selection even if
- * the subscribe callback hasn't fired yet (it only fires on
- * subsequent changes, not the initial state).
- */
-function applyInitialTokens(themeId: ThemeId, cropIndex: number): void {
-  const theme = findTheme(themeId);
+function applyInitialTokens(
+  themeId: ThemeId,
+  cropX: number,
+  cropY: number,
+): void {
+  let theme;
+  if (isCustomTheme(themeId)) {
+    const customImageUrl = loadCustomThemeImage();
+    if (!customImageUrl) return;
+    theme = buildCustomTheme(customImageUrl);
+  } else {
+    theme = findTheme(themeId);
+  }
   if (!theme) return;
-  applyThemeTokens(theme, cropIndex);
+  applyThemeTokens(theme, cropX, cropY);
 }
 
 // ------------------------------------------------------------
 // Selectors
 // ------------------------------------------------------------
-//
-// Per Rule 6 (Zustand for cross-component state), consumers
-// should pick the narrowest selector possible so unrelated
-// store changes don't re-render them. The two selectors below
-// cover 99% of the call sites.
 
 export const themeSelectors = {
   themeId: (s: ThemeState) => s.themeId,
   cropIndex: (s: ThemeState) => s.cropIndex,
+  cropX: (s: ThemeState) => s.cropX,
+  cropY: (s: ThemeState) => s.cropY,
   hydrated: (s: ThemeState) => s.hydrated,
+  customImageUrl: (s: ThemeState) => s.customImageUrl,
 };

@@ -123,10 +123,56 @@ export const THEMES: readonly Theme[] = [
  * Literal union of theme ids. Useful for Zustand store typing
  * so a typo at the call site (`setTheme('whisphering-pines')`)
  * fails at compile time rather than falling back to "no theme".
+ * Includes 'custom' for user-uploaded theme images.
  */
-export type ThemeId = (typeof THEMES)[number]['id'];
+export const CUSTOM_THEME_ID = 'custom' as const;
+export type ThemeId = (typeof THEMES)[number]['id'] | typeof CUSTOM_THEME_ID;
 
 export const DEFAULT_THEME_ID: ThemeId = 'hickory-hollow';
+
+const CUSTOM_IMAGE_STORAGE_KEY = 'lipi:theme:custom-image';
+
+export function isCustomTheme(id: string): boolean {
+  return id === CUSTOM_THEME_ID;
+}
+
+export function loadCustomThemeImage(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    return localStorage.getItem(CUSTOM_IMAGE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveCustomThemeImage(dataUrl: string): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.setItem(CUSTOM_IMAGE_STORAGE_KEY, dataUrl);
+  } catch {
+    // Quota exceeded — non-fatal, the image just won't persist.
+  }
+}
+
+export function clearCustomThemeImage(): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.removeItem(CUSTOM_IMAGE_STORAGE_KEY);
+  } catch {
+    // Non-fatal.
+  }
+}
+
+export function buildCustomTheme(imageUrl: string): Theme {
+  return {
+    id: CUSTOM_THEME_ID,
+    name: 'Custom',
+    mood: 'Your image · your mood',
+    imageUrl,
+    accent: '#1a1d23',
+    accentSoft: '#2a2d33',
+  };
+}
 
 /**
  * 9 crop positions for the active-tab image. Index 0 = top-left,
@@ -212,14 +258,21 @@ const ROOT_STYLE_PROPS = [
 ] as const;
 
 /** Write the active theme + crop to :root CSS variables.
- *  Safe to call repeatedly; reads nothing from React state. */
-export function applyThemeTokens(theme: Theme, cropIndex: number): void {
+ *  Safe to call repeatedly; reads nothing from React state.
+ *
+ *  Two call signatures:
+ *    applyThemeTokens(theme, cropIndex)   — preset grid lookup
+ *    applyThemeTokens(theme, cropX, cropY) — continuous position */
+export function applyThemeTokens(
+  theme: Theme,
+  cropIndexOrX: number,
+  cropY?: number,
+): void {
   if (typeof document === 'undefined') return;
-  const pos = cropAt(cropIndex);
-  // Build the soft tint from the accent. We use rgba() rather
-  // than the opaque hex so the soft tint blends correctly over
-  // dark surfaces (the file tree's active row sits on
-  // --color-bg-pane which is opaque).
+  const pos =
+    cropY !== undefined
+      ? { x: `${cropIndexOrX}%`, y: `${cropY}%` }
+      : cropAt(cropIndexOrX);
   const soft = hexToRgba(theme.accent, 0.18);
   const root = document.documentElement.style;
   root.setProperty('--theme-img', `url('${theme.imageUrl}')`);

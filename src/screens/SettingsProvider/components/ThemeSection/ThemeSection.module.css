@@ -73,6 +73,11 @@
   margin-top: var(--space-6);
 }
 
+/* Custom theme section — sits between the grid and the crop picker. */
+.customSection {
+  margin-top: var(--space-6);
+}
+
 .frameHeading {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);

@@ -1,0 +1,146 @@
+/**
+ * FreeCropPicker.module.css — continuous drag-and-position cropper.
+ *
+ * Layout: preview area (theme image full-bleed) with a draggable
+ * viewport overlay, a controls row (position readout + reset),
+ * and the 9-position preset grid below.
+ *
+ * Per Rule 1, all spacing / color / radius / motion values come
+ * from tokens.css. The preview and viewport dimensions are
+ * functional layout sizes (the image must render at a specific
+ * aspect ratio) — analogous to the CropPicker's 32px thumb grid.
+ */
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-bg-pane);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.preview {
+  position: relative;
+  width: 280px;
+  height: 200px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-base);
+  background-size: cover;
+  background-repeat: no-repeat;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+  touch-action: none;
+}
+
+.viewport {
+  position: absolute;
+  width: 40%;
+  height: 40%;
+  border: 2px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--color-bg-base);
+  cursor: grab;
+  outline: none;
+  transition: box-shadow var(--motion-fast) var(--easing-standard);
+}
+
+.viewport:active {
+  cursor: grabbing;
+}
+
+.viewport:focus-visible {
+  box-shadow:
+    0 0 0 1px var(--color-bg-base),
+    0 0 0 3px var(--color-accent);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.readout {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  min-width: 80px;
+}
+
+.resetBtn {
+  padding: 4px var(--space-3);
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--easing-standard),
+              opacity var(--motion-fast) var(--easing-standard);
+  flex-shrink: 0;
+}
+
+.resetBtn:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.resetBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.presets {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  grid-template-rows: repeat(3, auto);
+  gap: 2px;
+  width: calc(3 * 32px + 2 * 2px);
+  flex-shrink: 0;
+}
+
+.presetThumb {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-base);
+  background-size: 320% 320%;
+  background-repeat: no-repeat;
+  cursor: pointer;
+  outline: none;
+  transition: border-color var(--motion-fast) var(--easing-standard),
+              transform var(--motion-fast) var(--easing-standard);
+}
+
+.presetThumb:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-1px);
+}
+
+.presetThumb:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--color-bg-base),
+    0 0 0 4px var(--color-accent);
+}
+
+.presetThumb.active {
+  border-color: var(--color-accent);
+  box-shadow:
+    0 0 0 1.5px var(--color-accent);
+}

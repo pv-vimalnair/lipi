@@ -2,65 +2,45 @@
  * ThemeSection — the Appearance → Theme block in Settings.
  *
  * One Settings card that combines:
- *   1. A grid of 5 ThemeCards (Hickory Hollow, Whispering
- *      Pines, Marigold Field, Wildflower Field, Quiet Valley).
+ *   1. A grid of ThemeCards (5 bundled themes + optional custom).
  *      Clicking a card sets the active theme.
- *   2. A CropPicker — 9-position frame selector for the active
- *      theme illustration. The crop is a CSS-variable swap on
- *      :root; the underlying image asset is reused as-is.
- *
- * The selection state lives in `useState` for now. Phase 4
- * (state persistence) will replace these with hooks into the
- * `themeStore` Zustand store — same interface, so the JSX
- * stays unchanged. Persistence + hydration to localStorage is
- * the only delta.
- *
- * Per Rule 4 (no new components without owner confirmation),
- * ThemeCard + CropPicker are existing primitives in
- * `src/shared/components/`. ThemeSection composes them; it
- * does not redefine the picker UI.
- *
- * Per Rule 6, state stays in the component for now; we will
- * move to Zustand when persistence is wired.
+ *   2. A CustomThemeUploader — upload and crop your own image.
+ *   3. A FreeCropPicker — continuous drag viewport for the active
+ *      theme illustration.
  */
 
 import {
-  DEFAULT_CROP_INDEX,
   THEMES,
+  buildCustomTheme,
+  isCustomTheme,
   type Theme,
   type ThemeId,
 } from '@/shared/state/themes';
 import { themeSelectors, useThemeStore } from '@/shared/state/themeStore';
-import { CropPicker } from '@/shared/components/CropPicker';
+import { FreeCropPicker } from '@/shared/components/FreeCropPicker';
 import { ThemeCard } from '@/shared/components/ThemeCard';
+import { CustomThemeUploader } from '../CustomThemeUploader';
 
 import styles from './ThemeSection.module.css';
 
-/**
- * Self-contained Theme section. Reads from `useThemeStore` so
- * the picker survives reloads (Phase 4). The store's setter
- * side-effects — writing to localStorage and pushing CSS
- * variables onto :root — happen automatically inside the
- * store's subscribe (see `setupThemePersistence`), so this
- * component is a pure view.
- *
- * Per Rule 6, we pick narrow selectors so unrelated store
- * changes (none expected today, but future-proof) don't
- * re-render this section.
- */
 export function ThemeSection(): JSX.Element {
   const themeId = useThemeStore(themeSelectors.themeId);
   const cropIdx = useThemeStore(themeSelectors.cropIndex);
+  const cropX = useThemeStore(themeSelectors.cropX);
+  const cropY = useThemeStore(themeSelectors.cropY);
+  const customImageUrl = useThemeStore(themeSelectors.customImageUrl);
   const setThemeId = useThemeStore((s) => s.setThemeId);
   const setCropIndex = useThemeStore((s) => s.setCropIndex);
+  const setCropPosition = useThemeStore((s) => s.setCropPosition);
   const resetCrop = useThemeStore((s) => s.resetCrop);
 
-  // The picker needs the *active* theme's image to populate
-  // each crop thumb's preview. Defense-in-depth: if a future
-  // theme id is added to the picker but the store's load
-  // doesn't recognise it, fall back to the first theme.
-  const activeTheme: Theme =
-    THEMES.find((t) => t.id === themeId) ?? THEMES[0];
+  const activeTheme: Theme = isCustomTheme(themeId)
+    ? buildCustomTheme(customImageUrl ?? '')
+    : (THEMES.find((t) => t.id === themeId) ?? THEMES[0]);
+
+  const customTheme: Theme | null = customImageUrl
+    ? buildCustomTheme(customImageUrl)
+    : null;
 
   return (
     <section className={styles.section} data-testid="theme-section">
@@ -83,33 +63,50 @@ export function ThemeSection(): JSX.Element {
             key={theme.id}
             theme={theme}
             isActive={theme.id === themeId}
-            // The store's setThemeId resets the crop to center
-            // on its own — no extra logic needed here. We pass
-            // a function that takes the Theme so the ThemeCard
-            // signature doesn't change.
             onSelect={(t) => setThemeId(t.id as ThemeId)}
           />
         ))}
+        {customTheme && (
+          <ThemeCard
+            key={customTheme.id}
+            theme={customTheme}
+            isActive={isCustomTheme(themeId)}
+            onSelect={(t) => setThemeId(t.id as ThemeId)}
+          />
+        )}
+      </div>
+
+      <div className={styles.customSection}>
+        <h3 className={styles.frameHeading}>Custom theme</h3>
+        <p className={styles.frameLede}>
+          Upload your own image and we&apos;ll help you crop it to fit the view
+          tab. The image is stored locally on your device.
+        </p>
+        <CustomThemeUploader />
       </div>
 
       <div className={styles.frame}>
         <h3 className={styles.frameHeading}>Frame your view</h3>
         <p className={styles.frameLede}>
-          Tabs are small, so the scene is cropped to fit. Pick the part of
-          the image that feels most like the mood you want — the leaves,
-          the horizon, the figure. Your choice is saved with the theme
-          and follows you across sessions.
+          Tabs are small, so the scene is cropped to fit. Drag the viewport
+          to choose exactly which part of the image feels right — the
+          leaves, the horizon, the figure. Your choice is saved with the
+          theme and follows you across sessions.
         </p>
-        <CropPicker
+        <FreeCropPicker
           themeImageUrl={activeTheme.imageUrl}
+          cropX={cropX}
+          cropY={cropY}
           activeCropIndex={cropIdx}
-          onCropChange={setCropIndex}
+          onCropPositionChange={setCropPosition}
+          onCropIndexChange={setCropIndex}
+          onReset={resetCrop}
         />
         <button
           type="button"
           className={styles.resetLink}
           onClick={resetCrop}
-          disabled={cropIdx === DEFAULT_CROP_INDEX}
+          disabled={cropX === 50 && cropY === 50}
           data-testid="frame-reset"
         >
           Reset to center

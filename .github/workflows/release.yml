@@ -176,6 +176,7 @@ jobs:
         # build still proceeds — but the .sig
         # files won't be generated (the release
         # job will fail downstream).
+        shell: bash
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "::warning::TAURI_PROD_UPDATER_KEY is not set; updater artifacts will not be signed"

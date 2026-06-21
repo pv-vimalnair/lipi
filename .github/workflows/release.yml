@@ -133,7 +133,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.85'
+          toolchain: 'stable'
 
       - name: Install platform-specific deps (Linux)
         if: matrix.target == 'linux'

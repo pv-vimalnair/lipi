@@ -42,6 +42,7 @@
  */
 
 import { create } from 'zustand';
+import { logger } from '@/shared/logger';
 
 const STORAGE_KEY_DISMISSED = 'lipi:firstRun:v1';
 
@@ -123,7 +124,7 @@ function writeDismissed(value: boolean): void {
     // store still works for this
     // session.
     if (import.meta.env.DEV) {
-      console.warn(
+      logger.warn(
         '[firstRunStore] failed to persist dismissed',
         value,
         e,

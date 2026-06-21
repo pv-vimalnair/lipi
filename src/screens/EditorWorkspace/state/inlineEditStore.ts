@@ -38,6 +38,7 @@
 
 import { create } from 'zustand';
 import { useEditorControllerStore } from './editorControllerStore';
+import { logger } from '@/shared/logger';
 
 /**
  * The captured text + range from the Monaco
@@ -260,7 +261,7 @@ function applyProposalToEditor(
     // Log + bail rather than throw — the user's
     // pending edit is just lost, not corrupted.
     if (import.meta.env.DEV) {
-      console.warn(
+      logger.warn(
         '[inlineEditStore] accept() called with no live editor; the AI edit was not applied.',
       );
     }

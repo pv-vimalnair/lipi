@@ -82,6 +82,7 @@ import {
 } from '@/screens/EditorWorkspace/state/lspKillSwitch';
 
 import styles from './LanguageServerCard.module.css';
+import { logger } from '@/shared/logger';
 
 const BADGE_LABEL: Record<LspStatus, { label: string; className: string }> = {
   stopped: { label: 'Stopped', className: styles.badgeStopped },
@@ -374,7 +375,7 @@ function LanguageServerRow(props: {
           });
         }
         if (import.meta.env.DEV) {
-          console.warn('[lsp] checkAvailable failed:', e);
+          logger.warn('[lsp] checkAvailable failed:', e);
         }
       });
     return () => {

@@ -75,6 +75,7 @@
  */
 
 import { create } from 'zustand';
+import { logger } from '@/shared/logger';
 
 const STORAGE_KEY_CURRENT_V1 = 'lipi:workspace:v1';
 const STORAGE_KEY_RECENTS_V1 = 'lipi:workspace:recents:v1';
@@ -505,7 +506,7 @@ function writeJson(key: string, value: unknown): void {
     // still works for this
     // session.
     if (import.meta.env.DEV) {
-      console.warn(`[workspaceStore] failed to persist ${key}`, value, e);
+      logger.warn(`[workspaceStore] failed to persist ${key}`, value, e);
     }
   }
 }

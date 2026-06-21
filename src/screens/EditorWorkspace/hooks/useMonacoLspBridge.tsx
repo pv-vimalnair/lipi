@@ -135,6 +135,7 @@ import {
   sendDidChange,
   sendDidOpen,
 } from './lspProviders';
+import { logger } from '@/shared/logger';
 
 interface UseMonacoLspBridgeOptions {
   /**
@@ -448,7 +449,7 @@ export function useMonacoLspBridge({
         // The Phase 7 built-in service
         // stays in place for this kind.
         if (import.meta.env.DEV) {
-          console.warn(
+          logger.warn(
             '[lspBridge] failed to start LSP client for kind',
             kind,
             ':',

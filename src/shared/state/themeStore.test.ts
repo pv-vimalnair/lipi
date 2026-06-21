@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().toBeDefined() */
 import { describe, expect, it, beforeEach } from 'vitest';
 import {
   useThemeStore,

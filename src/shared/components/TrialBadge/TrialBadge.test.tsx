@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-non-null-assertion -- test assertions are guarded by prior expect().toBeDefined() */
 /**
  * Tests for `TrialBadge`. The badge is a thin
  * render-only wrapper around `licenseSurfaces`; the

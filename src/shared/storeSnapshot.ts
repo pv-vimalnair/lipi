@@ -61,6 +61,8 @@
  *     inspected in tests.
  */
 
+import { logger } from '@/shared/logger';
+
 export interface StoreSnapshot<T> {
   /** The captured value. Read-only
    *  by convention — callers
@@ -135,7 +137,7 @@ export function createStoreSnapshot<T>(
         // reported, then the
         // loop continues.
         if (import.meta.env.DEV) {
-          console.warn(
+          logger.warn(
             '[storeSnapshot] restore() failed',
             e,
           );

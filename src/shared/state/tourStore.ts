@@ -83,6 +83,7 @@
  */
 
 import { create } from 'zustand';
+import { logger } from '@/shared/logger';
 
 const STORAGE_KEY_DISMISSED = 'lipi:tour:dismissed:v1';
 
@@ -192,7 +193,7 @@ function writeDismissed(value: boolean): void {
     );
   } catch (e) {
     if (import.meta.env.DEV) {
-      console.warn(
+      logger.warn(
         '[tourStore] failed to persist dismissed',
         value,
         e,

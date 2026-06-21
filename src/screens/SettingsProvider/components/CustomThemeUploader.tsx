@@ -103,7 +103,8 @@ export function CustomThemeUploader(): JSX.Element {
       const canvas = document.createElement('canvas');
       canvas.width = outW;
       canvas.height = outH;
-      const ctx = canvas.getContext('2d')!;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
       ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH);
 
       const croppedDataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);

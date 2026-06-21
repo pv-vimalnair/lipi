@@ -43,6 +43,7 @@
 import { create } from 'zustand';
 import { pathExists, readFile } from '@/ipc/fs';
 import { onFsChange, startWatch, stopWatch, type WatchHandle } from '@/ipc/fsWatcher';
+import { logger } from '@/shared/logger';
 
 /**
  * The minimal slice of Monaco's `CompilerOptions` shape
@@ -297,7 +298,7 @@ export const useTsConfigStore = create<TsConfigState>((set, get) => {
       // condition.
       watchHandle = null;
       if (import.meta.env.DEV) {
-        console.warn(
+        logger.warn(
           `[tsConfigStore] startWatch failed for ${root}; external edits will not auto-reload.`,
         );
       }

@@ -28,7 +28,7 @@ export const logger = {
    */
   debug(...args: unknown[]): void {
     if (IS_DEV) {
-       
+      // eslint-disable-next-line no-console
       console.debug(...args);
     }
   },
@@ -51,7 +51,7 @@ export const logger = {
    * that affect user-visible functionality, data corruption).
    */
   error(...args: unknown[]): void {
-     
+    // eslint-disable-next-line no-console
     console.error(...args);
   },
 };

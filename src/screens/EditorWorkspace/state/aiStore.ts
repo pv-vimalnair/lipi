@@ -102,6 +102,7 @@ import {
 } from '@/shared/state/voicePreferencesStore';
 import { useVoiceCapabilitiesStore } from '@/shared/state/voiceCapabilitiesStore';
 import { listTools, getTool } from './toolRegistry';
+import { logger } from '@/shared/logger';
 
 /**
  * A single tool call attached to an assistant
@@ -1514,7 +1515,7 @@ function setupSubscriptions(getState: () => AiState) {
     // entropy that collisions are negligible.
     if (envelope.requestId !== state.activeRequestId) {
       if (import.meta.env.DEV) {
-        console.warn(
+        logger.warn(
           '[aiStore] ai://chunk for unknown requestId',
           envelope.requestId,
         );
@@ -1589,7 +1590,7 @@ function setupSubscriptions(getState: () => AiState) {
         // the `stop()` action) but a
         // trailing chunk still arrived.
         // Silently drop.
-        console.warn(
+        logger.warn(
           '[aiStore] ai://chunk delta arrived with no streaming placeholder',
         );
       }
@@ -1625,7 +1626,7 @@ function setupSubscriptions(getState: () => AiState) {
           ),
         });
       } else if (import.meta.env.DEV) {
-        console.warn(
+        logger.warn(
           '[aiStore] ai://chunk toolCall arrived with no streaming placeholder',
         );
       }
@@ -1636,7 +1637,7 @@ function setupSubscriptions(getState: () => AiState) {
     const state = getState();
     if (envelope.requestId !== state.activeRequestId) {
       if (import.meta.env.DEV) {
-        console.warn(
+        logger.warn(
           '[aiStore] ai://done for unknown requestId',
           envelope.requestId,
         );
@@ -1783,7 +1784,7 @@ function setupSubscriptions(getState: () => AiState) {
     const state = getState();
     if (envelope.requestId !== state.activeRequestId) {
       if (import.meta.env.DEV) {
-        console.warn(
+        logger.warn(
           '[aiStore] ai://error for unknown requestId',
           envelope.requestId,
         );
@@ -1858,7 +1859,7 @@ export const useAiStore = create<AiState>((set, get) => ({
       // queueing). 5b-4 may add a
       // "queue" affordance.
       if (import.meta.env.DEV) {
-        console.warn(
+        logger.warn(
           '[aiStore] send() ignored: a request is already in flight',
         );
       }
@@ -1874,7 +1875,7 @@ export const useAiStore = create<AiState>((set, get) => ({
       // in-flight tools and the store's
       // toolRound counter would desync.
       if (import.meta.env.DEV) {
-        console.warn(
+        logger.warn(
           '[aiStore] send() ignored: a tool-execution round is in progress',
         );
       }
@@ -2033,7 +2034,7 @@ export const useAiStore = create<AiState>((set, get) => ({
       // submit button while streaming, so
       // this is a belt-and-braces).
       if (import.meta.env.DEV) {
-        console.warn(
+        logger.warn(
           '[aiStore] sendEdit() ignored: a request is already in flight',
         );
       }
@@ -2157,7 +2158,7 @@ export const useAiStore = create<AiState>((set, get) => ({
       // and clear the state. Log
       // and move on.
       if (import.meta.env.DEV) {
-        console.warn('[aiStore] ai_cancel_stream failed', e);
+        logger.warn('[aiStore] ai_cancel_stream failed', e);
       }
     }
   },
@@ -2224,7 +2225,7 @@ export const useAiStore = create<AiState>((set, get) => ({
       // AIPanel will show an empty
       // picker. Log to dev console.
       if (import.meta.env.DEV) {
-        console.warn('[aiStore] loadProviders failed', e);
+        logger.warn('[aiStore] loadProviders failed', e);
       }
     }
   },
